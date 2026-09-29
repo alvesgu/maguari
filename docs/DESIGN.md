@@ -506,6 +506,17 @@ Running behind the Cloudflare proxy is not supported for now. If added later as 
 2. Reading it again requires a full application reset, which is out of scope until after 1.0.
 3. Because the file contains secrets, the app warns while it still exists (section 10.3).
 
+#### 11.5.1 Format
+
+1. Path: `/etc/maguari/seed.ini`. INI, parsed with `parse_ini_file($path, true, INI_SCANNER_TYPED)`. A fully commented example ships at `server/config/seed.ini.example`.
+2. Every value must be quoted in double quotes. With `INI_SCANNER_TYPED`, an unquoted `yes`, `no`, `true`, `false`, `on`, `off`, `none` or `null` is read as a boolean or `null` instead of text, which fails validation. The example file documents this.
+3. `[administrator]` section, required: `name` (non-empty string) and `email` (a valid email address, the alert recipient).
+4. `[access]` section, optional: `allowlist[]`, repeated for multiple addresses. Defaults to `[administratorEmail]` when omitted or empty. Every entry is lowercased and the list deduplicated, so `Jane@Example.com` and `jane@example.com` count as one entry. The administrator email is lowercased the same way.
+5. No password field. Local credentials are created only by the setup wizard (section 11.2), not seeded.
+6. **Absent versus invalid:** a missing file means nothing to seed, not an error. A present but invalid file (unparsable INI, or a missing or malformed required field) is an error.
+7. **Applying values is deferred.** Reading and validating the file works from MVP step 1 (section 15) with no database. Actually applying the seeded values, and marking seeding as done, happens once SQLite storage exists (a later MVP step).
+8. If secret fields are ever added to this file, any CLI output that prints the parsed file must mask them.
+
 ## 12. Packaging, distribution and updates
 
 ### 12.1 Packages
@@ -529,6 +540,15 @@ Installation runs in two steps because HTTPS must work before setup (section 11.
 2. **Set up:** `sudo maguari-server setup --domain <domain> --email <email>`. This runs certbot non-interactively for the domain, verifies HTTPS works and only then prints the one-time setup URL.
 
 Prerequisites for step 2: the domain's DNS record points at the instance in DNS-only mode (section 11.4), and the instance's firewall allows ports 80 and 443.
+
+#### 12.2.1 CLI subcommands
+
+`maguari-server` is a small CLI dispatcher. Subcommands so far:
+
+| Subcommand | Purpose |
+|---|---|
+| `setup --domain <domain> --email <email>` | Runs certbot, verifies HTTPS, prints the one-time setup URL (above) |
+| `check-seed-config [--path=/etc/maguari/seed.ini]` | Reads and validates the seed config file (section 11.5.1) and prints what would be seeded, without applying anything. `--path` is a testing convenience, not a production option. |
 
 ### 12.3 APT repository
 

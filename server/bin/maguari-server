@@ -1,0 +1,65 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+use Maguari\Server\Access\AccessApi;
+use Maguari\Server\Access\Exception\InvalidSeedConfig;
+use Maguari\Server\Access\SeedConfigReader;
+
+/**
+ * @param string[] $args
+ */
+function maguariServerMain(array $args): int
+{
+    $command = $args[1] ?? null;
+
+    if ($command === 'check-seed-config') {
+        return checkSeedConfigCommand(array_slice($args, 2));
+    }
+
+    fwrite(STDERR, "Usage: maguari-server check-seed-config [--path=/etc/maguari/seed.ini]\n");
+
+    return 1;
+}
+
+/**
+ * @param string[] $args
+ */
+function checkSeedConfigCommand(array $args): int
+{
+    $path = '/etc/maguari/seed.ini';
+
+    foreach ($args as $arg) {
+        if (str_starts_with($arg, '--path=')) {
+            $path = substr($arg, strlen('--path='));
+        }
+    }
+
+    $accessApi = new AccessApi(new SeedConfigReader($path));
+
+    try {
+        $seedConfig = $accessApi->readSeedConfig();
+    } catch (InvalidSeedConfig $exception) {
+        fwrite(STDERR, $exception->getMessage() . "\n");
+
+        return 1;
+    }
+
+    if ($seedConfig === null) {
+        echo "No seed config file found at {$path}. Nothing to seed.\n";
+
+        return 0;
+    }
+
+    echo "Seed config file: {$path}\n";
+    echo "Administrator: {$seedConfig->administratorName} <{$seedConfig->administratorEmail}>\n";
+    echo "Allowlist: " . implode(', ', $seedConfig->allowlist) . "\n";
+    echo "Nothing applied yet: applying seeded values requires storage, which does not exist yet.\n";
+
+    return 0;
+}
+
+exit(maguariServerMain($argv));

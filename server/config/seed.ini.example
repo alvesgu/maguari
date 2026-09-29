@@ -1,0 +1,16 @@
+; Maguari seed configuration.
+; Read once, on first start, to seed initial settings. After that the
+; web app owns all settings (see docs/DESIGN.md section 11.5).
+; Quote every value in double quotes. Without quotes, values such as
+; yes, no, true, false, on, off, none and null are read as booleans or
+; null instead of text, which will fail validation.
+
+[administrator]
+name = "Jane Doe"
+email = jane@example.com
+
+[access]
+; Optional. Defaults to the administrator's email above if omitted.
+; Repeat the key for multiple addresses.
+allowlist[] = jane@example.com
+allowlist[] = ops@example.com
