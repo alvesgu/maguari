@@ -15,16 +15,18 @@ What this step delivers, end to end:
 3. If the call fails, the page shows the same fixed sentences as step 4 (design 8.1 item 1) and no list.
 4. If some zones could not be reached, the page lists what it got and names the zones it could not reach.
 
-## Scope question (please confirm)
+## Scope question (confirmed: A)
 
 Design section 8.1 item 2 says "Pick instances: choose from the list fetched from that project." Section 15 step 5 says only "List the project's instances from the API." Two readings:
 
 - **A. List only (recommended).** Show the live list. Nothing is stored and nothing is picked. Picking belongs with enrollment (design 5.6), because the only reason to pick an instance is to generate its enrollment token, and step 6 ("receive client heartbeats") is the first step that needs an enrolled instance. Picking without enrollment would create stored rows with no use yet.
 - **B. List and pick.** Also add a `fleet_instances` table and a POST route to pick instances, storing them as discovered instances. More work now, and the table's columns would be guessed before enrollment defines what it needs.
 
-The rest of this plan assumes **A**. If you prefer B, I will extend the plan before writing code.
+Reading **A** was confirmed.
 
-## Decisions (proposed)
+## Decisions (confirmed)
+
+All decisions below were confirmed, with one emphasis: the page shows the machine type's short name (for example `e2-micro`), never the URL the API returns (D4). During implementation, `FleetApi` also gained `project(int $projectId): Project`, so the page can show the project's heading when listing fails.
 
 **D1. Reuse from step 4, unchanged.** `AccessTokenSource` and its three implementations, `AccessTokenSourceFactory` (`MAGUARI_GCP_CREDENTIALS`), `HttpClient` and `StreamHttpClient`, `FakeTokenSource` and `FakeHttpClient`. No new credentials code and no new environment variables. One token is fetched per page view and used for every page of results (step 4 D2, no caching).
 

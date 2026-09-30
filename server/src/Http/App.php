@@ -105,6 +105,7 @@ final class App
                 $group->post('/logout', [$adminController, 'logout']);
                 $group->get('/projects', [$projectsController, 'show']);
                 $group->post('/projects', [$projectsController, 'add']);
+                $group->get('/projects/{id:[0-9]+}', [$projectsController, 'instances']);
             })->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
 
             // CSRF protects the forms under /auth. The future OAuth callback is

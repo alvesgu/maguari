@@ -6,7 +6,9 @@ namespace Maguari\Server\Tests\Fleet;
 
 use Maguari\Server\Fleet\Exception\InvalidProjectId;
 use Maguari\Server\Fleet\Exception\ProjectAlreadyAdded;
+use Maguari\Server\Fleet\DiscoveredInstance;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
+use Maguari\Server\Fleet\Exception\ProjectNotFound;
 use Maguari\Server\Fleet\Project;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
@@ -94,5 +96,38 @@ final class FleetApiTest extends TestCase
             ['second-project', 'first-project'],
             array_map(static fn (Project $project): string => $project->gcpProjectId, $this->environment->fleet->listProjects()),
         );
+    }
+
+    public function testListsInstancesOfAProject(): void
+    {
+        $this->allowListing();
+        $project = $this->environment->fleet->addProject('my-project');
+        $zone = 'https://www.googleapis.com/compute/v1/projects/my-project/zones/us-east1-b';
+        $this->environment->http->queueJson(200, ['items' => ['zones/us-east1-b' => ['instances' => [
+            ['id' => '2', 'name' => 'web', 'zone' => $zone, 'status' => 'RUNNING', 'machineType' => $zone . '/machineTypes/e2-small'],
+            ['id' => '1', 'name' => 'db', 'zone' => $zone, 'status' => 'RUNNING', 'machineType' => $zone . '/machineTypes/e2-micro'],
+        ]]]]);
+        $changes = $this->environment->database->pdo()->query('SELECT total_changes()')->fetchColumn();
+
+        $list = $this->environment->fleet->listInstances($project->id);
+
+        $this->assertSame(
+            ['db e2-micro', 'web e2-small'],
+            array_map(static fn (DiscoveredInstance $instance): string => $instance->name . ' ' . $instance->machineType, $list->instances),
+        );
+        $this->assertStringContainsString('/projects/my-project/aggregated/instances', $this->environment->http->lastRequest()->url);
+        $this->assertSame($changes, $this->environment->database->pdo()->query('SELECT total_changes()')->fetchColumn());
+    }
+
+    public function testUnknownProjectIsNotListed(): void
+    {
+        try {
+            $this->environment->fleet->listInstances(42);
+            $this->fail('Expected ProjectNotFound.');
+        } catch (ProjectNotFound) {
+        }
+
+        $this->assertSame([], $this->environment->http->requests);
+        $this->assertSame(0, $this->environment->tokens->calls);
     }
 }

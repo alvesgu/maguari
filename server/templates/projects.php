@@ -9,7 +9,7 @@
 <thead><tr><th>Project ID</th><th>Added (UTC)</th></tr></thead>
 <tbody>
 <?php foreach ($projects as $project): ?>
-<tr><td><?= $e($project->gcpProjectId) ?></td><td><?= $e(gmdate('Y-m-d H:i', $project->createdAt)) ?></td></tr>
+<tr><td><a href="/admin/projects/<?= $project->id ?>"><?= $e($project->gcpProjectId) ?></a></td><td><?= $e(gmdate('Y-m-d H:i', $project->createdAt)) ?></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>

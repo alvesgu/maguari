@@ -7,6 +7,7 @@ namespace Maguari\Server\Fleet;
 use Maguari\Server\Fleet\Exception\InvalidProjectId;
 use Maguari\Server\Fleet\Exception\ProjectAlreadyAdded;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
+use Maguari\Server\Fleet\Exception\ProjectNotFound;
 use Maguari\Server\Fleet\Gcp\AccessTokenSource;
 use Maguari\Server\Fleet\Gcp\ComputeEngine;
 use Maguari\Server\Kernel\Clock;
@@ -61,5 +62,25 @@ final class FleetApi
         $this->computeEngine->verifyCanListInstances($gcpProjectId);
 
         return $this->projects->create($gcpProjectId, $this->clock->now());
+    }
+
+    /**
+     * @throws ProjectNotFound
+     */
+    public function project(int $projectId): Project
+    {
+        return $this->projects->find($projectId) ?? throw new ProjectNotFound('This project was not found.');
+    }
+
+    /**
+     * Lists the project's instances from the Compute Engine API (design
+     * section 8.1 item 2). Nothing is stored.
+     *
+     * @throws ProjectNotFound
+     * @throws ProjectNotAccessible
+     */
+    public function listInstances(int $projectId): InstanceList
+    {
+        return $this->computeEngine->listInstances($this->project($projectId)->gcpProjectId);
     }
 }

@@ -110,6 +110,7 @@ final class AppTest extends TestCase
             'login' => ['POST', '/auth/login'],
             'projects' => ['GET', '/admin/projects'],
             'add project' => ['POST', '/admin/projects'],
+            'project instances' => ['GET', '/admin/projects/1'],
         ];
     }
 

@@ -377,6 +377,10 @@ Coherence rules (warning only):
    - The check is `GET .../projects/{project}/aggregated/instances?maxResults=1&returnPartialSuccess=true`. The project is stored in `fleet_projects` only when it succeeds.
    - Failures are shown as fixed sentences, never raw API messages: credentials unavailable (with a hint for the token source), project not found (`404`), Compute Engine API not enabled (`403` with `accessNotConfigured` or `SERVICE_DISABLED`), access scopes insufficient (`403` with `ACCESS_TOKEN_SCOPE_INSUFFICIENT` or `insufficientPermissions`) and unexpected response (anything else). Google answers other `403`s both for missing permission and for projects the caller cannot see, so those say "Project not found, or no permission to access it."
 2. **Pick instances:** choose from the list fetched from that project.
+   - The project's page (`/admin/projects/{id}`) lists its instances live on every view, with name, zone, status and machine type (short names, for example `us-central1-a` and `e2-micro`). Nothing is stored.
+   - The list uses the same aggregated call as item 1, with `maxResults=500`, following `nextPageToken` for up to 10 pages (5,000 instances). The page says when the list was cut short.
+   - Zones Google could not reach (`unreachables` and per-zone warnings other than `NO_RESULTS_ON_PAGE`) are named on the page; Google's warning messages are not shown. Any failed page fails the whole list with item 1's sentences.
+   - Picking itself comes with enrollment (section 5.6), not with listing (section 15 step 5).
 3. **Enroll each instance:** follow the commands shown for that instance (section 5.6).
 4. **Configure checks and safeguards** per instance.
 

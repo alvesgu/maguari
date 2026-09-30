@@ -28,6 +28,15 @@ final class ProjectRepository
         );
     }
 
+    public function find(int $id): ?Project
+    {
+        $statement = $this->database->pdo()->prepare('SELECT id, gcp_project_id, created_at FROM fleet_projects WHERE id = ?');
+        $statement->execute([$id]);
+        $row = $statement->fetch();
+
+        return $row === false ? null : new Project((int) $row['id'], $row['gcp_project_id'], (int) $row['created_at']);
+    }
+
     public function exists(string $gcpProjectId): bool
     {
         $statement = $this->database->pdo()->prepare('SELECT 1 FROM fleet_projects WHERE gcp_project_id = ?');
