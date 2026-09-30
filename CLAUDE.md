@@ -7,6 +7,12 @@ Lightweight, self-hosted watchdog for Ubuntu VM instances on Google Compute Engi
 - **Server:** Ubuntu 22.04+ on a dedicated instance, PHP 8.1+ (`php-fpm`, `php-sqlite3`, built-in sodium), SQLite 3, nginx, certbot with `python3-certbot-nginx`, domain on Cloudflare DNS in DNS-only mode
 - **Monitored instances:** Ubuntu 22.04+, PHP 8.1+ (`php-cli` only). No web server required; the client never listens on a port.
 
+## Development environment
+
+- Development runs natively on Ubuntu 24.04 with PHP 8.3. The supported minimum is PHP 8.1 on Ubuntu 22.04.
+- `scripts/test-ubuntu-22.04.sh` runs the server PHPUnit suite inside an `ubuntu:22.04` Podman container with the PHP packages the project needs. The first run builds a cached image; pass `--rebuild` after changing the package list. Other arguments go to PHPUnit.
+- Before each commit, run both the normal tests (`vendor/bin/phpunit` in `server/`) and `scripts/test-ubuntu-22.04.sh`. Both must pass.
+
 ## Before writing any code
 
 1. Read `docs/DESIGN.md`. It is the source of truth for architecture and decisions.
