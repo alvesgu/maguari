@@ -548,7 +548,7 @@ The server instance must be dedicated to Maguari. nginx needs ports 80 and 443, 
 
 Installation runs in two steps because HTTPS must work before setup (section 11.2):
 
-1. **Install:** `apt install maguari-server`. The package creates the system user, data directory, secrets key file and systemd timers, and configures nginx for HTTP only (enough for certificate issuance). It then prints the next step.
+1. **Install:** `apt install maguari-server`. The package creates the system user (`maguari-server`, which runs the web app and owns the data directory), data directory, secrets key file and systemd timers, and configures nginx for HTTP only (enough for certificate issuance). It then prints the next step.
 2. **Set up:** `sudo maguari-server setup --domain <domain> --email <email>`. This runs certbot non-interactively for the domain, verifies HTTPS works and only then prints the one-time setup URL.
 
 Prerequisites for step 2: the domain's DNS record points at the instance in DNS-only mode (section 11.4), and the instance's firewall allows ports 80 and 443.
@@ -563,6 +563,8 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | `check-seed-config [--path=/etc/maguari/seed.ini]` | Reads and validates the seed config file (section 11.5.1) and prints what would be seeded, without applying anything. `--path` is a testing convenience, not a production option. |
 | `migrate` | Creates the database if needed and applies pending migrations (section 3.1) |
 | `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Refuses once an administrator exists. |
+
+`migrate` and `issue-setup-token` refuse to run as root, so the database is never owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
 
 ### 12.3 APT repository
 

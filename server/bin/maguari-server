@@ -25,17 +25,38 @@ function maguariServerMain(array $args): int
     }
 
     if ($command === 'migrate') {
-        return migrateCommand();
+        return refuseRoot(array_slice($args, 1)) ?? migrateCommand();
     }
 
     if ($command === 'issue-setup-token') {
-        return issueSetupTokenCommand(array_slice($args, 2));
+        return refuseRoot(array_slice($args, 1)) ?? issueSetupTokenCommand(array_slice($args, 2));
     }
 
     fwrite(STDERR, "Usage:\n"
         . "  maguari-server check-seed-config [--path=/etc/maguari/seed.ini]\n"
         . "  maguari-server migrate\n"
         . "  maguari-server issue-setup-token --base-url=https://maguari.example.com\n");
+
+    return 1;
+}
+
+/**
+ * Commands that create or write the database must not run as root, or the
+ * database ends up owned by root and the web app (running as maguari-server)
+ * cannot write to it. Returns the exit code when refusing, null otherwise.
+ *
+ * @param string[] $commandArgs the subcommand and its arguments
+ */
+function refuseRoot(array $commandArgs): ?int
+{
+    if (posix_geteuid() !== 0) {
+        return null;
+    }
+
+    $command = implode(' ', array_map('escapeshellarg', $commandArgs));
+    fwrite(STDERR, "Do not run maguari-server {$commandArgs[0]} as root: the database would end up owned by root.\n"
+        . "Run it as the app's user instead:\n"
+        . "  sudo -u maguari-server maguari-server {$command}\n");
 
     return 1;
 }
