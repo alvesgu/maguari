@@ -588,16 +588,17 @@ Implement in this order, one step at a time:
 
 1. Read the seed config file with administrator info.
 2. Run the website (Slim app skeleton with the three route groups).
-3. Add one GCP project.
-4. List the project's instances from the API.
-5. Receive client heartbeats and show each instance's heartbeat status.
-6. Receive disk used and total every minute.
-7. Daily scheduled job with a "Run now" button.
-8. Send a test email to the administrator.
-9. Store every reading as runs (section 9.1).
-10. Read stored runs through an API endpoint for future charts.
+3. Setup and local login: one-time setup token, setup wizard creating the local administrator (Argon2id), sessions and CSRF; introduces SQLite.
+4. Add one GCP project.
+5. List the project's instances from the API.
+6. Receive client heartbeats and show each instance's heartbeat status.
+7. Receive disk used and total every minute.
+8. Daily scheduled job with a "Run now" button.
+9. Send a test email to the administrator.
+10. Store every reading as runs (section 9.1).
+11. Read stored runs through an API endpoint for future charts.
 
-First step after the MVP: the egress indicator (section 10.3).
+First steps after the MVP: the egress indicator (section 10.3) and Google sign-in.
 
 ## 16. Open questions
 
