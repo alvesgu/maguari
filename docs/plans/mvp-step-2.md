@@ -12,12 +12,12 @@ Design section 10.2 already fully specifies the three route groups and their mid
 | `/api/client/*` | HMAC verification, per-client rate limit |
 | `/auth/*` | IP rate limiting |
 
-None of the real middleware can be built yet: sessions and CSRF need the Access context's login flow (not an MVP step on its own; see open question below), HMAC verification needs client secrets from the Clients context (MVP step 5), and both forms of rate limiting need somewhere to keep counters. Building any of that now would go beyond this step, per `CLAUDE.md` rule 4. Section 10.2 itself needs no changes: it already describes the target state this step is working towards, so no `docs/DESIGN.md` edits are needed for this step.
+None of the real middleware can be built yet: sessions and CSRF need the Access context's login flow (not an MVP step on its own; see open question below), HMAC verification needs client secrets from the Clients context (MVP step 6), and both forms of rate limiting need somewhere to keep counters. Building any of that now would go beyond this step, per `CLAUDE.md` rule 4. Section 10.2 itself needs no changes: it already describes the target state this step is working towards, so no `docs/DESIGN.md` edits are needed for this step.
 
 Decisions confirmed with the user:
 - **Middleware scope:** wire the three route groups with one placeholder route each. Apply only security headers now (self-contained, no dependencies). `/admin/*` and `/api/client/*` get a temporary fail-closed middleware that rejects every request with `401` until the real session/CSRF and HMAC middleware replace it in the steps that need them. No always-pass stubs. `/auth/*` gets no fail-closed middleware; its placeholder route returns `501 Not Implemented` directly.
-- **SQLite:** deferred entirely. This step is pure HTTP/routing skeleton, no database. SQLite is introduced in whichever step first needs to persist something (expected to be step 3, adding a GCP project).
-- **Local verification:** development has moved to WSL (Ubuntu 22.04), so all commands and paths below are Linux-style. Verification uses PHP's built-in server (`php -S`) against `server/public/`. nginx and php-fpm configuration remain entirely a packaging concern (design section 12.2), not part of this step.
+- **SQLite:** deferred entirely. This step is pure HTTP/routing skeleton, no database. SQLite is introduced in whichever step first needs to persist something (expected to be step 3 (now step 4), adding a GCP project).
+- **Local verification:** development runs natively on Ubuntu 24.04 with PHP 8.3, so all commands and paths below are Linux-style. The PHP 8.1 minimum is checked by running the suite on Ubuntu 22.04 with `scripts/test-ubuntu-22.04.sh`. Verification uses PHP's built-in server (`php -S`) against `server/public/`. nginx and php-fpm configuration remain entirely a packaging concern (design section 12.2), not part of this step.
 
 ## Repository scaffolding (new)
 
@@ -41,7 +41,7 @@ No changes to `server/bin/maguari-server`, `server/src/Access/`, or `docs/DESIGN
 
 ## Implementation details
 
-**`server/composer.json`**: add `"slim/slim": "^4.12"` and `"slim/psr7": "^3.7"` to `require`. `slim/csrf` is not added yet: nothing uses it until real CSRF checks land alongside session support.
+**`server/composer.json`**: add `"slim/slim": "^4.12"` and `"slim/psr7": "^1.8"` (the plan originally said `^3.7`, but slim/psr7 has no 3.x release) to `require`. `slim/csrf` is not added yet: nothing uses it until real CSRF checks land alongside session support.
 
 **`server/src/Http/App.php`**: a small factory, `App::create(): \Slim\App`.
 - Builds the app with Slim's `AppFactory` (using `slim/psr7` as the PSR-7 implementation, no PSR-7 choice ambiguity).
@@ -66,6 +66,7 @@ No changes to `server/bin/maguari-server`, `server/src/Access/`, or `docs/DESIGN
    - `POST /api/client/heartbeat` → `401`, same body, security headers present.
    - `GET /auth/login` → `501`, security headers present.
    - `GET /nonexistent` → `404` (Slim's default routing failure).
+   - `scripts/test-ubuntu-22.04.sh` (from the repository root): the same suite passes on Ubuntu 22.04 with PHP 8.1.
 3. Manual smoke test with the built-in server, from `server/`:
    ```
    php -S 127.0.0.1:8080 -t public
@@ -81,4 +82,4 @@ No changes to `server/bin/maguari-server`, `server/src/Access/`, or `docs/DESIGN
 
 ## Open question for a future step
 
-The MVP list (design section 15) has no explicit step for admin login (Google sign-in, sessions, CSRF), yet step 3 ("Add one GCP project") implies an authenticated admin UI to add it from. Worth deciding, before step 3 starts, whether login is folded into step 3 or needs its own step inserted first. Not blocking for step 2, since `/admin/*` stays fail-closed either way.
+The MVP list (design section 15) has no explicit step for admin login (Google sign-in, sessions, CSRF), yet step 3 (now step 4) ("Add one GCP project") implies an authenticated admin UI to add it from. Worth deciding, before step 3 (now step 4) starts, whether login is folded into step 3 (now step 4) or needs its own step inserted first. Not blocking for step 2, since `/admin/*` stays fail-closed either way.
