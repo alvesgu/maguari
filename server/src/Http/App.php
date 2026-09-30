@@ -4,8 +4,20 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Http;
 
+use Maguari\Server\Access\AccessApi;
+use Maguari\Server\Http\Controller\AdminController;
+use Maguari\Server\Http\Controller\LoginController;
+use Maguari\Server\Http\Controller\SetupController;
+use Maguari\Server\Http\Middleware\CsrfMiddleware;
 use Maguari\Server\Http\Middleware\FailClosedMiddleware;
+use Maguari\Server\Http\Middleware\RateLimitMiddleware;
+use Maguari\Server\Http\Middleware\RequireAdministratorMiddleware;
 use Maguari\Server\Http\Middleware\SecurityHeadersMiddleware;
+use Maguari\Server\Http\Middleware\SessionMiddleware;
+use Maguari\Server\Kernel\Clock;
+use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Kernel\Database\Migrator;
+use Maguari\Server\Kernel\SystemClock;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App as SlimApp;
 use Slim\Exception\HttpMethodNotAllowedException;
@@ -17,13 +29,31 @@ use Slim\Routing\RouteCollectorProxy;
 final class App
 {
     /**
+     * Builds the app from the database at MAGUARI_DATABASE (or the default
+     * path). Sessions are kept in a sessions/ directory next to the database.
+     */
+    public static function fromEnvironment(): SlimApp
+    {
+        $database = Database::fromEnvironment();
+        $clock = new SystemClock();
+        $access = (new Migrator($database))->isUpToDate() ? new AccessApi($database, $clock) : null;
+
+        return self::create($access, dirname($database->path()) . '/sessions', $clock);
+    }
+
+    /**
+     * @param AccessApi|null $access null while the database is missing or not
+     *                               fully migrated: /admin and /auth then return 503
      * @param bool $logErrors log uncaught errors to PHP's error log. Tests pass false.
      */
-    public static function create(bool $logErrors = true): SlimApp
-    {
+    public static function create(
+        ?AccessApi $access,
+        string $sessionPath,
+        Clock $clock = new SystemClock(),
+        bool $logErrors = true,
+    ): SlimApp {
         $app = AppFactory::create();
         $responseFactory = $app->getResponseFactory();
-        $failClosed = new FailClosedMiddleware($responseFactory);
 
         // Slim runs middleware last-added first, so security headers wrap the
         // error handler and are also set on 404 and 500 responses.
@@ -39,21 +69,39 @@ final class App
         );
         $app->add(new SecurityHeadersMiddleware());
 
-        $app->group('/admin', function (RouteCollectorProxy $group): void {
-            $group->get('', fn ($request, ResponseInterface $response): ResponseInterface => $response);
-        })->add($failClosed);
+        if ($access === null) {
+            $app->any('/{surface:admin|auth}[/{rest:.*}]', function ($request, ResponseInterface $response): ResponseInterface {
+                $response->getBody()->write('Maguari is not set up yet. Run maguari-server issue-setup-token on the server.');
+
+                return $response->withStatus(503)->withHeader('Content-Type', 'text/plain; charset=utf-8');
+            });
+        } else {
+            $session = new SessionMiddleware($sessionPath, $clock);
+            $csrf = new CsrfMiddleware($responseFactory);
+            $rateLimit = new RateLimitMiddleware($access, $responseFactory);
+            $view = new View();
+            $adminController = new AdminController($view);
+            $setupController = new SetupController($access, $view);
+            $loginController = new LoginController($access, $view);
+
+            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController): void {
+                $group->get('', [$adminController, 'show']);
+                $group->post('/logout', [$adminController, 'logout']);
+            })->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
+
+            // CSRF protects the forms under /auth. The future OAuth callback is
+            // protected by its state parameter instead (design section 10.2).
+            $app->group('/auth', function (RouteCollectorProxy $group) use ($setupController, $loginController, $rateLimit): void {
+                $group->get('/setup', [$setupController, 'show']);
+                $group->post('/setup', [$setupController, 'submit'])->add($rateLimit);
+                $group->get('/login', [$loginController, 'show']);
+                $group->post('/login', [$loginController, 'submit'])->add($rateLimit);
+            })->add($csrf)->add($session);
+        }
 
         $app->group('/api/client', function (RouteCollectorProxy $group): void {
             $group->post('/heartbeat', fn ($request, ResponseInterface $response): ResponseInterface => $response);
-        })->add($failClosed);
-
-        $app->group('/auth', function (RouteCollectorProxy $group): void {
-            $group->get('/login', function ($request, ResponseInterface $response): ResponseInterface {
-                $response->getBody()->write('Not implemented yet');
-
-                return $response->withStatus(501)->withHeader('Content-Type', 'text/plain; charset=utf-8');
-            });
-        });
+        })->add(new FailClosedMiddleware($responseFactory));
 
         return $app;
     }

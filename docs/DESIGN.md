@@ -158,12 +158,13 @@ server/src/Clients/          Supporting context
 server/src/Notifications/    Generic context
 server/src/Access/           Generic context
 server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption)
-server/src/Http/             Slim wiring: routes, route groups, middleware
+server/src/Http/             Slim wiring: routes, route groups, middleware, thin controllers
+server/templates/            Plain PHP templates for the web app (no template engine)
 server/public/               index.php only (web root)
 ```
 
 1. PHP namespace root: `Maguari\Server\` mapped to `server/src/` (PSR-4).
-2. Each context keeps its database migrations inside its own folder.
+2. Each context keeps its database migrations inside its own folder, as numbered `.sql` files in `server/src/<Context>/Migrations/`. A runner in `Kernel/Database/` finds them by scanning those folders (so Kernel never names a context), applies pending ones and records them in `kernel_migrations`, the one table without a context prefix. Migrations run from the CLI (`maguari-server migrate`), never on a web request.
 3. Table names are prefixed with the context name (for example `fleet_instances`, `monitoring_metric_runs`), so ownership is visible in SQLite.
 4. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more.
 5. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
@@ -373,19 +374,19 @@ Coherence rules (warning only):
 
 ## 9. Storage
 
-SQLite, stored outside the web root with restrictive file permissions.
+SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, `/admin/*` and `/auth/*` return `503`.
 
 ### 9.1 Readings as runs
 
 Readings are stored as **runs** instead of individual points (run-length storage, similar to "report by exception" in industrial historians):
 
 ```
-monitoring_metric_runs(id, instance_id, metric, value, start_ts, end_ts)
+monitoring_metric_runs(id, instance_id, metric, value, start_at, end_at)
 ```
 
-1. When a reading equals the current run's value, update `end_ts`.
+1. When a reading equals the current run's value, update `end_at`.
 2. When it differs, insert a new run.
-3. When the gap since `end_ts` exceeds 1.5 times the expected interval, insert a new run even if the value is unchanged. This keeps outages visible instead of hiding them inside a flat line.
+3. When the gap since `end_at` exceeds 1.5 times the expected interval, insert a new run even if the value is unchanged. This keeps outages visible instead of hiding them inside a flat line.
 4. No deletes are needed.
 
 Implications:
@@ -393,7 +394,7 @@ Implications:
 - Charts must use step rendering, not linear interpolation.
 - Averages are time-weighted.
 
-All timestamps are stored in UTC.
+All timestamps are stored in UTC, as integer Unix seconds, in columns whose names end in `_at` (for example `created_at`, `expires_at`).
 
 ### 9.2 Other tables
 
@@ -426,9 +427,11 @@ Routes are grouped by surface. Each group has its own middleware chain, so new r
 
 | Group | Middleware |
 |---|---|
-| `/admin/*` | Session check, CSRF check, security headers |
+| `/admin/*` | Session check, CSRF check |
 | `/api/client/*` | HMAC verification, per-client rate limit |
-| `/auth/*` | IP rate limiting |
+| `/auth/*` | IP rate limiting on form submissions; session and CSRF check on forms (setup, local login) |
+
+Security headers are set on every response, whatever the group. CSRF applies to the forms under `/auth/*` only: the future OAuth callback is protected by the OAuth `state` parameter instead.
 
 A stolen client secret cannot open the admin UI, and an admin session cannot impersonate a client.
 
@@ -475,19 +478,28 @@ Alerts (emails) are not the only way problems surface. Notifications show them i
 
 1. Installation happens over SSH (section 12.2).
 2. HTTPS must work **before** any setup token exists, so the token never travels over plain HTTP.
-3. The setup command prints a URL containing a random **one-time setup token**. There are no default credentials.
+3. The setup command prints a URL containing a random **one-time setup token**. There are no default credentials. The token:
+   - is valid for 1 hour;
+   - is stored only as a SHA-256 hash;
+   - replaces any previous token when a new one is issued, so only one exists at a time;
+   - can only be issued while no administrator exists. Once one exists, the command refuses and `/auth/setup` returns 404.
+   The URL must use HTTPS. Plain HTTP is accepted only for `localhost`, for local development. `maguari-server issue-setup-token` (section 12.2.1) does this part on its own; `setup` runs it after certbot succeeds.
 4. The setup wizard creates the local admin account and optionally configures Google OAuth and the email allowlist.
-5. The setup token is invalidated when setup finishes.
+5. The setup token is invalidated when setup finishes. The wizard then signs the new administrator in.
+6. The wizard prefills the administrator's name and email from the seed config file when it is present and valid (section 11.5.1).
 
 ### 11.3 Hardening
 
-- Rate limiting on login and OAuth callback routes
+- Rate limiting on login, setup and OAuth callback routes: at most 10 failed login or setup submissions per IP address in 15 minutes, then `429`. The IP is `REMOTE_ADDR`, which is the real client IP because Cloudflare runs in DNS-only mode (section 11.4).
 - fail2ban on nginx logs
 - Session cookies with `HttpOnly`, `Secure` and `SameSite=Lax` (`Strict` would break the OAuth redirect)
+- Sessions are PHP's native file sessions, with PHP's own cookie handling off: the app reads and sets the cookie itself. Strict mode is on, so an unknown session ID is never adopted. Sessions live in a dedicated directory (`/var/lib/maguari/sessions`, mode 0700) with `session.gc_maxlifetime` matching the absolute timeout. Ubuntu turns PHP's session garbage collection off and cleans only the default save paths from cron, so the app turns it back on for its own directory.
+- Session timeouts: 2 hours idle and 12 hours absolute, enforced by the app from timestamps stored in the session
+- Local passwords: 12 to 1,024 characters, no composition rules, hashed with Argon2id
 - CSRF tokens on every state-changing request
 - No state-changing GET routes
-- Security headers: `Content-Security-Policy`, `Strict-Transport-Security`, `frame-ancestors`
-- Session ID regeneration at login
+- Security headers: `Content-Security-Policy`, `Strict-Transport-Security`, `frame-ancestors`, `Referrer-Policy: no-referrer` (keeps the setup token out of `Referer` headers)
+- Session ID regeneration at login and at setup completion
 - Secrets encrypted at rest (section 9.3)
 
 ### 11.4 Cloudflare DNS-only
@@ -514,7 +526,7 @@ Running behind the Cloudflare proxy is not supported for now. If added later as 
 4. `[access]` section, optional: `allowlist[]`, repeated for multiple addresses. Defaults to `[administratorEmail]` when omitted or empty. Every entry is lowercased and the list deduplicated, so `Jane@Example.com` and `jane@example.com` count as one entry. The administrator email is lowercased the same way.
 5. No password field. Local credentials are created only by the setup wizard (section 11.2), not seeded.
 6. **Absent versus invalid:** a missing file means nothing to seed, not an error. A present but invalid file (unparsable INI, or a missing or malformed required field) is an error.
-7. **Applying values is deferred.** Reading and validating the file works from MVP step 1 (section 15) with no database. Actually applying the seeded values, and marking seeding as done, happens once SQLite storage exists (a later MVP step).
+7. **Applying values is deferred.** Reading and validating the file works from MVP step 1 (section 15) with no database. Actually applying the seeded values, and marking seeding as done, is still deferred to a later step, although SQLite exists since MVP step 3. Until then, the setup wizard only uses the file to prefill the administrator's name and email (section 11.2).
 8. If secret fields are ever added to this file, any CLI output that prints the parsed file must mask them.
 
 ## 12. Packaging, distribution and updates
@@ -549,6 +561,8 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 |---|---|
 | `setup --domain <domain> --email <email>` | Runs certbot, verifies HTTPS, prints the one-time setup URL (above) |
 | `check-seed-config [--path=/etc/maguari/seed.ini]` | Reads and validates the seed config file (section 11.5.1) and prints what would be seeded, without applying anything. `--path` is a testing convenience, not a production option. |
+| `migrate` | Creates the database if needed and applies pending migrations (section 3.1) |
+| `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Refuses once an administrator exists. |
 
 ### 12.3 APT repository
 

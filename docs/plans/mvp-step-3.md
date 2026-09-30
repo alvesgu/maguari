@@ -16,52 +16,44 @@ What this step delivers, end to end:
 4. `/admin` shows a minimal signed-in page with a sign-out button. Every state-changing request is CSRF-protected.
 5. `/api/client/*` stays fail-closed (HMAC is step 6).
 
-## Decisions needed before implementation
+## Decisions (confirmed)
 
-The design does not settle the points below. Each has a recommendation. Please confirm or change them; the agreed answers go into `docs/DESIGN.md` in the implementation commit.
+The first version of this plan listed these as open questions with recommendations. The answers below are confirmed and are recorded in `docs/DESIGN.md` in the implementation commit.
 
-**D1. How the setup token is issued in this step.** Design 12.2 has `maguari-server setup --domain <domain> --email <email>`, which runs certbot, verifies HTTPS and then prints the setup URL. certbot and HTTPS verification are packaging work and cannot be tested locally.
-- *Recommendation:* add a separate subcommand `maguari-server issue-setup-token --base-url=<url>` that only migrates the database, issues the token and prints the URL. Later, `setup` calls the same code after certbot succeeds. The same subcommand also matches the recovery path in design 11.1 item 4 ("issuing a new one-time setup token").
-- *Alternative:* implement `setup --domain --email` now with the certbot part stubbed out.
+**D1. Issuing the setup token.** A separate subcommand, `maguari-server issue-setup-token --base-url=<url>`, migrates the database, issues the token and prints the URL. It rejects a base URL that is not `https://`, except for the host `localhost` (for local development). Issuing a token invalidates any previous one. Later, `setup --domain --email` calls the same code after certbot succeeds, and the same subcommand serves the recovery path in design 11.1 item 4.
 
-**D2. Setup token lifetime.** The design says one-time and invalidated when setup finishes, but gives no expiry.
-- *Recommendation:* expires 24 hours after issue. Only one token exists at a time: issuing a new one replaces the old one. Stored as a SHA-256 hash, never in plain text.
+**D2. Setup token lifetime.** 1 hour. Only one token exists at a time. Stored as a SHA-256 hash, never in plain text.
 
-**D3. Issuing a token when an administrator already exists.** The wizard only creates the first administrator.
-- *Recommendation:* the CLI refuses with a clear message, and `/auth/setup` returns 404 once an administrator exists. Recovery (design 11.1 item 4) is a later step.
+**D3. Once an administrator exists,** `issue-setup-token` refuses with a clear message and `/auth/setup` returns 404. Recovery is a later step.
 
-**D4. Seed config file.** Design 11.5.1 item 7 says applying seeded values happens "once SQLite storage exists (a later MVP step)". This step introduces SQLite.
-- *Recommendation:* still defer applying the seed, to keep this step small. The wizard prefills the name and email fields from the seed file when it is present and valid (read only, nothing marked as seeded). The allowlist is only used by Google sign-in, which is after the MVP.
-- *Alternative:* apply the seed in this step (write administrator name, email and allowlist to settings, record that seeding is done).
+**D4. Seed config file.** Applying the seed stays deferred. The wizard prefills the name and email fields from the seed file when it is present and valid (read only, nothing is marked as seeded).
 
-**D5. Session storage.**
-- *Recommendation:* PHP's native sessions with the default file handler, driven by a small `SessionMiddleware`. The middleware turns off PHP's own cookie handling (`session.use_cookies=0`, `session.cache_limiter=''`), reads the session ID from the request cookie and sets the cookie on the PSR-7 response itself, with `HttpOnly`, `Secure`, `SameSite=Lax` and `Path=/`. This keeps the cookie flags explicit and testable, and `slim/csrf` works with it unchanged (it uses `$_SESSION` by default).
-- *Alternative:* sessions stored in SQLite (`access_sessions`, session ID hashed). Easier to revoke and no global state in tests, but more custom code and a custom storage adapter for `slim/csrf`.
+**D5. Sessions.** PHP's native sessions with the file handler, driven by `SessionMiddleware`:
+- PHP's own cookie handling is off (`session.use_cookies=0`, `session.use_trans_sid=0`, `session.cache_limiter=''`). The middleware reads the session ID from the request cookie and sets the cookie on the PSR-7 response itself, with `HttpOnly`, `Secure`, `SameSite=Lax` and `Path=/`.
+- `session.use_strict_mode=1`, so an unknown session ID is replaced instead of adopted.
+- A dedicated `session.save_path` (a `sessions/` directory next to the database, `/var/lib/maguari/sessions` in production, created with mode 0700) with `session.gc_maxlifetime` set to the 12 hour absolute timeout. Ubuntu disables PHP's own session garbage collection (`session.gc_probability=0`) and cleans only the default save paths from a cron job, so for the dedicated path the middleware enables PHP's probabilistic garbage collection (`gc_probability=1`, `gc_divisor=100`).
+- Idle (2 hours) and absolute (12 hours) timeouts are enforced by the middleware from timestamps stored in the session, not left to garbage collection.
+- The session ID is regenerated at login and at setup completion. Sign-out destroys the session.
+- `slim/csrf` uses the session (`$_SESSION`) as its storage, in persistent token mode (one token per session, so several tabs and the back button keep working).
 
-**D6. Session lifetime.**
-- *Recommendation:* 2 hours idle timeout and 12 hours absolute timeout, both enforced by timestamps kept in the session. The session ID is regenerated at login and at setup completion (design 11.3). Sign-out destroys the session.
+**D6. Session lifetime.** 2 hours idle, 12 hours absolute (see D5).
 
-**D7. Rate limiting on `/auth/*` (design 10.2 and 11.3).** Step 2 left it out because there was nowhere to keep counters. This step adds both the database and the first password form on the public internet.
-- *Recommendation:* include it, scoped to failed attempts: at most 10 failed login or setup submissions per IP address in 15 minutes, then `429` until the window passes. Counters in `access_login_attempts`. The IP comes from `REMOTE_ADDR`, which is correct because Cloudflare runs DNS-only (design 11.4). fail2ban remains packaging work.
-- *Alternative:* defer rate limiting to its own step and accept an unthrottled login form until then.
+**D7. Rate limiting on `/auth/*`.** At most 10 failed login or setup submissions per IP address in 15 minutes, then `429` until the window passes. Counters in `access_login_attempts`. The IP comes from `REMOTE_ADDR`, which is correct because Cloudflare runs DNS-only (design 11.4). Only POSTs are counted, so no GET changes state. fail2ban remains packaging work.
 
-**D8. CSRF and sessions on `/auth/*`.** Design 10.2 lists session and CSRF middleware only for `/admin/*`, but design 11.3 requires CSRF on every state-changing request, and the setup and login forms are state-changing (login CSRF).
-- *Recommendation:* `/auth/*` also gets the session and CSRF middleware. Update the table in design 10.2 accordingly.
+**D8. CSRF and sessions on `/auth/*`.** The forms under `/auth/*` (setup and login) also get the session and CSRF middleware. Design 10.2 says CSRF applies to forms under `/auth/*`, because the future OAuth callback is protected by the `state` parameter instead.
 
-**D9. Timestamp column convention.** This step creates the first tables, so it sets the convention for all later ones.
-- *Recommendation:* integer Unix seconds (always UTC by definition), column names ending in `_at` (`created_at`, `expires_at`). Compact and cheap to compare, which suits the e2-micro and the run arithmetic in design 9.1. The `start_ts` and `end_ts` names in design 9.1 stay as they are.
-- *Alternative:* ISO 8601 UTC text (`2026-09-30T14:00:00Z`), easier to read in the `sqlite3` shell.
+**D9. Timestamps.** Integer Unix seconds (UTC by definition), column names ending in `_at`. `start_ts` and `end_ts` in design 9.1 are renamed to `start_at` and `end_at`.
 
-**D10. Password rules.**
-- *Recommendation:* minimum 12 characters, maximum 1,024 (to bound hashing cost), no composition rules. Hashed with `password_hash($password, PASSWORD_ARGON2ID)` and default cost parameters.
+**D10. Password rules.** Minimum 12 characters, maximum 1,024, no composition rules. Hashed with `password_hash($password, PASSWORD_ARGON2ID)` and default cost parameters.
 
-**D11. Database location and migrations.**
-- *Recommendation:* the database lives at `/var/lib/maguari/maguari.sqlite`, created with mode 0600. For development and tests only, the path can be overridden with the `MAGUARI_DATABASE` environment variable. Each context keeps its migrations as numbered `.sql` files in `server/src/<Context>/Migrations/` (design 3.1 item 2). A small runner in `Kernel/` applies pending ones and records them in `kernel_migrations`. Migrations run from the CLI (`maguari-server migrate`, and implicitly from `issue-setup-token`), never on a web request. If the database is missing or not migrated, web routes that need it return `503` with a short message.
+**D11. Database location and migrations.** `/var/lib/maguari/maguari.sqlite`, created with mode 0600, overridable with the `MAGUARI_DATABASE` environment variable for development and tests only. SQLite runs in WAL mode with a busy timeout (5 seconds) and foreign keys on. Each context keeps its migrations as numbered `.sql` files in `server/src/<Context>/Migrations/` (design 3.1 item 2). A runner in `Kernel/Database/` finds them by scanning those folders (so Kernel never names a context), applies pending ones and records them in `kernel_migrations`. Migrations run from the CLI (`maguari-server migrate`, and implicitly from `issue-setup-token`), never on a web request. If the database is missing or not fully migrated, `/admin/*` and `/auth/*` return `503` with a short message.
+
+**Referrer-Policy.** `Referrer-Policy: no-referrer` is sent on every response (set in `SecurityHeadersMiddleware`), which covers the setup pages and keeps the setup token out of `Referer` headers.
 
 ## Out of scope for this step
 
 - Google sign-in, the email allowlist and the "local login is disabled once Google is configured" rule (after the MVP).
-- certbot, HTTPS verification, nginx, php-fpm and packaging (the `setup` subcommand).
+- certbot, HTTPS verification, nginx, php-fpm and packaging (the `setup` subcommand). File ownership of the database and session directory for the app user is a packaging concern.
 - Recovery commands (re-enabling local login, resetting a password).
 - The audit log (design 9.2), the secrets key file and sodium encryption (nothing secret needs encrypting yet).
 - Any real admin UI beyond the signed-in placeholder page. No CSS or JavaScript (the CSP from step 2 stays strict).
@@ -72,27 +64,29 @@ The design does not settle the points below. Each has a recommendation. Please c
 ```
 server/
   composer.json                            add "slim/csrf": "^1.5" and "ext-pdo_sqlite"
+  phpunit.xml                              bootstrap tests/bootstrap.php
+  .gitignore                               add /var/ (local development database)
   bin/maguari-server                       add "migrate" and "issue-setup-token" subcommands
   templates/                               plain PHP templates, no template engine
     layout.php
-    setup.php                              wizard form: name, email, password, confirmation
+    setup.php                              wizard form: name, email, password and confirmation
     login.php
     admin.php                              "Signed in as ..." and a sign-out form
-    message.php                            simple status pages (setup unavailable, not ready)
+    message.php                            simple status pages (invalid link, setup not complete, not ready)
   src/
     Kernel/
       Clock.php                            interface: now(): int (Unix seconds, UTC)
       SystemClock.php
       Database/
-        Connection.php                     opens PDO SQLite with foreign_keys=ON, journal_mode=WAL, busy_timeout
+        Database.php                       database path, lazy PDO with WAL, busy timeout and foreign keys
         Migrator.php                       applies pending per-context .sql migrations, tracks them in kernel_migrations
     Access/
-      AccessApi.php                        extended: issueSetupToken, isSetupComplete, completeSetup, authenticate,
-                                           administratorById, recordFailedAttempt, isRateLimited
+      AccessApi.php                        extended: setup, authentication, administrator lookup, login throttling
       Administrator.php                    value object: id, name, email
       AdministratorRepository.php
+      IssuedSetupToken.php                 value object: token, expiresAt
       SetupTokens.php                      issue (random 32 bytes, base64url), verify by SHA-256 hash, consume
-      PasswordHasher.php                   Argon2id hashing and verification, dummy verify for unknown emails
+      PasswordHasher.php                   Argon2id hashing and verification, dummy verification for unknown emails
       LoginThrottle.php                    failed attempts per IP (D7)
       Exception/
         SetupNotAllowed.php
@@ -102,20 +96,25 @@ server/
         0002_access_setup_tokens.sql
         0003_access_login_attempts.sql
     Http/
-      App.php                              takes its dependencies (AccessApi, Clock, session settings) as arguments;
-                                           /admin loses FailClosedMiddleware and gets RequireAdministratorMiddleware
+      App.php                              takes AccessApi, session path and clock; /admin loses FailClosedMiddleware
+      Session.php                          the current session as seen by controllers (sign in, sign out, administrator ID)
       View.php                             renders a template with htmlspecialchars escaping
+      RequestIp.php                        the client IP (REMOTE_ADDR only, D7)
       Controller/
         SetupController.php                GET and POST /auth/setup
         LoginController.php                GET and POST /auth/login
         AdminController.php                GET /admin, POST /admin/logout
+        FormInput.php                      reads string fields from query or form data
       Middleware/
         SessionMiddleware.php              D5 and D6
+        CsrfMiddleware.php                 builds the slim/csrf Guard per request, after the session has started
         RequireAdministratorMiddleware.php redirects to /auth/login when not signed in
         RateLimitMiddleware.php            D7, on POST routes under /auth
-        SecurityHeadersMiddleware.php      add Referrer-Policy: no-referrer (keeps the setup token out of Referer)
-  public/index.php                         builds dependencies and passes them to App::create
+        SecurityHeadersMiddleware.php      adds Referrer-Policy: no-referrer
+  public/index.php                         unchanged apart from calling App::fromEnvironment()
   tests/
+    bootstrap.php                          applies the session ini settings before PHPUnit prints anything
+    Support/                               temporary environment (database, session path, fixed clock) and a cookie-keeping test browser
     Kernel/Database/MigratorTest.php
     Access/SetupTokensTest.php
     Access/AccessApiTest.php
@@ -123,7 +122,7 @@ server/
     Http/AppTest.php                       updated for the new /admin behavior
     Http/SetupFlowTest.php
     Http/LoginFlowTest.php
-docs/DESIGN.md                             record the agreed answers to D1 to D11
+docs/DESIGN.md                             record D1 to D11
 ```
 
 ## Tables
@@ -141,13 +140,14 @@ Emails are stored lowercased, the same normalization as the seed file (design 11
 ## Flows
 
 **Issue a setup token (CLI).** `maguari-server issue-setup-token --base-url=https://maguari.example.com`
-1. Opens or creates the database and runs pending migrations.
-2. Refuses if an administrator exists (D3).
-3. Replaces any existing token with a new one and prints `<base-url>/auth/setup?token=<token>` and its expiry time in UTC. The token is printed once and never logged.
+1. Validates the base URL (D1).
+2. Opens or creates the database and runs pending migrations.
+3. Refuses if an administrator exists (D3).
+4. Replaces any existing token with a new one and prints `<base-url>/auth/setup?token=<token>` and its expiry time in UTC. The token is printed once and never logged.
 
 **Setup wizard.**
-1. `GET /auth/setup?token=...`: if setup is complete, 404. If the token is missing, unknown or expired, a generic "This setup link is invalid or expired" page with status 403. Otherwise the form, carrying the token and the CSRF fields as hidden inputs, with name and email prefilled from the seed file (D4). This GET changes nothing: it neither consumes the token nor records an attempt (only failed POSTs count towards the rate limit).
-2. `POST /auth/setup`: CSRF check, rate limit check, token check again, then input validation (non-empty name, valid email, password rules D10, matching confirmation). On error the form comes back with messages and without the password values. On success, in one transaction: create the administrator and delete the token. Then regenerate the session ID, sign the administrator in and redirect (303) to `/admin`.
+1. `GET /auth/setup?token=...`: if setup is complete, 404. If the token is missing, unknown or expired, a generic "This setup link is invalid or expired" page with status 403. Otherwise the form, carrying the token and the CSRF fields as hidden inputs, with name and email prefilled from the seed file (D4). This GET changes nothing: it neither consumes the token nor records an attempt.
+2. `POST /auth/setup`: CSRF check, rate limit check, token check again (an invalid token counts as a failed attempt), then input validation (non-empty name, valid email, password rules D10, matching confirmation). On error the form comes back with messages and without the password values. On success, in one transaction: create the administrator and delete the token. Then regenerate the session ID, sign the administrator in and redirect (303) to `/admin`.
 
 **Login.**
 1. `GET /auth/login`: if no administrator exists yet, a page saying setup is not complete. If already signed in, redirect to `/admin`. Otherwise the form.
@@ -161,31 +161,27 @@ A CSRF failure returns 400 with a short plain message. No route changes state on
 
 ## Tests
 
-Tests use a temporary SQLite file per test, a fixed clock and a temporary session save path. Argon2id cost is not lowered in tests; if the suite gets slow, that will be raised as a question rather than changed silently.
+Tests use a temporary SQLite file per test, a fixed clock and one session save path for the whole suite (set in `tests/bootstrap.php`, because PHP refuses to change session settings once output has started). Argon2id cost is not lowered in tests.
 
-1. **Migrator:** applies all migrations on an empty database, is a no-op when run again, applies only new ones.
-2. **SetupTokens:** a token verifies before expiry and not after; only the hash is stored; a new token replaces the old one; a consumed token no longer verifies.
-3. **AccessApi:** setup refuses when an administrator exists; passwords are stored as Argon2id hashes (`password_get_info`); authentication succeeds and fails as expected, and emails are matched case-insensitively.
+1. **Migrator:** applies all migrations on an empty database, is a no-op when run again, reports whether the database is up to date.
+2. **SetupTokens:** a token verifies before expiry and not after; only the hash is stored; a new token invalidates the old one; a consumed token no longer verifies.
+3. **AccessApi:** setup refuses when an administrator exists; passwords are stored as Argon2id hashes (`password_get_info`); input validation; authentication succeeds and fails as expected, and emails are matched case-insensitively.
 4. **LoginThrottle:** the eleventh failure inside 15 minutes is limited; attempts older than the window no longer count.
-5. **Setup flow (HTTP):** full happy path from GET with token to `/admin`; invalid and expired tokens; missing or wrong CSRF token; validation errors; setup returns 404 once complete; the token cannot be used twice.
+5. **Setup flow (HTTP):** full happy path from GET with token to `/admin`; invalid and expired tokens; missing or wrong CSRF token; validation errors; setup returns 404 once complete; the token cannot be used twice; `Referrer-Policy: no-referrer` on the setup page.
 6. **Login flow (HTTP):** happy path; wrong password and unknown email give the same message; session cookie has `HttpOnly`, `Secure`, `SameSite=Lax`; the session ID changes at login; idle and absolute timeouts; sign-out ends the session; `GET /admin` without a session redirects to login; rate limit returns 429.
-7. **Existing `AppTest`:** `/api/client/heartbeat` stays 401; `/admin` now redirects to login instead of returning 401; security headers (including `Referrer-Policy`) on every response.
+7. **Existing `AppTest`:** `/api/client/heartbeat` stays 401; `/admin` now redirects to login; `/admin` and `/auth/login` return 503 when the database is not ready; security headers on every response.
 
 ## Verification
 
-1. From `server/`, add the dependency:
-   ```
-   composer require slim/csrf
-   ```
-2. Run the normal suite from `server/`:
+1. Run the normal suite from `server/`:
    ```
    vendor/bin/phpunit
    ```
-3. Run the suite on Ubuntu 22.04 with PHP 8.1 from the repository root (confirms Argon2id and `pdo_sqlite` are available there too):
+2. Run the suite on Ubuntu 22.04 with PHP 8.1 from the repository root (confirms Argon2id and `pdo_sqlite` are available there too):
    ```
    scripts/test-ubuntu-22.04.sh
    ```
-4. Manual check with the built-in server, from `server/`. Use `localhost` rather than `127.0.0.1`, because browsers only send `Secure` cookies over plain HTTP to `localhost`:
+3. Manual check with the built-in server, from `server/`. Use `localhost` rather than `127.0.0.1`, because browsers only send `Secure` cookies over plain HTTP to `localhost`:
    ```
    export MAGUARI_DATABASE="$PWD/var/dev.sqlite"
    ```
@@ -195,4 +191,4 @@ Tests use a temporary SQLite file per test, a fixed clock and a temporary sessio
    ```
    php -S localhost:8080 -t public
    ```
-   Open the printed URL in a browser, complete the wizard, confirm `/admin` shows the signed-in page, sign out, sign in again and confirm a second `issue-setup-token` is refused. `server/var/` is added to `server/.gitignore`.
+   Open the printed URL in a browser, complete the wizard, confirm `/admin` shows the signed-in page, sign out, sign in again and confirm a second `issue-setup-token` is refused.

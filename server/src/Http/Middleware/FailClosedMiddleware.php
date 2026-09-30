@@ -11,8 +11,8 @@ use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
 /**
- * Temporary: rejects every request until the real session/CSRF (/admin) and HMAC
- * (/api/client) middleware exist. Delete it when they land; do not extend it.
+ * Temporary: rejects every /api/client request until the real HMAC middleware
+ * exists. Delete it when that lands; do not extend it.
  */
 final class FailClosedMiddleware implements MiddlewareInterface
 {

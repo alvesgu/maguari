@@ -7,7 +7,11 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Access\Exception\InvalidSeedConfig;
+use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Access\SeedConfigReader;
+use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Kernel\Database\Migrator;
+use Maguari\Server\Kernel\SystemClock;
 
 /**
  * @param string[] $args
@@ -20,9 +24,116 @@ function maguariServerMain(array $args): int
         return checkSeedConfigCommand(array_slice($args, 2));
     }
 
-    fwrite(STDERR, "Usage: maguari-server check-seed-config [--path=/etc/maguari/seed.ini]\n");
+    if ($command === 'migrate') {
+        return migrateCommand();
+    }
+
+    if ($command === 'issue-setup-token') {
+        return issueSetupTokenCommand(array_slice($args, 2));
+    }
+
+    fwrite(STDERR, "Usage:\n"
+        . "  maguari-server check-seed-config [--path=/etc/maguari/seed.ini]\n"
+        . "  maguari-server migrate\n"
+        . "  maguari-server issue-setup-token --base-url=https://maguari.example.com\n");
 
     return 1;
+}
+
+/**
+ * Creates the database if needed and applies pending migrations.
+ */
+function migrateDatabase(Database $database): void
+{
+    $database->create();
+
+    foreach ((new Migrator($database))->migrate() as $migration) {
+        echo "Applied migration {$migration}\n";
+    }
+}
+
+function migrateCommand(): int
+{
+    $database = Database::fromEnvironment();
+    migrateDatabase($database);
+    echo "Database {$database->path()} is up to date.\n";
+
+    return 0;
+}
+
+/**
+ * The setup URL carries the one-time token, so it must use HTTPS. Plain HTTP is
+ * accepted only for localhost, for local development.
+ */
+function validateBaseUrl(string $baseUrl): ?string
+{
+    $parts = parse_url($baseUrl);
+
+    if (
+        $parts === false
+        || !isset($parts['scheme'], $parts['host'])
+        || isset($parts['user'])
+        || isset($parts['pass'])
+        || isset($parts['query'])
+        || isset($parts['fragment'])
+        || !in_array($parts['path'] ?? '', ['', '/'], true)
+    ) {
+        return null;
+    }
+
+    $scheme = strtolower($parts['scheme']);
+    $host = strtolower($parts['host']);
+
+    if ($scheme !== 'https' && !($scheme === 'http' && $host === 'localhost')) {
+        return null;
+    }
+
+    return $scheme . '://' . $host . (isset($parts['port']) ? ':' . $parts['port'] : '');
+}
+
+/**
+ * @param string[] $args
+ */
+function issueSetupTokenCommand(array $args): int
+{
+    $baseUrl = null;
+
+    foreach ($args as $arg) {
+        if (str_starts_with($arg, '--base-url=')) {
+            $baseUrl = validateBaseUrl(substr($arg, strlen('--base-url=')));
+
+            if ($baseUrl === null) {
+                fwrite(STDERR, "--base-url must be an https:// URL with no path, for example https://maguari.example.com. "
+                    . "http:// is accepted only for localhost.\n");
+
+                return 1;
+            }
+        }
+    }
+
+    if ($baseUrl === null) {
+        fwrite(STDERR, "Usage: maguari-server issue-setup-token --base-url=https://maguari.example.com\n");
+
+        return 1;
+    }
+
+    $database = Database::fromEnvironment();
+    migrateDatabase($database);
+    $accessApi = new AccessApi($database, new SystemClock());
+
+    try {
+        $issued = $accessApi->issueSetupToken();
+    } catch (SetupNotAllowed $exception) {
+        fwrite(STDERR, $exception->getMessage() . " No setup token was issued.\n");
+
+        return 1;
+    }
+
+    echo "Open this URL to create the administrator. It works once, until "
+        . gmdate('Y-m-d H:i', $issued->expiresAt) . " UTC. Any earlier setup link no longer works.\n\n";
+    echo $baseUrl . '/auth/setup?token=' . $issued->token . "\n";
+
+    return 0;
 }
 
 /**
@@ -38,7 +149,7 @@ function checkSeedConfigCommand(array $args): int
         }
     }
 
-    $accessApi = new AccessApi(new SeedConfigReader($path));
+    $accessApi = new AccessApi(Database::fromEnvironment(), new SystemClock(), new SeedConfigReader($path));
 
     try {
         $seedConfig = $accessApi->readSeedConfig();
@@ -57,7 +168,7 @@ function checkSeedConfigCommand(array $args): int
     echo "Seed config file: {$path}\n";
     echo "Administrator: {$seedConfig->administratorName} <{$seedConfig->administratorEmail}>\n";
     echo "Allowlist: " . implode(', ', $seedConfig->allowlist) . "\n";
-    echo "Nothing applied yet: applying seeded values requires storage, which does not exist yet.\n";
+    echo "Nothing applied: applying seeded values is not implemented yet.\n";
 
     return 0;
 }

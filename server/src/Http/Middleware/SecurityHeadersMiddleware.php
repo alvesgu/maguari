@@ -20,6 +20,8 @@ final class SecurityHeadersMiddleware implements MiddlewareInterface
         return $handler->handle($request)
             ->withHeader('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
             ->withHeader('Strict-Transport-Security', 'max-age=31536000')
-            ->withHeader('X-Frame-Options', 'DENY');
+            ->withHeader('X-Frame-Options', 'DENY')
+            // Keeps the setup token (a query parameter) out of Referer headers.
+            ->withHeader('Referrer-Policy', 'no-referrer');
     }
 }
