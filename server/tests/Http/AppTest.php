@@ -7,15 +7,48 @@ namespace Maguari\Server\Tests\Http;
 use Maguari\Server\Http\App;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
+use RuntimeException;
+use Slim\App as SlimApp;
 use Slim\Psr7\Factory\ServerRequestFactory;
 
 final class AppTest extends TestCase
 {
-    private function request(string $method, string $path): ResponseInterface
+    private function request(string $method, string $path, ?SlimApp $app = null): ResponseInterface
     {
         $request = (new ServerRequestFactory())->createServerRequest($method, $path);
 
-        return App::create()->handle($request);
+        return ($app ?? App::create(logErrors: false))->handle($request);
+    }
+
+    /**
+     * Runs $callback with PHP's error log redirected to a temporary file and
+     * returns what was logged.
+     */
+    private function captureErrorLog(callable $callback): string
+    {
+        $logFile = tempnam(sys_get_temp_dir(), 'maguari-error-log-');
+        $previous = ini_set('error_log', $logFile);
+
+        try {
+            $callback();
+        } finally {
+            ini_set('error_log', $previous === false ? '' : $previous);
+        }
+
+        $logged = (string) file_get_contents($logFile);
+        unlink($logFile);
+
+        return $logged;
+    }
+
+    private function appWithFailingRoute(bool $logErrors): SlimApp
+    {
+        $app = App::create(logErrors: $logErrors);
+        $app->get('/test-failure', function (): never {
+            throw new RuntimeException('secret-detail');
+        });
+
+        return $app;
     }
 
     private function assertSecurityHeaders(ResponseInterface $response): void
@@ -57,5 +90,28 @@ final class AppTest extends TestCase
 
         $this->assertSame(404, $response->getStatusCode());
         $this->assertSecurityHeaders($response);
+    }
+
+    public function testErrorDetailsAreNotShown(): void
+    {
+        $response = $this->request('GET', '/test-failure', $this->appWithFailingRoute(false));
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertStringNotContainsString('secret-detail', (string) $response->getBody());
+        $this->assertSecurityHeaders($response);
+    }
+
+    public function testNotFoundIsNotLogged(): void
+    {
+        $logged = $this->captureErrorLog(fn () => $this->request('GET', '/nonexistent', App::create()));
+
+        $this->assertSame('', $logged);
+    }
+
+    public function testServerErrorIsLoggedWhenEnabled(): void
+    {
+        $logged = $this->captureErrorLog(fn () => $this->request('GET', '/test-failure', $this->appWithFailingRoute(true)));
+
+        $this->assertStringContainsString('secret-detail', $logged);
     }
 }

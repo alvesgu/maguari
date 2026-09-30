@@ -80,6 +80,6 @@ No changes to `server/bin/maguari-server`, `server/src/Access/`, or `docs/DESIGN
    ```
    Confirm the status codes and headers match step 2 above.
 
-## Open question for a future step
+## Open question for a future step (answered: new step 3, setup and local login)
 
 The MVP list (design section 15) has no explicit step for admin login (Google sign-in, sessions, CSRF), yet step 3 (now step 4) ("Add one GCP project") implies an authenticated admin UI to add it from. Worth deciding, before step 3 (now step 4) starts, whether login is folded into step 3 (now step 4) or needs its own step inserted first. Not blocking for step 2, since `/admin/*` stays fail-closed either way.

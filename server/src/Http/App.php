@@ -8,12 +8,17 @@ use Maguari\Server\Http\Middleware\FailClosedMiddleware;
 use Maguari\Server\Http\Middleware\SecurityHeadersMiddleware;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App as SlimApp;
+use Slim\Exception\HttpNotFoundException;
 use Slim\Factory\AppFactory;
+use Slim\Handlers\ErrorHandler;
 use Slim\Routing\RouteCollectorProxy;
 
 final class App
 {
-    public static function create(): SlimApp
+    /**
+     * @param bool $logErrors log uncaught errors to PHP's error log. Tests pass false.
+     */
+    public static function create(bool $logErrors = true): SlimApp
     {
         $app = AppFactory::create();
         $responseFactory = $app->getResponseFactory();
@@ -22,7 +27,15 @@ final class App
         // Slim runs middleware last-added first, so security headers wrap the
         // error handler and are also set on 404 and 500 responses.
         $app->addRoutingMiddleware();
-        $app->addErrorMiddleware(false, true, false);
+        // Error details are never shown in responses, in any environment. They
+        // go to the log only, so exception messages must never contain secrets.
+        $errorMiddleware = $app->addErrorMiddleware(false, $logErrors, $logErrors);
+        // A 404 is routine (scanners, typos), not an error worth logging.
+        $notFoundHandler = new ErrorHandler($app->getCallableResolver(), $responseFactory);
+        $errorMiddleware->setErrorHandler(
+            HttpNotFoundException::class,
+            fn ($request, \Throwable $exception): ResponseInterface => $notFoundHandler($request, $exception, false, false, false),
+        );
         $app->add(new SecurityHeadersMiddleware());
 
         $app->group('/admin', function (RouteCollectorProxy $group): void {
