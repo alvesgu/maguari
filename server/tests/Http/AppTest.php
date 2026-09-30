@@ -108,6 +108,18 @@ final class AppTest extends TestCase
         $this->assertSame('', $logged);
     }
 
+    public function testMethodNotAllowedIsNotLogged(): void
+    {
+        $response = null;
+        $logged = $this->captureErrorLog(function () use (&$response): void {
+            $response = $this->request('DELETE', '/auth/login', App::create());
+        });
+
+        $this->assertSame(405, $response->getStatusCode());
+        $this->assertSecurityHeaders($response);
+        $this->assertSame('', $logged);
+    }
+
     public function testServerErrorIsLoggedWhenEnabled(): void
     {
         $logged = $this->captureErrorLog(fn () => $this->request('GET', '/test-failure', $this->appWithFailingRoute(true)));

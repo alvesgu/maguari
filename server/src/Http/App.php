@@ -8,6 +8,7 @@ use Maguari\Server\Http\Middleware\FailClosedMiddleware;
 use Maguari\Server\Http\Middleware\SecurityHeadersMiddleware;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App as SlimApp;
+use Slim\Exception\HttpMethodNotAllowedException;
 use Slim\Exception\HttpNotFoundException;
 use Slim\Factory\AppFactory;
 use Slim\Handlers\ErrorHandler;
@@ -30,11 +31,11 @@ final class App
         // Error details are never shown in responses, in any environment. They
         // go to the log only, so exception messages must never contain secrets.
         $errorMiddleware = $app->addErrorMiddleware(false, $logErrors, $logErrors);
-        // A 404 is routine (scanners, typos), not an error worth logging.
-        $notFoundHandler = new ErrorHandler($app->getCallableResolver(), $responseFactory);
+        // 404 and 405 are routine (scanners, typos), not errors worth logging.
+        $routineHandler = new ErrorHandler($app->getCallableResolver(), $responseFactory);
         $errorMiddleware->setErrorHandler(
-            HttpNotFoundException::class,
-            fn ($request, \Throwable $exception): ResponseInterface => $notFoundHandler($request, $exception, false, false, false),
+            [HttpNotFoundException::class, HttpMethodNotAllowedException::class],
+            fn ($request, \Throwable $exception): ResponseInterface => $routineHandler($request, $exception, false, false, false),
         );
         $app->add(new SecurityHeadersMiddleware());
 
