@@ -157,7 +157,7 @@ server/src/Fleet/            Supporting context
 server/src/Clients/          Supporting context
 server/src/Notifications/    Generic context
 server/src/Access/           Generic context
-server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption)
+server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption, HTTP client)
 server/src/Http/             Slim wiring: routes, route groups, middleware, thin controllers
 server/templates/            Plain PHP templates for the web app (no template engine)
 server/public/               index.php only (web root)
@@ -358,6 +358,11 @@ Coherence rules (warning only):
 
 1. The server calls the **Compute Engine REST API** directly. The gcloud CLI is not used by the application.
 2. Authentication uses the server instance's attached service account, with access tokens from the metadata server. No key files.
+   - Token retrieval sits behind one interface in Fleet. Production always uses the metadata server, which is also the default.
+   - Development machines have no metadata server. There, `MAGUARI_GCP_CREDENTIALS=application-default` makes the server use the developer's Application Default Credentials, the file written by `gcloud auth application-default login` in `~/.config/gcloud/`. Only user credentials (`authorized_user`) and service account impersonation from user credentials (`impersonated_service_account`, from `--impersonate-service-account`) are accepted. Service account key files (`service_account`) are rejected, at the top level and as the source of an impersonation, and `GOOGLE_APPLICATION_CREDENTIALS` is not honored. Impersonating the real service account lets development see exactly the permissions production sees; it needs `roles/iam.serviceAccountTokenCreator` on that service account.
+   - Tests use a fake token source and a fake HTTP client, never the network.
+   - Tokens are never stored or logged. They live in memory for one request.
+   - API calls use PHP's built-in HTTPS stream wrapper (openssl only, no `php-curl`), with explicit timeouts and no redirects followed.
 3. The server instance must have an access scope that allows Compute Engine API calls (for example the `cloud-platform` scope). The default scopes on a new instance do not include Compute Engine write access.
 4. In each monitored project, the service account gets a **custom role** with exactly:
    - `compute.instances.list`
@@ -368,13 +373,16 @@ Coherence rules (warning only):
 ### 8.1 Administrator workflow
 
 1. **Add a project:** enter the project ID. The server verifies it can list instances there (this confirms the custom role is granted).
+   - Only standard project IDs are accepted: 6 to 30 characters, lowercase letters, digits and hyphens, starting with a letter and not ending with a hyphen. Legacy domain-scoped IDs are not supported.
+   - The check is `GET .../projects/{project}/aggregated/instances?maxResults=1&returnPartialSuccess=true`. The project is stored in `fleet_projects` only when it succeeds.
+   - Failures are shown as fixed sentences, never raw API messages: credentials unavailable (with a hint for the token source), project not found (`404`), Compute Engine API not enabled (`403` with `accessNotConfigured` or `SERVICE_DISABLED`), access scopes insufficient (`403` with `ACCESS_TOKEN_SCOPE_INSUFFICIENT` or `insufficientPermissions`) and unexpected response (anything else). Google answers other `403`s both for missing permission and for projects the caller cannot see, so those say "Project not found, or no permission to access it."
 2. **Pick instances:** choose from the list fetched from that project.
 3. **Enroll each instance:** follow the commands shown for that instance (section 5.6).
 4. **Configure checks and safeguards** per instance.
 
 ## 9. Storage
 
-SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, `/admin/*` and `/auth/*` return `503`.
+SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. `MAGUARI_GCP_CREDENTIALS` (section 8) is also for development only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, `/admin/*` and `/auth/*` return `503`.
 
 ### 9.1 Readings as runs
 

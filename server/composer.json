@@ -5,6 +5,8 @@
     "license": "MIT",
     "require": {
         "php": ">=8.1",
+        "ext-json": "*",
+        "ext-openssl": "*",
         "ext-pdo_sqlite": "*",
         "slim/csrf": "^1.5",
         "slim/psr7": "^1.8",

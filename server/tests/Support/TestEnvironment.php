@@ -7,13 +7,15 @@ namespace Maguari\Server\Tests\Support;
 use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Access\Administrator;
 use Maguari\Server\Access\SeedConfigReader;
+use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Http\App;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\Migrator;
 use Slim\App as SlimApp;
 
 /**
- * A migrated database in a temporary directory, with a fixed clock.
+ * A migrated database in a temporary directory, with a fixed clock and fake
+ * Google Cloud access (no network).
  */
 final class TestEnvironment
 {
@@ -24,6 +26,9 @@ final class TestEnvironment
     public readonly Database $database;
     public readonly FixedClock $clock;
     public readonly AccessApi $access;
+    public readonly FakeTokenSource $tokens;
+    public readonly FakeHttpClient $http;
+    public readonly FleetApi $fleet;
 
     public function __construct(bool $migrate = true)
     {
@@ -39,6 +44,9 @@ final class TestEnvironment
 
         // Never the real /etc/maguari/seed.ini of the machine running the tests.
         $this->access = new AccessApi($this->database, $this->clock, new SeedConfigReader($this->directory . '/seed.ini'));
+        $this->tokens = new FakeTokenSource();
+        $this->http = new FakeHttpClient();
+        $this->fleet = new FleetApi($this->database, $this->clock, $this->tokens, $this->http);
     }
 
     public function writeSeedConfig(string $contents): void
@@ -48,7 +56,7 @@ final class TestEnvironment
 
     public function app(): SlimApp
     {
-        return App::create($this->access, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
+        return App::create($this->access, $this->fleet, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
     }
 
     public function browser(string $ip = '192.0.2.10'): Browser

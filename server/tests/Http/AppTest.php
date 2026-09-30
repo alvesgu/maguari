@@ -38,7 +38,7 @@ final class AppTest extends TestCase
      */
     private function notReadyApp(bool $logErrors = false): SlimApp
     {
-        return App::create(null, MAGUARI_TEST_SESSION_PATH, logErrors: $logErrors);
+        return App::create(null, null, MAGUARI_TEST_SESSION_PATH, logErrors: $logErrors);
     }
 
     /**
@@ -108,6 +108,8 @@ final class AppTest extends TestCase
             'logout' => ['POST', '/admin/logout'],
             'setup' => ['GET', '/auth/setup?token=x'],
             'login' => ['POST', '/auth/login'],
+            'projects' => ['GET', '/admin/projects'],
+            'add project' => ['POST', '/admin/projects'],
         ];
     }
 

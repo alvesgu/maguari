@@ -54,9 +54,11 @@ This follows the existing pattern of `MAGUARI_DATABASE` ("for development and te
 - **Shelling out to `gcloud auth print-access-token` in development.** Simplest, but design section 8 item 1 says the application does not use the gcloud CLI, and it would put a shell call in the server. Not recommended.
 - **A static token in an environment variable** (`MAGUARI_GCP_ACCESS_TOKEN=$(gcloud auth print-access-token)`). Also simple, but tokens expire after an hour, so development breaks silently and has to be restarted. Not recommended, although it is the fallback if D3 is rejected and you want the smallest possible change.
 
-## Decisions (proposed, need confirmation)
+## Decisions (confirmed)
 
-**D1. HTTP client.** Calls go through a small `HttpClient` interface in `Kernel/HttpClient/`, implemented with PHP's built-in HTTPS stream wrapper (`fopen` with a stream context, headers read from `stream_get_meta_data()`, no redirects followed, 5 second connect and 15 second total timeout, TLS peer verification on). This needs only the `openssl` extension, which Ubuntu's PHP builds include. The alternative, `ext-curl`, is not installed by `php-cli` or `php-fpm` alone (it is missing from the Ubuntu 22.04 test image) and would add `php-curl` to the server's package dependencies. The fake used in tests implements the same interface.
+All recommendations below were confirmed, D3 included, with three notes: the stream context uses `ignore_errors` so error bodies are readable for D5, with explicit timeouts; the development token source accepts `impersonated_service_account` files while still rejecting `service_account`; and when Google's answer cannot tell a missing project from missing permission, the message is "Project not found, or no permission to access it."
+
+**D1. HTTP client.** Calls go through a small `HttpClient` interface in `Kernel/HttpClient/`, implemented with PHP's built-in HTTPS stream wrapper (`fopen` with a stream context, `ignore_errors` on so error bodies are returned, headers read from `stream_get_meta_data()`, no redirects followed, TLS peer verification on). Each request carries an explicit timeout, 10 seconds by default and 2 seconds for the metadata server, which bounds connecting, each read and the whole response. This needs only the `openssl` extension, which Ubuntu's PHP builds include. The alternative, `ext-curl`, is not installed by `php-cli` or `php-fpm` alone (it is missing from the Ubuntu 22.04 test image) and would add `php-curl` to the server's package dependencies. The fake used in tests implements the same interface.
 
 **D2. Token caching.** None in this step. Adding a project is one token request plus one Compute Engine call. The metadata server is local and caches tokens itself. Caching across requests would mean storing a secret (encrypted, design 9.3) for no real gain yet. Revisit when the scheduler calls the API every minute.
 
@@ -72,7 +74,7 @@ This follows the existing pattern of `MAGUARI_DATABASE` ("for development and te
 | `404` | Project not found. |
 | `403` with reason `accessNotConfigured` or `SERVICE_DISABLED` | The Compute Engine API is not enabled in this project. |
 | `403` with reason `ACCESS_TOKEN_SCOPE_INSUFFICIENT` or `insufficientPermissions` | The server instance's access scopes do not allow Compute Engine API calls (design section 8 item 3). |
-| Any other `403` | The service account cannot list instances in this project. Grant it the custom role. |
+| Any other `403` | Project not found, or no permission to access it. Plus a hint to check the ID and grant the custom role. |
 | `401`, `5xx`, timeout, invalid JSON | Google Cloud returned an unexpected response. Try again. |
 
 Google also answers `403` for projects that exist but that the caller cannot see, so "not found" versus "no permission" is best effort.
@@ -113,6 +115,7 @@ server/
       Project.php                            value object: id, gcpProjectId, createdAt
       ProjectRepository.php
       ProjectId.php                          validation and normalization (D6)
+      ProjectAccessProblem.php               enum of the D5 reasons and their sentences
       Exception/
         InvalidProjectId.php
         ProjectAlreadyAdded.php
@@ -124,7 +127,7 @@ server/
         MetadataServerTokenSource.php        production
         ApplicationDefaultCredentialsTokenSource.php   development only (and D3)
         AccessTokenSourceFactory.php         reads MAGUARI_GCP_CREDENTIALS
-        ComputeEngine.php                    the adapter: canListInstances(gcpProjectId), error mapping (D5)
+        ComputeEngine.php                    the adapter: verifyCanListInstances(gcpProjectId), error mapping (D5)
       Migrations/
         0001_fleet_projects.sql
     Http/
@@ -146,6 +149,7 @@ server/
     Fleet/Gcp/AccessTokenSourceFactoryTest.php
     Fleet/Gcp/ComputeEngineTest.php
     Http/ProjectsFlowTest.php
+    Kernel/Database/MigratorTest.php       expects the Fleet migration
 docs/DESIGN.md                               record the confirmed decisions (see below)
 ```
 
@@ -191,7 +195,7 @@ No test touches the network, except `StreamHttpClientTest`, which starts PHP's b
 
 ## Changes to `docs/DESIGN.md`
 
-In the implementation commit, once the decisions above are confirmed:
+In the implementation commit:
 
 1. Section 8 item 2: add that development may use the developer's Application Default Credentials (user or impersonated service account, never key files), selected with `MAGUARI_GCP_CREDENTIALS`, and that production always uses the metadata server.
 2. Section 8.1 item 1: add the verification call (D4) and the error reasons (D5).
