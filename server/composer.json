@@ -25,7 +25,9 @@
     "autoload-dev": {
         "psr-4": {
             "Maguari\\Server\\Tests\\": "tests/",
-            "Maguari\\Shared\\Tests\\": "../shared/tests/"
+            "Maguari\\Shared\\Tests\\": "../shared/tests/",
+            "Maguari\\Client\\": "../client/src/",
+            "Maguari\\Client\\Tests\\": "../client/tests/"
         }
     },
     "config": {

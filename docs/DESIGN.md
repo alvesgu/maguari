@@ -148,6 +148,9 @@ docs/               DESIGN.md and other documentation
 
 The client package contains only `client/` plus `shared/`. Instances never download server code.
 
+- The client has no Composer dependencies at runtime (`php-cli` only). Its own small autoloader (`client/src/autoload.php`) maps `Maguari\Client\` and `Maguari\Shared\`, following the repository layout; packaging will adjust the `shared/` path. The server loads `shared/` through Composer.
+- The tests of `shared/` and `client/` run from the server's PHPUnit (test suites `shared` and `client` in `server/phpunit.xml`), so one command runs everything. Only the tests use PHPUnit: a test runs `client/bin/maguari-client` from a copy of `client/` and `shared/` alone, to prove the client needs nothing from `server/`. Revisit separate setups when GitHub Actions takes over (section 12.4).
+
 ### 3.1 Inside `server/`
 
 ```
@@ -199,6 +202,8 @@ Unresponsiveness is detected by combining: missing heartbeats, server-side HTTP 
 
 Default interval: 60 seconds (limits in section 7.3).
 
+The client has three commands: `enroll` (section 5.6), `heartbeat` (sends one, for manual checks) and `run` (the loop the systemd service will run). `run` sends a heartbeat at fixed times, every interval after it started however long each heartbeat takes, so the schedule never drifts; slots that already passed are skipped instead of sent in a burst. Failures are logged as one line (the client words each server error code itself, for example how many seconds its clock is off for `clock_skew`) and the loop goes on. Every command failure is one line on stderr with exit code 1, never a stack trace.
+
 Request payload:
 
 - `protocol_version`, `client_version`, `client_id`
@@ -242,6 +247,8 @@ The client runs as an unprivileged system user (`maguari-client`). Only the acti
 | Restarting allowlisted services, rebooting the OS | Yes, through sudoers |
 | Updating the client | No (the updater runs separately as root; section 12.5) |
 
+The client refuses to run as root, for every command, so its credentials file is never owned by root. It runs as its own user: `sudo -u maguari-client maguari-client <command>`.
+
 The package generates the sudoers file (`/etc/sudoers.d/maguari-client`) from the client's allowlist and validates it before installing it. A command that is not in the allowlist can never appear in sudoers.
 
 ### 5.5 Client authentication (HMAC)
@@ -272,6 +279,8 @@ This is per-request signing, not a bearer token like JWT. An intercepted request
 3. On first contact, the client exchanges the token for its permanent HMAC secret. The token then becomes invalid.
    - `POST /api/client/enroll` with the JSON body `{"protocol_version": 1, "client_version": "0.1.0", "token": "<token>"}`. The token travels in the body, never in the URL, so it stays out of access logs. Unknown fields are ignored.
    - In one transaction, the server consumes the token, deletes the instance's previous client (re-enrollment) and creates the new one in `clients_clients`: a random `client_id` (32 lowercase hex characters, an identifier, not a secret) and a 32-byte HMAC secret, encrypted at rest (section 9.3).
+   - The client command is `maguari-client enroll --server=<url> --token=<token>`. `--server` follows the same rule as the server's `--base-url`, with the same code (`shared/src/ServerUrl.php`): `https://`, or `http://` only when the host is exactly `localhost`. Anything else is refused before the token is sent.
+   - The client keeps its credentials (server URL, `client_id` and secret) in `/var/lib/maguari-client/credentials.json`, **readable only by its own user**: mode 0600, in a directory with mode 0700 when the client creates it. It writes a temporary file under a `0077` umask, sets mode 0600 before writing the secret and renames it into place, so the secret is never readable by others, even briefly, and a failed enrollment leaves earlier credentials untouched. The client refuses to load a credentials file that group or others can access, and says how to fix the mode. `MAGUARI_CLIENT_DIR` overrides the directory for development and tests only.
    - The answer is `200` with `{"client_id": "...", "secret": "<base64url>"}` and `Cache-Control: no-store`. An unknown, used or expired token gives `invalid_token`, without saying which. A rejected request does not use up the token.
 4. Because tokens are bound to one instance, a client can never claim to be a different instance.
 

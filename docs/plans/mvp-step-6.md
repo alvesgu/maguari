@@ -292,6 +292,8 @@ Commands (`client/bin/maguari-client`):
 - Refuses to run as root (design 5.4: the client runs as an unprivileged user).
 - Readings, checks, command results, the certificate scanner, the allowlist and sudoers are all later steps. The heartbeat sends empty arrays.
 
+*Implementation notes (6.4):* the URL rule is `Maguari\Shared\ServerUrl` (D22), so the client has no `ServerUrl.php` of its own. A `Clock` interface (with `sleep()`) makes the fixed schedule testable. The client words each server error code as its own sentence (`ServerErrors`), and `clock_skew` says how many seconds the clock is off, from `server_time`. `scripts/dev-env.sh` gained `MAGUARI_CLIENT_DIR` (`client/var/`). Root refusal is tested in-process (the effective user ID is injected), because the tests run unprivileged.
+
 **D21. Tests for `shared/` and `client/` run from the server's PHPUnit.** `server/phpunit.xml` gains `shared` and `client` test suites (`../shared/tests`, `../client/tests`), and `autoload-dev` maps their test namespaces. That keeps "run `vendor/bin/phpunit` in `server/`" as the single command from CLAUDE.md. `scripts/test-ubuntu-22.04.sh` copies `shared/` and `client/` into the container next to `server/`. Only the client's tests use PHPUnit; the client itself never loads anything from `server/vendor/`, which a test checks by running `client/bin/maguari-client` in a separate process.
 
 *Alternative:* separate `composer.json` and PHPUnit setups in `client/` and `shared/`. Cleaner isolation, but three test commands to remember. Worth revisiting when GitHub Actions takes over (design 12.4).
@@ -424,7 +426,6 @@ client/
     autoload.php
     Cli.php                                 command dispatch, root refusal
     Credentials.php                         the credentials file (D20)
-    ServerUrl.php                           https, or http for localhost
     Transport.php                           interface
     StreamTransport.php                     stream wrapper, timeouts, no redirects
     Enroller.php
