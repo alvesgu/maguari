@@ -32,9 +32,10 @@ ENV COMPOSER_ALLOW_SUPERUSER=1
 EOF
 fi
 
-# The repository is mounted read-only and server/ is copied without vendor/, so
-# dependencies are installed from composer.lock inside the container and the
-# host's vendor/ is never touched. Composer runs as root, but PHPUnit runs as
+# The repository is mounted read-only. server/ (without vendor/ and var/) and
+# shared/ are copied next to each other, as in the repository, and dependencies
+# are installed from composer.lock inside the container, so the host's vendor/
+# is never touched. Composer runs as root, but PHPUnit runs as
 # nobody: the app never runs as root, and maguari-server refuses root for its
 # database commands, which the CLI tests exercise.
 podman run --rm \
@@ -43,10 +44,11 @@ podman run --rm \
     "$image" \
     bash -euo pipefail -c '
         php --version | head -n 1
-        mkdir /work
-        tar --create --directory /src/server --exclude=./vendor --exclude=./.phpunit.result.cache . \
-            | tar --extract --directory /work
-        cd /work
+        mkdir --parents /work/server /work/shared
+        tar --create --directory /src/server --exclude=./vendor --exclude=./.phpunit.result.cache --exclude=./var . \
+            | tar --extract --directory /work/server
+        tar --create --directory /src/shared . | tar --extract --directory /work/shared
+        cd /work/server
         composer install --no-interaction --no-progress --quiet
         chown -R nobody:nogroup /work
         setpriv --reuid=nobody --regid=nogroup --clear-groups vendor/bin/phpunit "$@"

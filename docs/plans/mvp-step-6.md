@@ -153,7 +153,7 @@ with `Content-Type: application/json` and `Cache-Control: no-store`. Codes are f
 
 **D8. Sodium encryption in Kernel.** `Kernel/Secrets/SecretBox` encrypts with `sodium_crypto_secretbox` (design 9.3). Stored form: 24-byte random nonce followed by the ciphertext, in a `BLOB` column. Design 3.1 already lists "secrets encryption" as a Kernel helper.
 
-**D9. Key file.** 32 raw bytes at `/etc/maguari/secret.key`, mode 0600, readable only by the app user. `MAGUARI_SECRET_KEY_FILE` overrides the path for development and tests only, like `MAGUARI_DATABASE`. A file that is not exactly 32 bytes is an error.
+**D9. Key file.** 32 raw bytes at `/etc/maguari/secret.key`, mode 0600, readable only by the app user. `MAGUARI_SECRET_KEY_FILE` overrides the path for development and tests only, like `MAGUARI_DATABASE`. A file that is not exactly 32 bytes is an error, and so is one that group or others can access (added during 6.2, matching the client's rule for its credentials file in D20).
 
 **D10. Who creates the key.** A new subcommand, `maguari-server create-secret-key`, creates the file with mode 0600 if it does not exist and **refuses to overwrite** an existing one, because a new key makes every stored client secret unreadable (every instance would have to enroll again). **It refuses to run as root, like `migrate`**, so the key file is never owned by root and the app user can read it. The file is **created with mode 0600** (under a `0077` umask, so it is never readable by others even for a moment) and its directory with mode 0700 if missing. Packaging will later create the file in its post-install step (design 12.2 item 1) and may revisit how.
 

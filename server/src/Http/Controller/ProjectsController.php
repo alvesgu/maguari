@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Http\Controller;
 
+use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Clients\EnrollmentState;
 use Maguari\Server\Fleet\Exception\InstanceNotFound;
@@ -28,6 +29,7 @@ final class ProjectsController
     public function __construct(
         private readonly FleetApi $fleet,
         private readonly ClientsApi $clients,
+        private readonly AccessApi $access,
         private readonly View $view,
     ) {
     }
@@ -88,6 +90,17 @@ final class ProjectsController
         $project = $this->project($request, $args);
         $form = (array) $request->getParsedBody();
         $data = ['title' => 'Enroll an instance', 'project' => $project, 'instance' => null, 'command' => null, 'expiresAt' => null];
+        // From configuration, never from the request: the Host header is
+        // chosen by whoever sends the request.
+        $baseUrl = $this->access->baseUrl();
+
+        if ($baseUrl === null) {
+            return $this->view->render($request, $response, 'enroll', $data + [
+                'error' => 'Maguari does not know its own address yet, so it cannot show the enroll command. On the server, run: '
+                    . 'sudo -u maguari-server maguari-server set-base-url --base-url=https://maguari.example.com '
+                    . '(with your server\'s domain).',
+            ], 409);
+        }
 
         try {
             $instance = $this->fleet->pickInstance($project->id, FormInput::string($form, 'zone'), FormInput::string($form, 'name'));
@@ -100,7 +113,7 @@ final class ProjectsController
         return $this->view->render($request, $response, 'enroll', [
             'title' => 'Enroll ' . $instance->name,
             'instance' => $instance,
-            'command' => sprintf('maguari-client enroll --server=%s --token=%s', self::serverUrl($request), $issued->token),
+            'command' => sprintf('maguari-client enroll --server=%s --token=%s', $baseUrl, $issued->token),
             'expiresAt' => $issued->expiresAt,
             'error' => null,
         ] + $data);
@@ -132,18 +145,6 @@ final class ProjectsController
         }
 
         return $byName;
-    }
-
-    /**
-     * The server's own URL, as the administrator reached it, for the enroll
-     * command.
-     */
-    private static function serverUrl(ServerRequestInterface $request): string
-    {
-        $uri = $request->getUri();
-        $port = $uri->getPort();
-
-        return $uri->getScheme() . '://' . $uri->getHost() . ($port === null ? '' : ':' . $port);
     }
 
     private function page(

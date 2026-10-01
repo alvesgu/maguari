@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Access;
 
+use Maguari\Server\Access\Exception\InvalidBaseUrl;
 use Maguari\Server\Access\Exception\InvalidSetupInput;
 use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Shared\ServerUrl;
 
 final class AccessApi
 {
@@ -19,6 +21,7 @@ final class AccessApi
     private readonly SetupTokens $setupTokens;
     private readonly LoginThrottle $loginThrottle;
     private readonly PasswordHasher $passwordHasher;
+    private readonly Settings $settings;
 
     public function __construct(
         private readonly Database $database,
@@ -29,6 +32,31 @@ final class AccessApi
         $this->setupTokens = new SetupTokens($database, $clock);
         $this->loginThrottle = new LoginThrottle($database, $clock);
         $this->passwordHasher = new PasswordHasher();
+        $this->settings = new Settings($database, $clock);
+    }
+
+    /**
+     * The server's own address, for example https://maguari.example.com, as set
+     * at setup or with set-base-url. Null until one is set.
+     */
+    public function baseUrl(): ?string
+    {
+        return $this->settings->get('base_url');
+    }
+
+    /**
+     * @return string the normalized URL that was stored
+     * @throws InvalidBaseUrl
+     */
+    public function setBaseUrl(string $url): string
+    {
+        $normalized = ServerUrl::normalize($url) ?? throw new InvalidBaseUrl(
+            'The server address must be an https:// URL with no path, for example https://maguari.example.com. '
+                . 'http:// is accepted only for localhost.',
+        );
+        $this->settings->set('base_url', $normalized);
+
+        return $normalized;
     }
 
     public function readSeedConfig(): ?SeedConfig

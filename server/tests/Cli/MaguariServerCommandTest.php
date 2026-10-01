@@ -43,6 +43,7 @@ final class MaguariServerCommandTest extends TestCase
         $command = array_merge([PHP_BINARY, dirname(__DIR__, 2) . '/bin/maguari-server'], $args);
         $environment = getenv() + [];
         $environment['MAGUARI_DATABASE'] = $database;
+        $environment['MAGUARI_SECRET_KEY_FILE'] = $this->directory . '/secret.key';
         $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
         $this->assertIsResource($process);
         $stdout = (string) stream_get_contents($pipes[1]);
@@ -136,5 +137,98 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertStringContainsString("Database {$path} is up to date.", $stdout);
         $this->assertSame('', $stderr);
         $this->assertSame(0600, fileperms($path) & 0777);
+    }
+
+    private function storedBaseUrl(string $path): string|false
+    {
+        $pdo = new \PDO('sqlite:' . $path);
+
+        return $pdo->query("SELECT value FROM access_settings WHERE name = 'base_url'")->fetchColumn();
+    }
+
+    public function testCreateSecretKey(): void
+    {
+        $key = $this->directory . '/secret.key';
+
+        [$status, $stdout, $stderr] = $this->runCommand($this->directory . '/maguari.sqlite', ['create-secret-key']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertStringContainsString("Created the secret key file {$key} (mode 0600).", $stdout);
+        $this->assertSame(0600, fileperms($key) & 0777);
+        $this->assertSame(32, filesize($key));
+        $contents = file_get_contents($key);
+
+        [$status, $stdout] = $this->runCommand($this->directory . '/maguari.sqlite', ['create-secret-key']);
+
+        $this->assertSame(0, $status);
+        $this->assertStringContainsString('already exists. It was not changed', $stdout);
+        $this->assertSame($contents, file_get_contents($key));
+    }
+
+    public function testCreateSecretKeyInADirectoryThatCannotBeCreated(): void
+    {
+        file_put_contents($this->directory . '/not-a-directory', '');
+        $command = array_merge([PHP_BINARY, dirname(__DIR__, 2) . '/bin/maguari-server'], ['create-secret-key']);
+        $environment = getenv() + [];
+        $environment['MAGUARI_SECRET_KEY_FILE'] = $this->directory . '/not-a-directory/secret.key';
+        $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
+        stream_get_contents($pipes[1]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+
+        $this->assertSame(1, proc_close($process));
+        $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
+        $this->assertStringContainsString('not-a-directory/secret.key', $stderr);
+        $this->assertStringNotContainsString('Stack trace', $stderr);
+    }
+
+    public function testIssueSetupTokenRecordsTheBaseUrl(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['issue-setup-token', '--base-url=https://Maguari.Example.com/']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertStringContainsString('https://maguari.example.com/auth/setup?token=', $stdout);
+        $this->assertSame('https://maguari.example.com', $this->storedBaseUrl($path));
+    }
+
+    public function testSetBaseUrl(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['set-base-url', '--base-url=http://localhost:8080']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertStringContainsString("The server's address is now http://localhost:8080.", $stdout);
+        $this->assertSame('http://localhost:8080', $this->storedBaseUrl($path));
+    }
+
+    /**
+     * @return array<string, array{string[]}>
+     */
+    public static function invalidBaseUrls(): array
+    {
+        return [
+            'plain http elsewhere' => [['set-base-url', '--base-url=http://maguari.example.com']],
+            'a path' => [['set-base-url', '--base-url=https://maguari.example.com/maguari']],
+            'missing' => [['set-base-url']],
+            'issue-setup-token with plain http' => [['issue-setup-token', '--base-url=http://127.0.0.1']],
+        ];
+    }
+
+    /**
+     * @dataProvider invalidBaseUrls
+     * @param string[] $args
+     */
+    public function testRejectsInvalidBaseUrls(array $args): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, $args);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
+        $this->assertFileDoesNotExist($path);
     }
 }

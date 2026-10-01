@@ -12,11 +12,13 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Http\App;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\Migrator;
+use Maguari\Server\Kernel\Secrets\SecretBox;
+use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Slim\App as SlimApp;
 
 /**
- * A migrated database in a temporary directory, with a fixed clock and fake
- * Google Cloud access (no network).
+ * A migrated database and a secret key file in a temporary directory, with a
+ * fixed clock and fake Google Cloud access (no network).
  */
 final class TestEnvironment
 {
@@ -26,6 +28,8 @@ final class TestEnvironment
     public readonly string $directory;
     public readonly Database $database;
     public readonly FixedClock $clock;
+    public readonly SecretKeyFile $secretKeyFile;
+    public readonly SecretBox $secretBox;
     public readonly AccessApi $access;
     public readonly FakeTokenSource $tokens;
     public readonly FakeHttpClient $http;
@@ -38,6 +42,9 @@ final class TestEnvironment
         mkdir($this->directory, 0700);
         $this->database = new Database($this->directory . '/maguari.sqlite');
         $this->clock = new FixedClock();
+        $this->secretKeyFile = new SecretKeyFile($this->directory . '/secret.key');
+        $this->secretKeyFile->create();
+        $this->secretBox = new SecretBox($this->secretKeyFile->read());
 
         if ($migrate) {
             $this->database->create();
@@ -49,7 +56,7 @@ final class TestEnvironment
         $this->tokens = new FakeTokenSource();
         $this->http = new FakeHttpClient();
         $this->fleet = new FleetApi($this->database, $this->clock, $this->tokens, $this->http);
-        $this->clients = new ClientsApi($this->database, $this->clock);
+        $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox);
     }
 
     public function writeSeedConfig(string $contents): void

@@ -8,6 +8,7 @@
         "ext-json": "*",
         "ext-openssl": "*",
         "ext-pdo_sqlite": "*",
+        "ext-sodium": "*",
         "slim/csrf": "^1.5",
         "slim/psr7": "^1.8",
         "slim/slim": "^4.12"
@@ -17,12 +18,14 @@
     },
     "autoload": {
         "psr-4": {
-            "Maguari\\Server\\": "src/"
+            "Maguari\\Server\\": "src/",
+            "Maguari\\Shared\\": "../shared/src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Maguari\\Server\\Tests\\": "tests/"
+            "Maguari\\Server\\Tests\\": "tests/",
+            "Maguari\\Shared\\Tests\\": "../shared/tests/"
         }
     },
     "config": {

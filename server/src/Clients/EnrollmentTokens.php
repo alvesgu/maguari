@@ -41,6 +41,27 @@ final class EnrollmentTokens
     }
 
     /**
+     * Deletes the token and returns its instance's ID, or returns null when the
+     * token is unknown or expired. Call inside a transaction, so a token can be
+     * used only once even under concurrent requests.
+     */
+    public function consume(#[\SensitiveParameter] string $token): ?int
+    {
+        $pdo = $this->database->pdo();
+        $statement = $pdo->prepare('SELECT instance_id FROM clients_enrollment_tokens WHERE token_hash = ? AND expires_at > ?');
+        $statement->execute([self::hash($token), $this->clock->now()]);
+        $instanceId = $statement->fetchColumn();
+
+        if ($instanceId === false) {
+            return null;
+        }
+
+        $pdo->prepare('DELETE FROM clients_enrollment_tokens WHERE token_hash = ?')->execute([self::hash($token)]);
+
+        return (int) $instanceId;
+    }
+
+    /**
      * @param int[] $instanceIds
      * @return int[] those of $instanceIds that have an unexpired token
      */

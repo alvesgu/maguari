@@ -256,8 +256,12 @@ This is per-request signing, not a bearer token like JWT. An intercepted request
    - Each instance has at most one token. Issuing a new one replaces the previous one, and expired tokens are deleted whenever a token is issued.
    - A token may be issued for an instance that is already enrolled (for example after rebuilding it). The existing client keeps working until the new token is used.
    - The page with the token is the response to the form submission itself (no redirect), sent with `Cache-Control: no-store`, because the plain token is never stored.
-   - Until packaging exists, the page shows only the enroll command (`maguari-client enroll --server=<url> --token=<token>`, with the server URL the administrator used) and says the client runs from a source checkout. The keyring and install commands are added with packaging.
+   - Until packaging exists, the page shows only the enroll command (`maguari-client enroll --server=<url> --token=<token>`) and says the client runs from a source checkout. The keyring and install commands are added with packaging.
+   - The command's server URL is the server's **configured** address, never the request's `Host` header, which the requester controls. `issue-setup-token --base-url` records it at setup, and `set-base-url` changes it (section 12.2.1). It is stored in `access_settings`. While it is not set, pressing "Enroll" issues no token and makes no API call; the page names the `set-base-url` command (status `409`).
 3. On first contact, the client exchanges the token for its permanent HMAC secret. The token then becomes invalid.
+   - `POST /api/client/enroll` with the JSON body `{"protocol_version": 1, "client_version": "0.1.0", "token": "<token>"}`. The token travels in the body, never in the URL, so it stays out of access logs. Unknown fields are ignored.
+   - In one transaction, the server consumes the token, deletes the instance's previous client (re-enrollment) and creates the new one in `clients_clients`: a random `client_id` (32 lowercase hex characters, an identifier, not a secret) and a 32-byte HMAC secret, encrypted at rest (section 9.3).
+   - The answer is `200` with `{"client_id": "...", "secret": "<base64url>"}` and `Cache-Control: no-store`. An unknown, used or expired token gives `invalid_token`, without saying which. A rejected request does not use up the token.
 4. Because tokens are bound to one instance, a client can never claim to be a different instance.
 
 ## 6. Checks
@@ -394,7 +398,7 @@ Coherence rules (warning only):
 
 ## 9. Storage
 
-SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. `MAGUARI_GCP_CREDENTIALS` (section 8) is also for development only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, `/admin/*` and `/auth/*` return `503`.
+SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. `MAGUARI_GCP_CREDENTIALS` (section 8) is also for development only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, or the secret key file (section 9.3) is missing or unusable, `/admin/*` and `/auth/*` return `503` with a message naming the command to run, and `/api/client/*` returns `503` with `{"error": "unavailable"}`.
 
 ### 9.1 Readings as runs
 
@@ -427,7 +431,11 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 
 Secrets that the server must use in their original form cannot be hashed: the SMTP password, the OAuth client secret and every client's HMAC secret. These columns are **encrypted** with PHP's built-in sodium extension (`sodium_crypto_secretbox`), using a key stored in a separate file readable only by the app user (for example `/etc/maguari/secret.key`, mode 0600).
 
-This protects against leaks of the database file alone (a stray backup, a shared disk snapshot, a copied file). It does not protect against a full server compromise, where both files can be read.
+This protects against leaks of the database file alone (a stray backup, a shared disk snapshot, a copied file). It does not protect against a full server compromise, where both files can be read. For the same reason, the key is backed up separately from the database, never in the same backup.
+
+1. **Key file:** 32 raw bytes at `/etc/maguari/secret.key`. `MAGUARI_SECRET_KEY_FILE` overrides the path for development and tests only. The app refuses a key file that is not exactly 32 bytes or that group or others can access, and then treats itself as not set up (section 9).
+2. **Creation:** `maguari-server create-secret-key` (section 12.2.1) creates the file with mode 0600, under a `0077` umask so it is never readable by others even briefly, and its directory with mode 0700 if missing. It never overwrites an existing key, because a new key makes every stored secret unreadable and every instance would have to enroll again. Packaging will run it during installation.
+3. **Stored form:** the 24-byte random nonce followed by the ciphertext, in a `BLOB` column (for example `clients_clients.secret_ciphertext`). Each encryption uses a new nonce.
 
 Password hashes (local login during setup) use Argon2id.
 
@@ -454,6 +462,27 @@ Routes are grouped by surface. Each group has its own middleware chain, so new r
 Security headers are set on every response, whatever the group. CSRF applies to the forms under `/auth/*` only: the future OAuth callback is protected by the OAuth `state` parameter instead.
 
 A stolen client secret cannot open the admin UI, and an admin session cannot impersonate a client.
+
+`POST /api/client/enroll` is the one route under `/api/client/` outside the HMAC middleware: the client has no secret yet, and the one-time token is its credential. Every other client route sits in an inner group with the HMAC middleware, so new routes inherit it.
+
+Every response under `/api/client/` is JSON, whatever the `Accept` header says, including unknown routes, wrong methods and uncaught exceptions. Errors are `{"error": "<code>"}` with `Cache-Control: no-store` and no human-readable message; the client logs its own sentence per code, and error details never leave the server. The codes are defined once, in `shared/src/ErrorCode.php`:
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `bad_request` | Malformed JSON, missing or wrongly typed fields |
+| 400 | `unsupported_protocol` | `protocol_version` not supported (section 4 item 5) |
+| 401 | `unauthorized` | Missing or wrong signature, unknown client |
+| 401 | `clock_skew` | Timestamp too far from the server clock |
+| 401 | `replayed_request` | Nonce already seen |
+| 401 | `invalid_token` | Enrollment token unknown, used or expired |
+| 404 | `not_found` | Unknown route |
+| 405 | `method_not_allowed` | Wrong method, with `Allow` |
+| 413 | `payload_too_large` | Body over 64 KiB |
+| 429 | `rate_limited` | Per-client limit reached |
+| 500 | `server_error` | Anything uncaught (logged, details never sent) |
+| 503 | `unavailable` | Database or secret key not ready |
+
+Outside `/api/client/`, errors keep the HTML pages (negotiated by `Accept` as before).
 
 ### 10.3 UI requirements
 
@@ -582,11 +611,15 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | `setup --domain <domain> --email <email>` | Runs certbot, verifies HTTPS, prints the one-time setup URL (above) |
 | `check-seed-config [--path=/etc/maguari/seed.ini]` | Reads and validates the seed config file (section 11.5.1) and prints what would be seeded, without applying anything. `--path` is a testing convenience, not a production option. |
 | `migrate` | Creates the database if needed and applies pending migrations (section 3.1) |
-| `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Refuses once an administrator exists. |
+| `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Records `<url>` as the server's address (section 5.6). Refuses once an administrator exists. |
+| `set-base-url --base-url=<url>` | Sets or changes the server's address used in enroll commands (section 5.6): for installs set up before it was recorded, after a domain change and in development |
+| `create-secret-key` | Creates the secret key file if it does not exist, and never overwrites it (section 9.3) |
+
+`--base-url` follows one rule everywhere, shared with the client's `--server` (`shared/src/ServerUrl.php`): `https://`, or `http://` only when the host is exactly `localhost` (case-insensitive); no user, password, path, query or fragment.
 
 No command ends with a PHP stack trace. Any error is printed as one line on stderr with exit code 1. When the database cannot be created or opened, the line names its path and mentions `MAGUARI_DATABASE`.
 
-`migrate` and `issue-setup-token` refuse to run as root, so the database is never owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
+`migrate`, `issue-setup-token`, `set-base-url` and `create-secret-key` refuse to run as root, so neither the database nor the key file is ever owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
 
 ### 12.3 APT repository
 

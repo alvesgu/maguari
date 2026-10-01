@@ -12,7 +12,9 @@ use Maguari\Server\Access\SeedConfigReader;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\DatabaseUnavailable;
 use Maguari\Server\Kernel\Database\Migrator;
+use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\SystemClock;
+use Maguari\Shared\ServerUrl;
 
 /**
  * @param string[] $args
@@ -33,29 +35,40 @@ function maguariServerMain(array $args): int
         return refuseRoot(array_slice($args, 1)) ?? issueSetupTokenCommand(array_slice($args, 2));
     }
 
+    if ($command === 'set-base-url') {
+        return refuseRoot(array_slice($args, 1)) ?? setBaseUrlCommand(array_slice($args, 2));
+    }
+
+    if ($command === 'create-secret-key') {
+        return refuseRoot(array_slice($args, 1), 'the key file would end up owned by root') ?? createSecretKeyCommand();
+    }
+
     fwrite(STDERR, "Usage:\n"
         . "  maguari-server check-seed-config [--path=/etc/maguari/seed.ini]\n"
         . "  maguari-server migrate\n"
-        . "  maguari-server issue-setup-token --base-url=https://maguari.example.com\n");
+        . "  maguari-server issue-setup-token --base-url=https://maguari.example.com\n"
+        . "  maguari-server set-base-url --base-url=https://maguari.example.com\n"
+        . "  maguari-server create-secret-key\n");
 
     return 1;
 }
 
 /**
- * Commands that create or write the database must not run as root, or the
- * database ends up owned by root and the web app (running as maguari-server)
- * cannot write to it. Returns the exit code when refusing, null otherwise.
+ * Commands that create or write the database or the secret key file must not
+ * run as root, or the file ends up owned by root and the web app (running as
+ * maguari-server) cannot use it. Returns the exit code when refusing, null
+ * otherwise.
  *
  * @param string[] $commandArgs the subcommand and its arguments
  */
-function refuseRoot(array $commandArgs): ?int
+function refuseRoot(array $commandArgs, string $consequence = 'the database would end up owned by root'): ?int
 {
     if (posix_geteuid() !== 0) {
         return null;
     }
 
     $command = implode(' ', array_map('escapeshellarg', $commandArgs));
-    fwrite(STDERR, "Do not run maguari-server {$commandArgs[0]} as root: the database would end up owned by root.\n"
+    fwrite(STDERR, "Do not run maguari-server {$commandArgs[0]} as root: {$consequence}.\n"
         . "Run it as the app's user instead:\n"
         . "  sudo -u maguari-server maguari-server {$command}\n");
 
@@ -84,45 +97,18 @@ function migrateCommand(): int
 }
 
 /**
- * The setup URL carries the one-time token, so it must use HTTPS. Plain HTTP is
- * accepted only for localhost, for local development.
- */
-function validateBaseUrl(string $baseUrl): ?string
-{
-    $parts = parse_url($baseUrl);
-
-    if (
-        $parts === false
-        || !isset($parts['scheme'], $parts['host'])
-        || isset($parts['user'])
-        || isset($parts['pass'])
-        || isset($parts['query'])
-        || isset($parts['fragment'])
-        || !in_array($parts['path'] ?? '', ['', '/'], true)
-    ) {
-        return null;
-    }
-
-    $scheme = strtolower($parts['scheme']);
-    $host = strtolower($parts['host']);
-
-    if ($scheme !== 'https' && !($scheme === 'http' && $host === 'localhost')) {
-        return null;
-    }
-
-    return $scheme . '://' . $host . (isset($parts['port']) ? ':' . $parts['port'] : '');
-}
-
-/**
+ * Reads --base-url=<url>. The setup URL carries the one-time token and enroll
+ * commands send secrets to this address, so it must use HTTPS. Plain HTTP is
+ * accepted only for localhost, for local development (ServerUrl).
+ *
  * @param string[] $args
+ * @return string|int the normalized URL, or the exit code after printing why not
  */
-function issueSetupTokenCommand(array $args): int
+function baseUrlArgument(array $args, string $command): string|int
 {
-    $baseUrl = null;
-
     foreach ($args as $arg) {
         if (str_starts_with($arg, '--base-url=')) {
-            $baseUrl = validateBaseUrl(substr($arg, strlen('--base-url=')));
+            $baseUrl = ServerUrl::normalize(substr($arg, strlen('--base-url=')));
 
             if ($baseUrl === null) {
                 fwrite(STDERR, "--base-url must be an https:// URL with no path, for example https://maguari.example.com. "
@@ -130,13 +116,25 @@ function issueSetupTokenCommand(array $args): int
 
                 return 1;
             }
+
+            return $baseUrl;
         }
     }
 
-    if ($baseUrl === null) {
-        fwrite(STDERR, "Usage: maguari-server issue-setup-token --base-url=https://maguari.example.com\n");
+    fwrite(STDERR, "Usage: maguari-server {$command} --base-url=https://maguari.example.com\n");
 
-        return 1;
+    return 1;
+}
+
+/**
+ * @param string[] $args
+ */
+function issueSetupTokenCommand(array $args): int
+{
+    $baseUrl = baseUrlArgument($args, 'issue-setup-token');
+
+    if (is_int($baseUrl)) {
+        return $baseUrl;
     }
 
     $database = Database::fromEnvironment();
@@ -151,9 +149,56 @@ function issueSetupTokenCommand(array $args): int
         return 1;
     }
 
+    // The domain given at setup is the server's configured address, used in
+    // enroll commands (never the request's Host header).
+    $accessApi->setBaseUrl($baseUrl);
+
     echo "Open this URL to create the administrator. It works once, until "
         . gmdate('Y-m-d H:i', $issued->expiresAt) . " UTC. Any earlier setup link no longer works.\n\n";
     echo $baseUrl . '/auth/setup?token=' . $issued->token . "\n";
+
+    return 0;
+}
+
+/**
+ * Sets the server's address after setup: on installs set up before it was
+ * recorded, when the domain changes, and in development.
+ *
+ * @param string[] $args
+ */
+function setBaseUrlCommand(array $args): int
+{
+    $baseUrl = baseUrlArgument($args, 'set-base-url');
+
+    if (is_int($baseUrl)) {
+        return $baseUrl;
+    }
+
+    $database = Database::fromEnvironment();
+    migrateDatabase($database);
+    (new AccessApi($database, new SystemClock()))->setBaseUrl($baseUrl);
+    echo "The server's address is now {$baseUrl}. Enroll commands use it.\n";
+
+    return 0;
+}
+
+/**
+ * Creates the key that encrypts secrets at rest (design section 9.3). Never
+ * overwrites an existing key: every stored client secret depends on it.
+ */
+function createSecretKeyCommand(): int
+{
+    $keyFile = SecretKeyFile::fromEnvironment();
+
+    if (!$keyFile->create()) {
+        echo "The secret key file {$keyFile->path()} already exists. It was not changed: "
+            . "a new key would make every stored client secret unreadable.\n";
+
+        return 0;
+    }
+
+    echo "Created the secret key file {$keyFile->path()} (mode 0600). Back it up, but not together with the database: "
+        . "a backup holding both would expose the secrets the key protects. Without the key, every instance must enroll again.\n";
 
     return 0;
 }

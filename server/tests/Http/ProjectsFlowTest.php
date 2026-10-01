@@ -18,6 +18,7 @@ final class ProjectsFlowTest extends TestCase
     {
         $this->environment = new TestEnvironment();
         $this->environment->createAdministrator();
+        $this->environment->access->setBaseUrl('https://maguari.example.com');
     }
 
     protected function tearDown(): void
@@ -249,7 +250,7 @@ final class ProjectsFlowTest extends TestCase
             $this->environment->http->queueJson($status, $answer);
         }
 
-        return $browser->post('https://maguari.example.com' . $path . '/instances', $fields + Browser::csrfFields($page) + [
+        return $browser->post($path . '/instances', $fields + Browser::csrfFields($page) + [
             'zone' => 'us-east1-b',
             'name' => 'web-1',
         ]);
@@ -358,5 +359,52 @@ final class ProjectsFlowTest extends TestCase
 
         $this->assertSame(404, $response->getStatusCode());
         $this->assertSame([], $this->environment->http->requests);
+    }
+
+    public function testEnrollCommandIgnoresTheRequestsHost(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $this->queueListing('web-1');
+        $page = $browser->get($path);
+        $this->environment->http->queueJson(200, self::apiInstance('web-1'));
+
+        $response = $browser->post('https://attacker.example.net' . $path . '/instances', Browser::csrfFields($page) + [
+            'zone' => 'us-east1-b',
+            'name' => 'web-1',
+        ]);
+
+        $body = (string) $response->getBody();
+        $this->assertStringContainsString('--server=https://maguari.example.com --token=', $body);
+        $this->assertStringNotContainsString('attacker', $body);
+    }
+
+    public function testEnrollWithoutAConfiguredAddressIssuesNoToken(): void
+    {
+        $this->environment->database->pdo()->exec("DELETE FROM access_settings WHERE name = 'base_url'");
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+
+        $response = $this->pressEnroll($browser, $path, null);
+
+        $this->assertSame(409, $response->getStatusCode());
+        $body = (string) $response->getBody();
+        $this->assertStringContainsString('maguari-server set-base-url --base-url=', $body);
+        $this->assertStringNotContainsString('--token=', $body);
+        $this->assertStringContainsString('/aggregated/instances', $this->environment->http->lastRequest()->url);
+        $this->assertSame([], $this->environment->fleet->pickedInstances(1));
+        $this->assertSame(0, (int) $this->environment->database->pdo()->query('SELECT COUNT(*) FROM clients_enrollment_tokens')->fetchColumn());
+    }
+
+    public function testEnrolledInstanceShowsAsEnrolled(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $enrollPage = (string) $this->pressEnroll($browser, $path, self::apiInstance('web-1'))->getBody();
+        preg_match('#--token=([A-Za-z0-9_-]{43})#', $enrollPage, $match);
+        $this->environment->clients->enroll(json_encode(['protocol_version' => 1, 'client_version' => '0.1.0', 'token' => $match[1]]));
+        $this->queueListing('web-1');
+
+        $this->assertStringContainsString('<td>Enrolled</td>', (string) $browser->get($path)->getBody());
     }
 }

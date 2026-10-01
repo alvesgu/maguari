@@ -64,8 +64,12 @@ final class AppTest extends TestCase
 
     private function appWithFailingRoute(bool $logErrors): SlimApp
     {
-        $app = $this->notReadyApp($logErrors);
+        $environment = $this->environment;
+        $app = App::create($environment->access, $environment->fleet, $environment->clients, MAGUARI_TEST_SESSION_PATH, $environment->clock, $logErrors);
         $app->get('/test-failure', function (): never {
+            throw new RuntimeException('secret-detail');
+        });
+        $app->post('/api/client/test-failure', function (): never {
             throw new RuntimeException('secret-detail');
         });
 
@@ -140,13 +144,56 @@ final class AppTest extends TestCase
         $this->assertFileDoesNotExist($this->environment->directory . '/missing/maguari.sqlite');
     }
 
-    public function testClientHeartbeatIsFailClosed(): void
+    public function testFromEnvironmentIsNotReadyWithoutASecretKey(): void
     {
-        $response = $this->request('POST', '/api/client/heartbeat');
+        putenv('MAGUARI_DATABASE=' . $this->environment->database->path());
+        putenv('MAGUARI_SECRET_KEY_FILE=' . $this->environment->directory . '/missing.key');
+        $previousLog = ini_set('error_log', $this->environment->directory . '/error.log');
 
-        $this->assertSame(401, $response->getStatusCode());
-        $this->assertSame('Not available yet', (string) $response->getBody());
-        $this->assertSecurityHeaders($response);
+        try {
+            $app = App::fromEnvironment();
+            $admin = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/admin'));
+            $client = $app->handle((new ServerRequestFactory())->createServerRequest('POST', '/api/client/enroll'));
+        } finally {
+            putenv('MAGUARI_DATABASE');
+            putenv('MAGUARI_SECRET_KEY_FILE');
+            ini_set('error_log', $previousLog === false ? '' : $previousLog);
+        }
+
+        $this->assertSame(503, $admin->getStatusCode());
+        $this->assertStringContainsString('create-secret-key', (string) $admin->getBody());
+        $this->assertStringNotContainsString('missing.key', (string) $admin->getBody());
+        $this->assertSame(503, $client->getStatusCode());
+        $this->assertSame('{"error":"unavailable"}', (string) $client->getBody());
+        $this->assertStringContainsString('missing.key', (string) file_get_contents($this->environment->directory . '/error.log'));
+    }
+
+    public function testFromEnvironmentIsReadyWithDatabaseAndSecretKey(): void
+    {
+        putenv('MAGUARI_DATABASE=' . $this->environment->database->path());
+        putenv('MAGUARI_SECRET_KEY_FILE=' . $this->environment->secretKeyFile->path());
+
+        try {
+            $response = App::fromEnvironment()->handle((new ServerRequestFactory())->createServerRequest('POST', '/api/client/enroll'));
+        } finally {
+            putenv('MAGUARI_DATABASE');
+            putenv('MAGUARI_SECRET_KEY_FILE');
+        }
+
+        $this->assertSame(400, $response->getStatusCode());
+        $this->assertSame('{"error":"bad_request"}', (string) $response->getBody());
+    }
+
+    public function testClientApiIsUnavailableWhileTheDatabaseIsNotReady(): void
+    {
+        foreach (['/api/client/enroll', '/api/client/heartbeat', '/api/client/anything'] as $path) {
+            $response = $this->request('POST', $path, $this->notReadyApp());
+
+            $this->assertSame(503, $response->getStatusCode());
+            $this->assertSame('application/json', $response->getHeaderLine('Content-Type'));
+            $this->assertSame('{"error":"unavailable"}', (string) $response->getBody());
+            $this->assertSecurityHeaders($response);
+        }
     }
 
     public function testUnknownRouteIsNotFound(): void
@@ -173,7 +220,7 @@ final class AppTest extends TestCase
     {
         return [
             'not found' => ['GET', '/nonexistent', 404, '404 Not Found'],
-            'method not allowed' => ['DELETE', '/api/client/heartbeat', 405, '405 Method Not Allowed'],
+            'method not allowed' => ['DELETE', '/test-failure', 405, '405 Method Not Allowed'],
             'server error' => ['GET', '/test-failure', 500, '500 Internal Server Error'],
         ];
     }
@@ -222,7 +269,7 @@ final class AppTest extends TestCase
     {
         $response = null;
         $logged = $this->captureErrorLog(function () use (&$response): void {
-            $response = $this->request('DELETE', '/api/client/heartbeat', $this->notReadyApp(true));
+            $response = $this->request('DELETE', '/test-failure', $this->appWithFailingRoute(true));
         });
 
         $this->assertSame(405, $response->getStatusCode());
@@ -234,6 +281,19 @@ final class AppTest extends TestCase
     {
         $logged = $this->captureErrorLog(fn () => $this->request('GET', '/test-failure', $this->appWithFailingRoute(true)));
 
+        $this->assertStringContainsString('secret-detail', $logged);
+    }
+
+    public function testClientApiServerErrorIsJsonAndLogged(): void
+    {
+        $response = null;
+        $logged = $this->captureErrorLog(function () use (&$response): void {
+            $response = $this->request('POST', '/api/client/test-failure', $this->appWithFailingRoute(true));
+        });
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame('application/json', $response->getHeaderLine('Content-Type'));
+        $this->assertSame('{"error":"server_error"}', (string) $response->getBody());
         $this->assertStringContainsString('secret-detail', $logged);
     }
 }

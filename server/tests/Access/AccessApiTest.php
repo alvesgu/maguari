@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Tests\Access;
 
+use Maguari\Server\Access\Exception\InvalidBaseUrl;
 use Maguari\Server\Access\Exception\InvalidSetupInput;
 use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Tests\Support\TestEnvironment;
@@ -121,5 +122,33 @@ final class AccessApiTest extends TestCase
         $this->assertSame($administrator->id, $access->authenticate('JANE@example.com', TestEnvironment::ADMINISTRATOR_PASSWORD)?->id);
         $this->assertNull($access->authenticate(TestEnvironment::ADMINISTRATOR_EMAIL, 'wrong password'));
         $this->assertNull($access->authenticate('nobody@example.com', TestEnvironment::ADMINISTRATOR_PASSWORD));
+    }
+
+    public function testBaseUrlIsUnsetUntilConfigured(): void
+    {
+        $this->assertNull($this->environment->access->baseUrl());
+    }
+
+    public function testStoresTheNormalizedBaseUrl(): void
+    {
+        $this->assertSame('https://maguari.example.com', $this->environment->access->setBaseUrl('HTTPS://Maguari.Example.com/'));
+        $this->assertSame('https://maguari.example.com', $this->environment->access->baseUrl());
+
+        $this->environment->access->setBaseUrl('http://localhost:8080');
+
+        $this->assertSame('http://localhost:8080', $this->environment->access->baseUrl());
+    }
+
+    public function testRejectsAnInvalidBaseUrlAndKeepsTheOldOne(): void
+    {
+        $this->environment->access->setBaseUrl('https://maguari.example.com');
+
+        try {
+            $this->environment->access->setBaseUrl('http://maguari.example.com');
+            $this->fail('Expected InvalidBaseUrl.');
+        } catch (InvalidBaseUrl) {
+        }
+
+        $this->assertSame('https://maguari.example.com', $this->environment->access->baseUrl());
     }
 }

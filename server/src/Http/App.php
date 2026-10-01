@@ -9,6 +9,7 @@ use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Gcp\AccessTokenSourceFactory;
 use Maguari\Server\Http\Controller\AdminController;
+use Maguari\Server\Http\Controller\EnrollController;
 use Maguari\Server\Http\Controller\LoginController;
 use Maguari\Server\Http\Controller\ProjectsController;
 use Maguari\Server\Http\Controller\SetupController;
@@ -22,7 +23,11 @@ use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
+use Maguari\Server\Kernel\Secrets\SecretBox;
+use Maguari\Server\Kernel\Secrets\SecretKeyFile;
+use Maguari\Server\Kernel\Secrets\SecretKeyUnavailable;
 use Maguari\Server\Kernel\SystemClock;
+use Maguari\Shared\ErrorCode;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App as SlimApp;
 use Slim\Exception\HttpMethodNotAllowedException;
@@ -33,8 +38,13 @@ use Slim\Routing\RouteCollectorProxy;
 
 final class App
 {
+    public const NOT_SET_UP_MESSAGE = 'Maguari is not set up yet. Run maguari-server issue-setup-token on the server.';
+    public const NO_SECRET_KEY_MESSAGE = 'Maguari is not set up yet: the secret key file is missing or unusable. '
+        . 'Run maguari-server create-secret-key on the server.';
+
     /**
      * Builds the app from the database at MAGUARI_DATABASE (or the default
+     * path) and the secret key file at MAGUARI_SECRET_KEY_FILE (or the default
      * path). Sessions are kept in a sessions/ directory next to the database.
      * Google Cloud credentials come from MAGUARI_GCP_CREDENTIALS (the metadata
      * server unless it says otherwise).
@@ -45,23 +55,38 @@ final class App
         $clock = new SystemClock();
         $http = new StreamHttpClient();
         $tokens = AccessTokenSourceFactory::fromEnvironment($http, $clock);
-        $ready = (new Migrator($database))->isUpToDate();
+        $sessionPath = dirname($database->path()) . '/sessions';
+
+        if (!(new Migrator($database))->isUpToDate()) {
+            return self::create(null, null, null, $sessionPath, $clock);
+        }
+
+        try {
+            $secretBox = new SecretBox(SecretKeyFile::fromEnvironment()->read());
+        } catch (SecretKeyUnavailable $unavailable) {
+            // The reason (which names the path) goes to the log, not the page.
+            error_log('Maguari: ' . $unavailable->getMessage());
+
+            return self::create(null, null, null, $sessionPath, $clock, notReadyMessage: self::NO_SECRET_KEY_MESSAGE);
+        }
 
         return self::create(
-            $ready ? new AccessApi($database, $clock) : null,
-            $ready ? new FleetApi($database, $clock, $tokens, $http) : null,
-            $ready ? new ClientsApi($database, $clock) : null,
-            dirname($database->path()) . '/sessions',
+            new AccessApi($database, $clock),
+            new FleetApi($database, $clock, $tokens, $http),
+            new ClientsApi($database, $clock, $secretBox),
+            $sessionPath,
             $clock,
         );
     }
 
     /**
      * @param AccessApi|null $access null while the database is missing or not
-     *                               fully migrated: /admin and /auth then return 503
+     *                               fully migrated, or the secret key file is
+     *                               unusable: every surface then returns 503
      * @param FleetApi|null $fleet null in the same case as $access
      * @param ClientsApi|null $clients null in the same case as $access
      * @param bool $logErrors log uncaught errors to PHP's error log. Tests pass false.
+     * @param string $notReadyMessage what /admin and /auth say while not ready
      */
     public static function create(
         ?AccessApi $access,
@@ -70,6 +95,7 @@ final class App
         string $sessionPath,
         Clock $clock = new SystemClock(),
         bool $logErrors = true,
+        string $notReadyMessage = self::NOT_SET_UP_MESSAGE,
     ): SlimApp {
         $app = AppFactory::create();
         $responseFactory = $app->getResponseFactory();
@@ -80,36 +106,42 @@ final class App
         // Error details are never shown in responses, in any environment. They
         // go to the log only, so exception messages must never contain secrets.
         $errorMiddleware = $app->addErrorMiddleware(false, $logErrors, $logErrors);
-        // 404 and 405 are routine (scanners, typos), not errors worth logging.
-        $routineHandler = new ErrorHandler($app->getCallableResolver(), $responseFactory);
-        $errorMiddleware->setErrorHandler(
-            [HttpNotFoundException::class, HttpMethodNotAllowedException::class],
-            fn ($request, \Throwable $exception): ResponseInterface => $routineHandler($request, $exception, false, false, false),
-        );
         // Slim's own HTML error page links back with an inline onclick, which
         // the Content-Security-Policy blocks. Ours is registered for
         // Accept: text/html and as the default, which Slim uses when the Accept
         // header names no type it knows.
         $errorPage = new ErrorPageRenderer(new View());
-        foreach ([$errorMiddleware->getDefaultErrorHandler(), $routineHandler] as $handler) {
-            $handler->registerErrorRenderer('text/html', $errorPage);
-            $handler->setDefaultErrorRenderer('text/html', $errorPage);
-        }
+        $htmlErrors = new ErrorHandler($app->getCallableResolver(), $responseFactory);
+        $htmlErrors->registerErrorRenderer('text/html', $errorPage);
+        $htmlErrors->setDefaultErrorRenderer('text/html', $errorPage);
+        // Clients get JSON whatever their Accept header says.
+        $clientApiErrors = new ErrorHandler($app->getCallableResolver(), $responseFactory);
+        $clientApiErrors->forceContentType('application/json');
+        $clientApiErrors->registerErrorRenderer('application/json', new ClientApiErrorRenderer());
+        $errors = new SurfaceErrorHandler($htmlErrors, $clientApiErrors);
+        $errorMiddleware->setDefaultErrorHandler($errors);
+        // 404 and 405 are routine (scanners, typos), not errors worth logging.
+        $errorMiddleware->setErrorHandler(
+            [HttpNotFoundException::class, HttpMethodNotAllowedException::class],
+            fn ($request, \Throwable $exception): ResponseInterface => $errors($request, $exception, false, false, false),
+        );
         $app->add(new SecurityHeadersMiddleware());
 
         if ($access === null || $fleet === null || $clients === null) {
-            $app->any('/{surface:admin|auth}[/{rest:.*}]', function ($request, ResponseInterface $response): ResponseInterface {
-                $response->getBody()->write('Maguari is not set up yet. Run maguari-server issue-setup-token on the server.');
+            $app->any('/{surface:admin|auth}[/{rest:.*}]', function ($request, ResponseInterface $response) use ($notReadyMessage): ResponseInterface {
+                $response->getBody()->write($notReadyMessage);
 
                 return $response->withStatus(503)->withHeader('Content-Type', 'text/plain; charset=utf-8');
             });
+            $app->any('/api/client[/{rest:.*}]', fn ($request, ResponseInterface $response): ResponseInterface => ClientApiResponse::error($response, ErrorCode::Unavailable));
         } else {
             $session = new SessionMiddleware($sessionPath, $clock);
             $csrf = new CsrfMiddleware($responseFactory);
             $rateLimit = new RateLimitMiddleware($access, $responseFactory);
             $view = new View();
             $adminController = new AdminController($view);
-            $projectsController = new ProjectsController($fleet, $clients, $view);
+            $projectsController = new ProjectsController($fleet, $clients, $access, $view);
+            $enrollController = new EnrollController($clients);
             $setupController = new SetupController($access, $view);
             $loginController = new LoginController($access, $view);
 
@@ -130,11 +162,17 @@ final class App
                 $group->get('/login', [$loginController, 'show']);
                 $group->post('/login', [$loginController, 'submit'])->add($rateLimit);
             })->add($csrf)->add($session);
-        }
 
-        $app->group('/api/client', function (RouteCollectorProxy $group): void {
-            $group->post('/heartbeat', fn ($request, ResponseInterface $response): ResponseInterface => $response);
-        })->add(new FailClosedMiddleware($responseFactory));
+            // Enrollment is not signed: the client has no secret yet, and the
+            // one-time token is the credential. Every other client route is in
+            // the signed group, so new routes inherit its protection.
+            $app->group('/api/client', function (RouteCollectorProxy $group) use ($enrollController, $responseFactory): void {
+                $group->post('/enroll', [$enrollController, 'enroll']);
+                $group->group('', function (RouteCollectorProxy $signed): void {
+                    $signed->post('/heartbeat', fn ($request, ResponseInterface $response): ResponseInterface => $response);
+                })->add(new FailClosedMiddleware($responseFactory));
+            });
+        }
 
         return $app;
     }
