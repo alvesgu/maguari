@@ -168,6 +168,77 @@ final class AppTest extends TestCase
         $this->assertStringContainsString('missing.key', (string) file_get_contents($this->environment->directory . '/error.log'));
     }
 
+    /**
+     * @return array<string, array{array<string, string>, string}> environment and a text the log must contain
+     */
+    public static function startupFailures(): array
+    {
+        return [
+            'not a database' => [['MAGUARI_DATABASE' => '{dir}/garbage.sqlite'], 'file is not a database'],
+            'unknown credentials setting' => [['MAGUARI_GCP_CREDENTIALS' => 'key-file'], 'MAGUARI_GCP_CREDENTIALS'],
+        ];
+    }
+
+    /**
+     * @dataProvider startupFailures
+     * @param array<string, string> $variables
+     */
+    public function testStartupFailureAnswers503AndLogsTheDetails(array $variables, string $logged): void
+    {
+        file_put_contents($this->environment->directory . '/garbage.sqlite', str_repeat('garbage ', 200));
+        $variables += ['MAGUARI_DATABASE' => $this->environment->database->path(), 'MAGUARI_SECRET_KEY_FILE' => $this->environment->secretKeyFile->path()];
+        $logFile = $this->environment->directory . '/error.log';
+        $previousLog = ini_set('error_log', $logFile);
+
+        foreach ($variables as $name => $value) {
+            putenv($name . '=' . str_replace('{dir}', $this->environment->directory, $value));
+        }
+
+        try {
+            $app = App::fromEnvironment();
+            $admin = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/admin'));
+            $client = $app->handle((new ServerRequestFactory())->createServerRequest('POST', '/api/client/enroll'));
+        } finally {
+            foreach (array_keys($variables) as $name) {
+                putenv($name);
+            }
+
+            ini_set('error_log', $previousLog === false ? '' : $previousLog);
+        }
+
+        $this->assertSame(503, $admin->getStatusCode());
+        $this->assertSame(App::STARTUP_FAILED_MESSAGE, (string) $admin->getBody());
+        $this->assertSecurityHeaders($admin);
+        $this->assertSame(503, $client->getStatusCode());
+        $this->assertSame('{"error":"unavailable"}', (string) $client->getBody());
+        $this->assertStringContainsString($logged, (string) file_get_contents($logFile));
+    }
+
+    /**
+     * The real entry point, in its own PHP process.
+     */
+    public function testEntryPointNeverShowsAStackTrace(): void
+    {
+        $garbage = $this->environment->directory . '/garbage.sqlite';
+        file_put_contents($garbage, str_repeat('garbage ', 200));
+        $logFile = $this->environment->directory . '/error.log';
+        $environment = getenv() + [];
+        $environment['MAGUARI_DATABASE'] = $garbage;
+        $environment['MAGUARI_SECRET_KEY_FILE'] = $this->environment->secretKeyFile->path();
+        $environment['REQUEST_METHOD'] = 'GET';
+        $environment['REQUEST_URI'] = '/admin';
+        $command = [PHP_BINARY, '-d', 'display_errors=stderr', '-d', 'error_log=' . $logFile, '-d', 'variables_order=EGPCS', dirname(__DIR__, 2) . '/public/index.php'];
+        $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
+        $stdout = (string) stream_get_contents($pipes[1]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+        proc_close($process);
+
+        $this->assertSame(App::STARTUP_FAILED_MESSAGE, $stdout);
+        $this->assertSame('', $stderr);
+        $this->assertStringNotContainsString($garbage, $stdout);
+        $this->assertStringContainsString('file is not a database', (string) file_get_contents($logFile));
+    }
+
     public function testFromEnvironmentIsReadyWithDatabaseAndSecretKey(): void
     {
         putenv('MAGUARI_DATABASE=' . $this->environment->database->path());

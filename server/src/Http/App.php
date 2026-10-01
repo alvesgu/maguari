@@ -41,6 +41,7 @@ final class App
     public const NOT_SET_UP_MESSAGE = 'Maguari is not set up yet. Run maguari-server issue-setup-token on the server.';
     public const NO_SECRET_KEY_MESSAGE = 'Maguari is not set up yet: the secret key file is missing or unusable. '
         . 'Run maguari-server create-secret-key on the server.';
+    public const STARTUP_FAILED_MESSAGE = 'Maguari is unavailable: it could not start. The details are in the server\'s error log.';
 
     /**
      * Builds the app from the database at MAGUARI_DATABASE (or the default
@@ -48,8 +49,23 @@ final class App
      * path). Sessions are kept in a sessions/ directory next to the database.
      * Google Cloud credentials come from MAGUARI_GCP_CREDENTIALS (the metadata
      * server unless it says otherwise).
+     *
+     * Never throws: when anything needed at startup fails (for example a
+     * database that cannot be opened), the details go to the error log and
+     * every surface answers 503, as while Maguari is not set up.
      */
     public static function fromEnvironment(): SlimApp
+    {
+        try {
+            return self::buildFromEnvironment();
+        } catch (\Throwable $exception) {
+            error_log(sprintf('Maguari could not start: %s: %s', $exception::class, $exception->getMessage()));
+
+            return self::create(null, null, null, '', new SystemClock(), notReadyMessage: self::STARTUP_FAILED_MESSAGE);
+        }
+    }
+
+    private static function buildFromEnvironment(): SlimApp
     {
         $database = Database::fromEnvironment();
         $clock = new SystemClock();

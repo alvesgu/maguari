@@ -398,7 +398,7 @@ Coherence rules (warning only):
 
 ## 9. Storage
 
-SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. `MAGUARI_GCP_CREDENTIALS` (section 8) is also for development only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, or the secret key file (section 9.3) is missing or unusable, `/admin/*` and `/auth/*` return `503` with a message naming the command to run, and `/api/client/*` returns `503` with `{"error": "unavailable"}`.
+SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. `MAGUARI_GCP_CREDENTIALS` (section 8) is also for development only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, or the secret key file (section 9.3) is missing or unusable, `/admin/*` and `/auth/*` return `503` with a message naming the command to run, and `/api/client/*` returns `503` with `{"error": "unavailable"}`. The web entry point never crashes before Slim starts: if anything needed at startup fails (for example a database that cannot be opened), every surface answers `503` the same way, with a fixed message, and the details go only to the error log.
 
 ### 9.1 Readings as runs
 
