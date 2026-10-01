@@ -116,7 +116,7 @@ The command shown (I4):
 maguari-client enroll --server=https://maguari.example.com --token=<token>
 ```
 
-The server URL comes from the administrator's own request (scheme, host and port). The token on the command line ends up in the shell history and is briefly visible in the process list. That is acceptable because it is single-use, expires in an hour, is bound to one instance and is consumed within a second; after use it is worthless.
+The server URL comes from configuration (D22), never from the request: 6.1 first used the request's scheme, host and port, and 6.2 replaces that. The token on the command line ends up in the shell history and is briefly visible in the process list. That is acceptable because it is single-use, expires in an hour, is bound to one instance and is consumed within a second; after use it is worthless.
 
 **D6. `ClientsApi`** is the Clients context's public interface. In 6.1 it gains `issueEnrollmentToken(int $instanceId): IssuedEnrollmentToken` and `enrollmentStates(int[] $instanceIds)` (no token, token pending, enrolled), used by the project page. The controller calls `FleetApi::pickInstance()` then `ClientsApi::issueEnrollmentToken()`. That is the only cross-context orchestration in the step, and it is two calls, so it stays in the controller rather than making Clients depend on Fleet.
 
@@ -266,6 +266,15 @@ CREATE INDEX clients_nonces_expires_at ON clients_nonces (expires_at);
 
 **D19. `shared/`.** Namespace `Maguari\Shared\`, in `shared/src/`, PHP 8.1, no dependencies and no I/O. Contents: `Protocol` (protocol version `1`, header names, the 5 minute window, the 60 second default interval, error codes) and `Signature` (D13). The server autoloads it through `composer.json` (`"Maguari\\Shared\\": "../shared/src/"`). Shared tests live in `shared/tests/`.
 
+**D22. The server's address comes from configuration (added after 6.1 review).** The `Host` header is chosen by whoever sends the request, so it must never decide where an enroll command points.
+
+- Access stores the server's base URL (scheme, host and optional port, no path) in a new `access_settings` table (`name` primary key, `value`, `updated_at`), and exposes it as `AccessApi::baseUrl(): ?string`.
+- `issue-setup-token --base-url=<url>` records it, so the domain given at setup is the configured one (design 12.2: `setup` runs certbot for the domain, then this command).
+- A new subcommand, `maguari-server set-base-url --base-url=<url>`, sets or changes it later: on installs set up before this step (where `issue-setup-token` now refuses, because an administrator exists), when the domain changes and in development (`--base-url=http://localhost:8080`). Like `migrate`, it refuses root.
+- Both commands validate with the same rule: `https://`, or `http://` only when the host is exactly `localhost`; no user, password, path, query or fragment. The rule lives in `shared/src/ServerUrl.php`, so `issue-setup-token`, `set-base-url` and the client's `--server` (D20) run the same code.
+- When no base URL is configured, pressing "Enroll" issues no token and makes no API call. The page says the server's address is not configured and shows the `set-base-url` command to run (status `409`).
+- No environment variable: `set-base-url` already covers development, and one source of truth avoids precedence rules between a stored value and the environment.
+
 **D20. `client/`.** Namespace `Maguari\Client\`, PHP 8.1 `php-cli` only, **no Composer dependencies** at runtime (design 12.1). A small autoloader in `client/src/autoload.php` maps `Maguari\Client\` and `Maguari\Shared\`. `client/VERSION` starts at `0.1.0`.
 
 Commands (`client/bin/maguari-client`):
@@ -277,7 +286,7 @@ Commands (`client/bin/maguari-client`):
 | `run` | Sends a heartbeat every 60 seconds on a fixed schedule (no drift), logs failures to stderr and keeps going. The systemd service will run this later. |
 
 - **Credentials file:** `/var/lib/maguari-client/credentials.json`, holding the server URL, `client_id` and secret. **Readable only by the client's own user: mode 0600**, and its directory mode 0700 when the client creates it. The temporary file is created under a `0077` umask and chmodded to 0600 before the secret is written, then renamed into place, so the secret is never readable by anyone else, even briefly. `MAGUARI_CLIENT_DIR` overrides the directory for development and tests only. When loading, the client refuses a credentials file that is readable or writable by group or others, with a message saying how to fix the mode.
-- **Server URL:** `https://` only; `http://` accepted only for `localhost`, the same rule as `issue-setup-token --base-url`.
+- **Server URL:** the client **refuses a `--server` that is not `https://`, unless the host is exactly `localhost`** (added after 6.1 review). This is the same rule as `issue-setup-token --base-url`, enforced by the same code (`Maguari\Shared\ServerUrl`, D22). Hostnames are case-insensitive, so `LOCALHOST` counts as `localhost`; `127.0.0.1`, `::1` and `localhost.example.com` do not.
 - **HTTP:** PHP's stream wrapper with peer verification, a 10 second timeout and no redirects followed. This duplicates a little of the server's `StreamHttpClient` on purpose: the client package never contains server code (design 3).
 - Refuses to run as root (design 5.4: the client runs as an unprivileged user).
 - Readings, checks, command results, the certificate scanner, the allowlist and sudoers are all later steps. The heartbeat sends empty arrays.
@@ -337,12 +346,17 @@ docs/DESIGN.md
 ```
 shared/
   src/Protocol.php                          (D19)
-  tests/ProtocolTest.php
+  src/ErrorCode.php                         the error codes of D7
+  src/ServerUrl.php                         https, or http only for localhost (D22)
+  tests/ServerUrlTest.php
 server/
   composer.json                             autoload Maguari\Shared\ (D19)
   phpunit.xml                               shared test suite (D21)
-  bin/maguari-server                        create-secret-key (D10)
+  bin/maguari-server                        create-secret-key (D10); set-base-url and ServerUrl (D22)
   src/
+    Access/AccessApi.php                    baseUrl(), setBaseUrl() (D22)
+    Access/Migrations/0004_access_settings.sql
+    Http/Controller/ProjectsController.php  enroll command uses the configured base URL (D22)
     Kernel/Secrets/SecretBox.php            (D8)
     Kernel/Secrets/SecretKeyFile.php        read, create, MAGUARI_SECRET_KEY_FILE (D9, D10)
     Clients/
@@ -477,7 +491,7 @@ No test touches the network. Compute Engine answers are queued on `FakeHttpClien
 Each sub-step updates the design in its own commit:
 
 - **6.1:** section 8.1 item 2 (picking happens with enrollment, one instance at a time, confirmed with `instances.get`); section 5.6 (token lifetime 1 hour, one token per instance, issuing again replaces it, re-enrollment allowed; install commands come with packaging).
-- **6.2:** section 5.6 item 3 (the exchange, `POST /api/client/enroll`, token in the body); section 9 (`MAGUARI_SECRET_KEY_FILE`, key file format, readiness includes the key); section 9.3 (stored form of encrypted secrets); section 10.2 (JSON error format and codes under `/api/client/*`; the enroll route is outside the HMAC middleware); section 12.2.1 (`create-secret-key`).
+- **6.2:** section 5.6 item 3 (the exchange, `POST /api/client/enroll`, token in the body); section 9 (`MAGUARI_SECRET_KEY_FILE`, key file format, readiness includes the key); section 9.3 (stored form of encrypted secrets); section 10.2 (JSON error format and codes under `/api/client/*`; the enroll route is outside the HMAC middleware); section 12.2.1 (`create-secret-key`, `set-base-url`, and `issue-setup-token` recording the base URL); section 5.6 item 2 (the enroll command's server URL comes from configuration, D22).
 - **6.3:** section 5.5 (header formats, no query strings, verification order, nonce storage and cleanup, the 64 KiB limit); section 10.2 (per-client rate limit of 20 requests per minute); section 5.2 (`204` for an empty response; the server stores its own receive time).
 - **6.4:** section 3 (how `client/` loads `shared/`; tests run from the server's PHPUnit); section 5.4 (client refuses root); the client credentials file and `MAGUARI_CLIENT_DIR`.
 
@@ -512,6 +526,10 @@ bin/maguari-server create-secret-key
 bin/maguari-server migrate
 ```
 
+```
+bin/maguari-server set-base-url --base-url=http://localhost:8080
+```
+
 Then start the server with the same exports plus `MAGUARI_GCP_CREDENTIALS=application-default`:
 
 ```
@@ -537,3 +555,5 @@ Reload `/admin`: the instance shows "On time". Stop the client, wait two minutes
 ## Answers
 
 All five recommendations were approved (split and order, I1 to I5, D10, D4, D11, D12), with the three additions above. Implementation starts with 6.1 and stops for review after it.
+
+After the 6.1 review, two more additions: the enroll command's server address comes from configuration (D22), and the client refuses a non-HTTPS `--server` unless the host is exactly `localhost` (D20).
