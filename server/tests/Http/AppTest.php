@@ -38,7 +38,7 @@ final class AppTest extends TestCase
      */
     private function notReadyApp(bool $logErrors = false): SlimApp
     {
-        return App::create(null, null, MAGUARI_TEST_SESSION_PATH, logErrors: $logErrors);
+        return App::create(null, null, null, MAGUARI_TEST_SESSION_PATH, logErrors: $logErrors);
     }
 
     /**

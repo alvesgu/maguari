@@ -173,7 +173,7 @@ final class ProjectsFlowTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $body = (string) $response->getBody();
         $this->assertStringContainsString('<h1>my-project</h1>', $body);
-        $this->assertStringContainsString('<tr><td>web-1</td><td>us-east1-b</td><td>Running</td><td>e2-micro</td></tr>', $body);
+        $this->assertStringContainsString('<tr><td>web-1</td><td>us-east1-b</td><td>Running</td><td>e2-micro</td><td>Not enrolled</td>', $body);
         $this->assertStringNotContainsString('machineTypes/', $body);
         $this->assertStringContainsString('Some zones could not be reached: us-west1-a.', $body);
         $this->assertStringNotContainsString(FakeTokenSource::TOKEN, $body);
@@ -213,6 +213,150 @@ final class ProjectsFlowTest extends TestCase
 
         $this->assertSame(404, $browser->get('/admin/projects/999')->getStatusCode());
         $this->assertSame(404, $browser->get('/admin/projects/my-project')->getStatusCode());
+        $this->assertSame([], $this->environment->http->requests);
+    }
+
+    private function queueListing(string ...$names): void
+    {
+        $zone = 'https://www.googleapis.com/compute/v1/projects/my-project/zones/us-east1-b';
+        $this->environment->http->queueJson(200, ['items' => ['zones/us-east1-b' => ['instances' => array_map(
+            static fn (string $name): array => ['id' => '7', 'name' => $name, 'zone' => $zone, 'status' => 'RUNNING'],
+            $names,
+        )]]]);
+    }
+
+    /**
+     * @return array<string, string> instances.get's answer for an instance in us-east1-b
+     */
+    private static function apiInstance(string $name): array
+    {
+        return ['id' => '7', 'name' => $name, 'zone' => 'https://www.googleapis.com/compute/v1/projects/my-project/zones/us-east1-b', 'status' => 'RUNNING'];
+    }
+
+    /**
+     * Opens the project page (listing web-1), then queues $answer for
+     * instances.get and presses web-1's Enroll button.
+     *
+     * @param array<string, mixed>|null $answer instances.get's JSON answer; null queues none
+     * @param array<string, string> $fields overrides the form's zone and name
+     */
+    private function pressEnroll(Browser $browser, string $path, ?array $answer, array $fields = [], int $status = 200): ResponseInterface
+    {
+        $this->queueListing('web-1');
+        $page = $browser->get($path);
+
+        if ($answer !== null) {
+            $this->environment->http->queueJson($status, $answer);
+        }
+
+        return $browser->post('https://maguari.example.com' . $path . '/instances', $fields + Browser::csrfFields($page) + [
+            'zone' => 'us-east1-b',
+            'name' => 'web-1',
+        ]);
+    }
+
+    public function testProjectPageHasAnEnrollButtonPerInstance(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $this->queueListing('web-1');
+
+        $body = (string) $browser->get($path)->getBody();
+
+        $this->assertStringContainsString('<form method="post" action="' . $path . '/instances">', $body);
+        $this->assertStringContainsString('<input type="hidden" name="zone" value="us-east1-b"><input type="hidden" name="name" value="web-1"><button type="submit">Enroll</button>', $body);
+    }
+
+    public function testEnrollShowsTheCommandOnce(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+
+        $response = $this->pressEnroll($browser, $path, self::apiInstance('web-1'));
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('no-store', $response->getHeaderLine('Cache-Control'));
+        $body = (string) $response->getBody();
+        $this->assertSame(1, preg_match('#maguari-client enroll --server=https://maguari\.example\.com --token=([A-Za-z0-9_-]{43})#', $body, $match));
+        $token = $match[1];
+        $this->assertStringContainsString('<h1>Enroll web-1</h1>', $body);
+        $this->assertStringContainsString('until 2026-09-21 15:13 UTC', $body);
+        $this->assertStringEndsWith('/zones/us-east1-b/instances/web-1', $this->environment->http->lastRequest()->url);
+
+        $stored = $this->environment->database->pdo()->query('SELECT token_hash FROM clients_enrollment_tokens')->fetchAll(\PDO::FETCH_COLUMN);
+        $this->assertSame([hash('sha256', $token)], $stored);
+
+        $this->queueListing('web-1');
+        $page = (string) $browser->get($path)->getBody();
+        $this->assertStringContainsString('<td>Waiting for enrollment</td>', $page);
+        $this->assertStringNotContainsString($token, $page);
+    }
+
+    public function testEnrollingAgainReplacesTheToken(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $this->pressEnroll($browser, $path, self::apiInstance('web-1'));
+
+        $this->assertSame(200, $this->pressEnroll($browser, $path, self::apiInstance('web-1'))->getStatusCode());
+
+        $this->assertSame(1, (int) $this->environment->database->pdo()->query('SELECT COUNT(*) FROM clients_enrollment_tokens')->fetchColumn());
+        $this->assertCount(1, $this->environment->fleet->pickedInstances(1));
+    }
+
+    public function testInvalidInstanceNameIsRejectedWithoutCallingTheApi(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+
+        $response = $this->pressEnroll($browser, $path, null, ['name' => '../other']);
+
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertStringContainsString('This is not a valid zone and instance name.', (string) $response->getBody());
+        $this->assertStringContainsString('/instances?', $this->environment->http->lastRequest()->url);
+        $this->assertSame(0, (int) $this->environment->database->pdo()->query('SELECT COUNT(*) FROM clients_enrollment_tokens')->fetchColumn());
+    }
+
+    public function testInstanceMissingFromTheApi(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+
+        $response = $this->pressEnroll($browser, $path, ['error' => ['code' => 404, 'message' => 'raw google message']], status: 404);
+
+        $this->assertSame(422, $response->getStatusCode());
+        $body = (string) $response->getBody();
+        $this->assertStringContainsString('This instance was not found in the project.', $body);
+        $this->assertStringNotContainsString('raw google message', $body);
+        $this->assertStringNotContainsString('--token=', $body);
+        $this->assertSame([], $this->environment->fleet->pickedInstances(1));
+    }
+
+    public function testEnrollRequiresCsrfAndSignIn(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $requests = count($this->environment->http->requests);
+
+        $this->assertSame(400, $browser->post($path . '/instances', ['zone' => 'us-east1-b', 'name' => 'web-1'])->getStatusCode());
+
+        $stranger = $this->environment->browser('192.0.2.11');
+        $form = $stranger->get('/auth/login');
+        $response = $stranger->post($path . '/instances', Browser::csrfFields($form) + ['zone' => 'us-east1-b', 'name' => 'web-1']);
+        $this->assertSame('/auth/login', $response->getHeaderLine('Location'));
+
+        $this->assertCount($requests, $this->environment->http->requests);
+        $this->assertSame(0, (int) $this->environment->database->pdo()->query('SELECT COUNT(*) FROM clients_enrollment_tokens')->fetchColumn());
+    }
+
+    public function testEnrollInUnknownProjectIsNotFound(): void
+    {
+        $browser = $this->signedInBrowser();
+        $form = $browser->get('/admin/projects');
+
+        $response = $browser->post('/admin/projects/999/instances', Browser::csrfFields($form) + ['zone' => 'us-east1-b', 'name' => 'web-1']);
+
+        $this->assertSame(404, $response->getStatusCode());
         $this->assertSame([], $this->environment->http->requests);
     }
 }

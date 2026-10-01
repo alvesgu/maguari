@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Maguari\Server\Fleet\Gcp;
 
 use Maguari\Server\Fleet\DiscoveredInstance;
+use Maguari\Server\Fleet\Exception\InstanceNotFound;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
 use Maguari\Server\Fleet\InstanceList;
 use Maguari\Server\Fleet\InstanceStatus;
@@ -76,6 +77,40 @@ final class ComputeEngine
         sort($unreachableZones);
 
         return new InstanceList($instances, $unreachableZones, $pageToken !== null);
+    }
+
+    /**
+     * Gets one instance, to confirm a pick (design section 8.1 item 2). $zone
+     * and $name must already be validated (InstanceName).
+     *
+     * @throws InstanceNotFound
+     * @throws ProjectNotAccessible
+     */
+    public function getInstance(string $gcpProjectId, string $zone, string $name): DiscoveredInstance
+    {
+        $url = sprintf(
+            '%s/projects/%s/zones/%s/instances/%s',
+            self::BASE_URL,
+            rawurlencode($gcpProjectId),
+            rawurlencode($zone),
+            rawurlencode($name),
+        );
+
+        try {
+            $instance = self::instance($this->get($url, $this->accessToken()));
+        } catch (ProjectNotAccessible $notAccessible) {
+            if ($notAccessible->problem === ProjectAccessProblem::NotFound) {
+                throw new InstanceNotFound('This instance was not found in the project.');
+            }
+
+            throw $notAccessible;
+        }
+
+        if ($instance->zone !== $zone || $instance->name !== $name) {
+            throw new ProjectNotAccessible(ProjectAccessProblem::UnexpectedResponse);
+        }
+
+        return $instance;
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Maguari\Server\Tests\Fleet\Gcp;
 
 use Maguari\Server\Fleet\DiscoveredInstance;
+use Maguari\Server\Fleet\Exception\InstanceNotFound;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
 use Maguari\Server\Fleet\Gcp\ComputeEngine;
 use Maguari\Server\Fleet\InstanceStatus;
@@ -375,5 +376,81 @@ final class ComputeEngineTest extends TestCase
         $this->http->queueFailure();
 
         $this->assertSame(ProjectAccessProblem::UnexpectedResponse, $this->listProblem()->problem);
+    }
+
+    private function getProblem(): ProjectNotAccessible
+    {
+        try {
+            $this->computeEngine->getInstance('my-project', 'us-east1-b', 'web');
+            $this->fail('Expected ProjectNotAccessible.');
+        } catch (ProjectNotAccessible $notAccessible) {
+            return $notAccessible;
+        }
+    }
+
+    public function testGetsOneInstance(): void
+    {
+        $this->http->queueJson(200, self::apiInstance('web', 'us-east1-b', 'STOPPED', '18446744073709551615'));
+
+        $instance = $this->computeEngine->getInstance('my-project', 'us-east1-b', 'web');
+
+        $this->assertEquals(new DiscoveredInstance('18446744073709551615', 'web', 'us-east1-b', InstanceStatus::Stopped, 'e2-micro'), $instance);
+        $request = $this->http->lastRequest();
+        $this->assertSame('GET', $request->method);
+        $this->assertSame('https://compute.googleapis.com/compute/v1/projects/my-project/zones/us-east1-b/instances/web', $request->url);
+        $this->assertSame('Bearer ' . FakeTokenSource::TOKEN, $request->headers['Authorization']);
+    }
+
+    public function testGetInstanceNotFound(): void
+    {
+        $this->http->queueJson(404, self::googleError(404, "The resource 'projects/my-project/zones/us-east1-b/instances/web' was not found", ['notFound']));
+
+        $this->expectException(InstanceNotFound::class);
+        $this->expectExceptionMessage('This instance was not found in the project.');
+
+        $this->computeEngine->getInstance('my-project', 'us-east1-b', 'web');
+    }
+
+    /**
+     * The failures other than 404, which getInstance() reports as
+     * InstanceNotFound instead (testGetInstanceNotFound).
+     *
+     * @return array<string, array{HttpResponse, ProjectAccessProblem}>
+     */
+    public static function failuresOtherThanNotFound(): array
+    {
+        return array_filter(self::failures(), static fn (array $case): bool => $case[1] !== ProjectAccessProblem::NotFound);
+    }
+
+    /**
+     * @dataProvider failuresOtherThanNotFound
+     */
+    public function testGetInstanceMapsOtherFailures(HttpResponse $response, ProjectAccessProblem $expected): void
+    {
+        $this->http->queue($response);
+
+        $this->assertSame($expected, $this->getProblem()->problem);
+    }
+
+    public function testGetInstanceCredentialsUnavailable(): void
+    {
+        $this->tokens->failWith('No Application Default Credentials found.');
+
+        $this->assertSame(ProjectAccessProblem::CredentialsUnavailable, $this->getProblem()->problem);
+        $this->assertSame([], $this->http->requests);
+    }
+
+    public function testGetInstanceRejectsAnswerForAnotherInstance(): void
+    {
+        $this->http->queueJson(200, self::apiInstance('db', 'us-east1-b'));
+
+        $this->assertSame(ProjectAccessProblem::UnexpectedResponse, $this->getProblem()->problem);
+    }
+
+    public function testGetInstanceRejectsMalformedAnswer(): void
+    {
+        $this->http->queueJson(200, ['kind' => 'compute#instance', 'name' => 'web']);
+
+        $this->assertSame(ProjectAccessProblem::UnexpectedResponse, $this->getProblem()->problem);
     }
 }

@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Tests\Fleet;
 
+use Maguari\Server\Fleet\Exception\InstanceNotFound;
+use Maguari\Server\Fleet\Exception\InvalidInstanceName;
 use Maguari\Server\Fleet\Exception\InvalidProjectId;
 use Maguari\Server\Fleet\Exception\ProjectAlreadyAdded;
 use Maguari\Server\Fleet\DiscoveredInstance;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
 use Maguari\Server\Fleet\Exception\ProjectNotFound;
+use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Fleet\Project;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
@@ -129,5 +132,102 @@ final class FleetApiTest extends TestCase
 
         $this->assertSame([], $this->environment->http->requests);
         $this->assertSame(0, $this->environment->tokens->calls);
+    }
+
+    private function addMyProject(): Project
+    {
+        $this->allowListing();
+
+        return $this->environment->fleet->addProject('my-project');
+    }
+
+    private function queueInstance(string $name, string $zone, string $id): void
+    {
+        $zoneUrl = 'https://www.googleapis.com/compute/v1/projects/my-project/zones/' . $zone;
+        $this->environment->http->queueJson(200, ['id' => $id, 'name' => $name, 'zone' => $zoneUrl, 'status' => 'RUNNING']);
+    }
+
+    public function testPicksAnInstanceOnceTheApiConfirmsIt(): void
+    {
+        $project = $this->addMyProject();
+        $this->queueInstance('web', 'us-east1-b', '18446744073709551615');
+
+        $instance = $this->environment->fleet->pickInstance($project->id, 'us-east1-b', 'web');
+
+        $this->assertEquals(
+            new Instance($instance->id, $project->id, 'my-project', '18446744073709551615', 'us-east1-b', 'web', $this->environment->clock->now()),
+            $instance,
+        );
+        $this->assertStringEndsWith('/projects/my-project/zones/us-east1-b/instances/web', $this->environment->http->lastRequest()->url);
+        $this->assertEquals([$instance], $this->environment->fleet->pickedInstances($project->id));
+    }
+
+    public function testPickingAgainKeepsOneRowAndRefreshesTheGcpId(): void
+    {
+        $project = $this->addMyProject();
+        $this->queueInstance('web', 'us-east1-b', '1');
+        $first = $this->environment->fleet->pickInstance($project->id, 'us-east1-b', 'web');
+        $this->environment->clock->advance(60);
+        $this->queueInstance('web', 'us-east1-b', '2');
+
+        $second = $this->environment->fleet->pickInstance($project->id, 'us-east1-b', 'web');
+
+        $this->assertSame($first->id, $second->id);
+        $this->assertSame('2', $second->gcpInstanceId);
+        $this->assertSame($first->pickedAt, $second->pickedAt);
+        $this->assertCount(1, $this->environment->fleet->pickedInstances($project->id));
+    }
+
+    public function testPickedInstancesAreSortedAndPerProject(): void
+    {
+        $project = $this->addMyProject();
+        $this->allowListing();
+        $other = $this->environment->fleet->addProject('other-project');
+
+        foreach ([[$project, 'web', 'us-east1-b'], [$project, 'db', 'us-east1-c'], [$project, 'db', 'us-east1-b'], [$other, 'app', 'us-east1-b']] as [$owner, $name, $zone]) {
+            $this->queueInstance($name, $zone, '1');
+            $this->environment->fleet->pickInstance($owner->id, $zone, $name);
+        }
+
+        $this->assertSame(
+            ['db us-east1-b', 'db us-east1-c', 'web us-east1-b'],
+            array_map(static fn (Instance $instance): string => $instance->name . ' ' . $instance->zone, $this->environment->fleet->pickedInstances($project->id)),
+        );
+    }
+
+    public function testInvalidNameIsRejectedWithoutCallingTheApi(): void
+    {
+        $project = $this->addMyProject();
+        $requests = count($this->environment->http->requests);
+
+        try {
+            $this->environment->fleet->pickInstance($project->id, 'us-east1-b', '../../other-project');
+            $this->fail('Expected InvalidInstanceName.');
+        } catch (InvalidInstanceName) {
+        }
+
+        $this->assertCount($requests, $this->environment->http->requests);
+        $this->assertSame([], $this->environment->fleet->pickedInstances($project->id));
+    }
+
+    public function testInstanceMissingFromTheApiIsNotStored(): void
+    {
+        $project = $this->addMyProject();
+        $this->environment->http->queueJson(404, ['error' => ['code' => 404, 'errors' => [['reason' => 'notFound']]]]);
+
+        try {
+            $this->environment->fleet->pickInstance($project->id, 'us-east1-b', 'web');
+            $this->fail('Expected InstanceNotFound.');
+        } catch (InstanceNotFound) {
+        }
+
+        $this->assertSame([], $this->environment->fleet->pickedInstances($project->id));
+    }
+
+    public function testPickingInAnUnknownProject(): void
+    {
+        $this->expectException(ProjectNotFound::class);
+
+        $this->environment->fleet->pickInstance(42, 'us-east1-b', 'web');
     }
 }

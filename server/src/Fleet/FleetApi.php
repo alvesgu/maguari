@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Fleet;
 
+use Maguari\Server\Fleet\Exception\InstanceNotFound;
+use Maguari\Server\Fleet\Exception\InvalidInstanceName;
 use Maguari\Server\Fleet\Exception\InvalidProjectId;
 use Maguari\Server\Fleet\Exception\ProjectAlreadyAdded;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
@@ -20,6 +22,7 @@ use Maguari\Server\Kernel\HttpClient\HttpClient;
 final class FleetApi
 {
     private readonly ProjectRepository $projects;
+    private readonly InstanceRepository $instances;
     private readonly ComputeEngine $computeEngine;
 
     public function __construct(
@@ -29,6 +32,7 @@ final class FleetApi
         HttpClient $http,
     ) {
         $this->projects = new ProjectRepository($database);
+        $this->instances = new InstanceRepository($database);
         $this->computeEngine = new ComputeEngine($http, $tokens);
     }
 
@@ -82,5 +86,32 @@ final class FleetApi
     public function listInstances(int $projectId): InstanceList
     {
         return $this->computeEngine->listInstances($this->project($projectId)->gcpProjectId);
+    }
+
+    /**
+     * Picks an instance for enrollment (design section 8.1 item 2), after the
+     * Compute Engine API confirms it exists. Picking it again refreshes its
+     * GCP instance ID and returns the same instance.
+     *
+     * @throws ProjectNotFound
+     * @throws InvalidInstanceName
+     * @throws InstanceNotFound
+     * @throws ProjectNotAccessible
+     */
+    public function pickInstance(int $projectId, string $zone, string $name): Instance
+    {
+        $project = $this->project($projectId);
+        InstanceName::validate($zone, $name);
+        $discovered = $this->computeEngine->getInstance($project->gcpProjectId, $zone, $name);
+
+        return $this->instances->save($project->id, $discovered->gcpInstanceId, $zone, $name, $this->clock->now());
+    }
+
+    /**
+     * @return Instance[] the project's picked instances, sorted by name, then zone
+     */
+    public function pickedInstances(int $projectId): array
+    {
+        return $this->instances->inProject($projectId);
     }
 }

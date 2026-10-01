@@ -252,6 +252,11 @@ This is per-request signing, not a bearer token like JWT. An intercepted request
 
 1. The administrator adds a GCP project first, then picks instances from that project's list (section 8.1).
 2. For each chosen instance, the server generates a one-time enrollment token **bound to that instance** (project, zone and instance name) and shows the exact commands to paste on the instance: install the keyring package, install the client and enroll.
+   - The token is 32 random bytes (base64url), valid for **1 hour**, shown once and stored only as a SHA-256 hash in `clients_enrollment_tokens`.
+   - Each instance has at most one token. Issuing a new one replaces the previous one, and expired tokens are deleted whenever a token is issued.
+   - A token may be issued for an instance that is already enrolled (for example after rebuilding it). The existing client keeps working until the new token is used.
+   - The page with the token is the response to the form submission itself (no redirect), sent with `Cache-Control: no-store`, because the plain token is never stored.
+   - Until packaging exists, the page shows only the enroll command (`maguari-client enroll --server=<url> --token=<token>`, with the server URL the administrator used) and says the client runs from a source checkout. The keyring and install commands are added with packaging.
 3. On first contact, the client exchanges the token for its permanent HMAC secret. The token then becomes invalid.
 4. Because tokens are bound to one instance, a client can never claim to be a different instance.
 
@@ -380,7 +385,10 @@ Coherence rules (warning only):
    - The project's page (`/admin/projects/{id}`) lists its instances live on every view, with name, zone, status and machine type (short names, for example `us-central1-a` and `e2-micro`). Nothing is stored.
    - The list uses the same aggregated call as item 1, with `maxResults=500`, following `nextPageToken` for up to 10 pages (5,000 instances). The page says when the list was cut short.
    - Zones Google could not reach (`unreachables` and per-zone warnings other than `NO_RESULTS_ON_PAGE`) are named on the page; Google's warning messages are not shown. Any failed page fails the whole list with item 1's sentences.
-   - Picking itself comes with enrollment (section 5.6), not with listing (section 15 step 5).
+   - Picking comes with enrollment (section 5.6): each listed instance has an "Enroll" button, which picks that one instance and issues its token in one action. There is no pick without a token.
+   - A pick is confirmed with `GET .../projects/{project}/zones/{zone}/instances/{name}` (`compute.instances.get`), after the zone and name are checked against Compute Engine's formats. A `404` says the instance was not found in the project; other failures use item 1's sentences.
+   - Picked instances are stored in `fleet_instances`, unique by project, zone and name. Picking again keeps the row and refreshes the stored GCP instance ID, so an instance recreated under the same name keeps its row.
+   - The project's page shows each listed instance's enrollment state (not enrolled or waiting for enrollment).
 3. **Enroll each instance:** follow the commands shown for that instance (section 5.6).
 4. **Configure checks and safeguards** per instance.
 
@@ -619,7 +627,7 @@ Implement in this order, one step at a time:
 3. Setup and local login: one-time setup token, setup wizard creating the local administrator (Argon2id), sessions and CSRF; introduces SQLite.
 4. Add one GCP project.
 5. List the project's instances from the API.
-6. Receive client heartbeats and show each instance's heartbeat status.
+6. Receive client heartbeats and show each instance's heartbeat status. Done in four sub-steps (`docs/plans/mvp-step-6.md`): 6.1 pick instances and issue enrollment tokens, 6.2 client API foundations and the enrollment exchange, 6.3 signed heartbeats and heartbeat status, 6.4 the client.
 7. Receive disk used and total every minute.
 8. Daily scheduled job with a "Run now" button.
 9. Send a test email to the administrator.
