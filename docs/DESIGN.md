@@ -683,11 +683,10 @@ Implement in this order, one step at a time:
 4. Add one GCP project.
 5. List the project's instances from the API.
 6. Receive client heartbeats and show each instance's heartbeat status. Done in four sub-steps (`docs/plans/mvp-step-6.md`): 6.1 pick instances and issue enrollment tokens, 6.2 client API foundations and the enrollment exchange, 6.3 signed heartbeats and heartbeat status, 6.4 the client.
-7. Receive disk used and total every minute.
+7. Receive disk used and total every minute and store them as runs (section 9.1).
 8. Daily scheduled job with a "Run now" button.
 9. Send a test email to the administrator.
-10. Store every reading as runs (section 9.1).
-11. Read stored runs through an API endpoint for future charts.
+10. Read stored runs through an API endpoint for future charts.
 
 First steps after the MVP: the egress indicator (section 10.3) and Google sign-in.
 
