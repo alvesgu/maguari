@@ -160,15 +160,16 @@ server/src/Access/           Generic context
 server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption, HTTP client)
 server/src/Http/             Slim wiring: routes, route groups, middleware, thin controllers
 server/templates/            Plain PHP templates for the web app (no template engine)
-server/public/               index.php only (web root)
+server/public/               Web root: index.php and static assets (assets/maguari.css)
 ```
 
 1. PHP namespace root: `Maguari\Server\` mapped to `server/src/` (PSR-4).
 2. Each context keeps its database migrations inside its own folder, as numbered `.sql` files in `server/src/<Context>/Migrations/`. A runner in `Kernel/Database/` finds them by scanning those folders (so Kernel never names a context), applies pending ones and records them in `kernel_migrations`, the one table without a context prefix. Migrations run from the CLI (`maguari-server migrate`), never on a web request.
 3. Table names are prefixed with the context name (for example `fleet_instances`, `monitoring_metric_runs`), so ownership is visible in SQLite.
-4. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more.
-5. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
-6. Internal structure of each context (layers) is decided in a later design step, starting with the core contexts.
+4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. nginx will serve `/assets/` directly (packaging).
+5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more.
+6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
+7. Internal structure of each context (layers) is decided in a later design step, starting with the core contexts.
 
 ## 4. Versioning
 
