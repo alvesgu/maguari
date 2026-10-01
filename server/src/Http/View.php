@@ -31,14 +31,25 @@ final class View
         int $status = 200,
     ): ResponseInterface {
         $data['csrf'] = self::csrfFields($request);
-        $content = $this->renderFile($template, $data);
-        $page = $this->renderFile('layout', ['title' => $data['title'] ?? 'Maguari', 'content' => $content]);
-        $response->getBody()->write($page);
+        $response->getBody()->write($this->page($template, $data));
 
         return $response
             ->withStatus($status)
             ->withHeader('Content-Type', 'text/html; charset=utf-8')
             ->withHeader('Cache-Control', 'no-store');
+    }
+
+    /**
+     * The template inside the page layout, for callers that have no request,
+     * such as the error renderer. $csrf is not set.
+     *
+     * @param array<string, mixed> $data
+     */
+    public function page(string $template, array $data = []): string
+    {
+        $content = $this->renderFile($template, $data);
+
+        return $this->renderFile('layout', ['title' => $data['title'] ?? 'Maguari', 'content' => $content]);
     }
 
     private static function csrfFields(ServerRequestInterface $request): string

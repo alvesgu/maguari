@@ -166,6 +166,51 @@ final class AppTest extends TestCase
         $this->assertSecurityHeaders($response);
     }
 
+    /**
+     * @return array<string, array{string, string, int, string}>
+     */
+    public static function errorPages(): array
+    {
+        return [
+            'not found' => ['GET', '/nonexistent', 404, '404 Not Found'],
+            'method not allowed' => ['DELETE', '/api/client/heartbeat', 405, '405 Method Not Allowed'],
+            'server error' => ['GET', '/test-failure', 500, '500 Internal Server Error'],
+        ];
+    }
+
+    /**
+     * Slim's default HTML error page links back with an inline onclick, which
+     * the Content-Security-Policy blocks, so its link did nothing.
+     *
+     * @dataProvider errorPages
+     */
+    public function testErrorPagesAreMaguarisOwnWithoutInlineScripts(string $method, string $path, int $status, string $title): void
+    {
+        $response = $this->request($method, $path, $this->appWithFailingRoute(false));
+        $body = (string) $response->getBody();
+
+        $this->assertSame($status, $response->getStatusCode());
+        $this->assertStringStartsWith('text/html', $response->getHeaderLine('Content-Type'));
+        $this->assertStringContainsString('<h1>' . $title . '</h1>', $body);
+        $this->assertStringContainsString('<a href="/admin">Go to the dashboard</a>', $body);
+        $this->assertDoesNotMatchRegularExpression('/\son[a-z]+\s*=/i', $body, 'No inline event handlers.');
+        $this->assertDoesNotMatchRegularExpression('/<script|<style|\sstyle\s*=|javascript:/i', $body, 'No inline scripts or styles.');
+        $this->assertStringNotContainsString('href="#"', $body);
+        $this->assertStringNotContainsString('secret-detail', $body);
+        $this->assertSecurityHeaders($response);
+    }
+
+    public function testErrorPageForABrowsersAcceptHeader(): void
+    {
+        $request = (new ServerRequestFactory())->createServerRequest('GET', '/nonexistent')
+            ->withHeader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+
+        $body = (string) $this->environment->app()->handle($request)->getBody();
+
+        $this->assertStringContainsString('<a href="/admin">Go to the dashboard</a>', $body);
+        $this->assertDoesNotMatchRegularExpression('/\son[a-z]+\s*=/i', $body);
+    }
+
     public function testNotFoundIsNotLogged(): void
     {
         $logged = $this->captureErrorLog(fn () => $this->request('GET', '/nonexistent', $this->notReadyApp(true)));

@@ -82,6 +82,15 @@ final class App
             [HttpNotFoundException::class, HttpMethodNotAllowedException::class],
             fn ($request, \Throwable $exception): ResponseInterface => $routineHandler($request, $exception, false, false, false),
         );
+        // Slim's own HTML error page links back with an inline onclick, which
+        // the Content-Security-Policy blocks. Ours is registered for
+        // Accept: text/html and as the default, which Slim uses when the Accept
+        // header names no type it knows.
+        $errorPage = new ErrorPageRenderer(new View());
+        foreach ([$errorMiddleware->getDefaultErrorHandler(), $routineHandler] as $handler) {
+            $handler->registerErrorRenderer('text/html', $errorPage);
+            $handler->setDefaultErrorRenderer('text/html', $errorPage);
+        }
         $app->add(new SecurityHeadersMiddleware());
 
         if ($access === null || $fleet === null) {
