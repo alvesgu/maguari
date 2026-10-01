@@ -584,6 +584,8 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | `migrate` | Creates the database if needed and applies pending migrations (section 3.1) |
 | `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Refuses once an administrator exists. |
 
+No command ends with a PHP stack trace. Any error is printed as one line on stderr with exit code 1. When the database cannot be created or opened, the line names its path and mentions `MAGUARI_DATABASE`.
+
 `migrate` and `issue-setup-token` refuse to run as root, so the database is never owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
 
 ### 12.3 APT repository

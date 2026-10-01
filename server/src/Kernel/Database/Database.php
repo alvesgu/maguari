@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Maguari\Server\Kernel\Database;
 
 use PDO;
-use RuntimeException;
+use PDOException;
 
 /**
  * The SQLite database file. The connection opens on first use, so code that
@@ -45,6 +45,8 @@ final class Database
     /**
      * Creates an empty database file with mode 0600 (and its directory with mode
      * 0700) if it does not exist yet. Only the CLI creates the database.
+     *
+     * @throws DatabaseUnavailable
      */
     public function create(): void
     {
@@ -54,15 +56,17 @@ final class Database
 
         $directory = dirname($this->path);
 
-        if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
-            throw new RuntimeException(sprintf('Could not create directory "%s".', $directory));
+        // PHP's warnings are suppressed and their text goes into the exception
+        // instead, so the CLI can print one clean line.
+        if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
+            throw new DatabaseUnavailable($this->path, sprintf('could not create directory %s (%s)', $directory, self::lastError()));
         }
 
         $previousUmask = umask(0077);
 
         try {
-            if (!touch($this->path)) {
-                throw new RuntimeException(sprintf('Could not create database "%s".', $this->path));
+            if (!@touch($this->path)) {
+                throw new DatabaseUnavailable($this->path, sprintf('could not create the file (%s)', self::lastError()));
             }
         } finally {
             umask($previousUmask);
@@ -73,6 +77,8 @@ final class Database
 
     /**
      * Opens the existing database. Never creates it: a missing file is an error.
+     *
+     * @throws DatabaseUnavailable
      */
     public function pdo(): PDO
     {
@@ -81,7 +87,7 @@ final class Database
         }
 
         if (!$this->exists()) {
-            throw new RuntimeException(sprintf('Database "%s" does not exist.', $this->path));
+            throw new DatabaseUnavailable($this->path, 'the file does not exist');
         }
 
         // The -wal and -shm files are created with the process umask.
@@ -96,6 +102,9 @@ final class Database
             $pdo->exec('PRAGMA busy_timeout = 5000');
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('PRAGMA foreign_keys = ON');
+        } catch (PDOException $exception) {
+            // For example an unreadable file, or one that is not SQLite.
+            throw new DatabaseUnavailable($this->path, $exception->getMessage(), $exception);
         } finally {
             umask($previousUmask);
         }
@@ -126,5 +135,17 @@ final class Database
 
             throw $exception;
         }
+    }
+
+    /**
+     * The text of PHP's last warning without its "function(): " prefix, for
+     * example "Permission denied".
+     */
+    private static function lastError(): string
+    {
+        $message = error_get_last()['message'] ?? 'unknown error';
+        $position = strpos($message, '): ');
+
+        return $position === false ? $message : substr($message, $position + 3);
     }
 }

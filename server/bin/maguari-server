@@ -10,6 +10,7 @@ use Maguari\Server\Access\Exception\InvalidSeedConfig;
 use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Access\SeedConfigReader;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Kernel\Database\DatabaseUnavailable;
 use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\SystemClock;
 
@@ -194,4 +195,32 @@ function checkSeedConfigCommand(array $args): int
     return 0;
 }
 
-exit(maguariServerMain($argv));
+/**
+ * Runs the command and turns any exception into one line on stderr and exit
+ * code 1, so no command ends with a PHP stack trace. Printing the message is
+ * safe because exception messages never contain secrets.
+ *
+ * @param string[] $args
+ */
+function runMaguariServer(array $args): int
+{
+    $databaseHint = 'Check that this user can create and write it, or set MAGUARI_DATABASE to another path '
+        . '(development and tests only).';
+
+    try {
+        return maguariServerMain($args);
+    } catch (DatabaseUnavailable $exception) {
+        $message = $exception->getMessage() . ' ' . $databaseHint;
+    } catch (PDOException $exception) {
+        // A database that opened but failed later, for example a read-only file.
+        $message = sprintf('Database error at %s: %s. %s', Database::fromEnvironment()->path(), $exception->getMessage(), $databaseHint);
+    } catch (Throwable $exception) {
+        $message = sprintf('maguari-server failed: %s', $exception->getMessage());
+    }
+
+    fwrite(STDERR, str_replace(["\r", "\n"], ' ', $message) . "\n");
+
+    return 1;
+}
+
+exit(runMaguariServer($argv));

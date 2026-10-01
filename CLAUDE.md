@@ -10,7 +10,7 @@ Lightweight, self-hosted watchdog for Ubuntu VM instances on Google Compute Engi
 ## Development environment
 
 - Development runs natively on Ubuntu 24.04 with PHP 8.3. The supported minimum is PHP 8.1 on Ubuntu 22.04.
-- `scripts/test-ubuntu-22.04.sh` runs the server PHPUnit suite inside an `ubuntu:22.04` Podman container with the PHP packages the project needs. The first run builds a cached image; pass `--rebuild` after changing the package list. Other arguments go to PHPUnit.
+- `scripts/test-ubuntu-22.04.sh` runs the server PHPUnit suite inside an `ubuntu:22.04` Podman container with the PHP packages the project needs, as the unprivileged user `nobody`. The first run builds a cached image; pass `--rebuild` after changing the package list. Other arguments go to PHPUnit.
 - Before each commit, run both the normal tests (`vendor/bin/phpunit` in `server/`) and `scripts/test-ubuntu-22.04.sh`. Both must pass.
 - After committing, push to main when both test suites pass.
 

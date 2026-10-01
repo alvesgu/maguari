@@ -34,7 +34,9 @@ fi
 
 # The repository is mounted read-only and server/ is copied without vendor/, so
 # dependencies are installed from composer.lock inside the container and the
-# host's vendor/ is never touched.
+# host's vendor/ is never touched. Composer runs as root, but PHPUnit runs as
+# nobody: the app never runs as root, and maguari-server refuses root for its
+# database commands, which the CLI tests exercise.
 podman run --rm \
     --volume "$repo_root:/src:ro" \
     --volume maguari-composer-cache:/root/.cache/composer \
@@ -46,5 +48,6 @@ podman run --rm \
             | tar --extract --directory /work
         cd /work
         composer install --no-interaction --no-progress --quiet
-        vendor/bin/phpunit "$@"
+        chown -R nobody:nogroup /work
+        setpriv --reuid=nobody --regid=nogroup --clear-groups vendor/bin/phpunit "$@"
     ' bash "$@"
