@@ -508,15 +508,13 @@ For each sub-step:
    scripts/test-ubuntu-22.04.sh
    ```
 
-Manual check after 6.4, in development, from `server/`. Once, create the key file (needed from 6.2 on):
+Manual check after 6.4, in development, from `server/`. In each terminal, load the development environment first (`scripts/dev-env.sh`, added after the 6.2 review):
 
 ```
-export MAGUARI_DATABASE="$PWD/var/dev.sqlite"
+source ../scripts/dev-env.sh
 ```
 
-```
-export MAGUARI_SECRET_KEY_FILE="$PWD/var/secret.key"
-```
+Once, create the key file (needed from 6.2 on):
 
 ```
 bin/maguari-server create-secret-key
@@ -530,16 +528,16 @@ bin/maguari-server migrate
 bin/maguari-server set-base-url --base-url=http://localhost:8080
 ```
 
-Then start the server with the same exports plus `MAGUARI_GCP_CREDENTIALS=application-default`:
+Then start the server:
 
 ```
 php -S localhost:8080 -t public
 ```
 
-Open a project page, press "Enroll" on an instance and copy the token. In a second terminal, from the repository root:
+Open a project page, press "Enroll" on an instance and copy the token. In a second terminal, from the repository root (6.4 adds `MAGUARI_CLIENT_DIR`, pointing at `client/var/`, to `scripts/dev-env.sh`):
 
 ```
-export MAGUARI_CLIENT_DIR="$PWD/client/var"
+source scripts/dev-env.sh
 ```
 
 ```

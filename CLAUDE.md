@@ -11,6 +11,7 @@ Lightweight, self-hosted watchdog for Ubuntu VM instances on Google Compute Engi
 
 - Development runs natively on Ubuntu 24.04 with PHP 8.3. The supported minimum is PHP 8.1 on Ubuntu 22.04.
 - `scripts/test-ubuntu-22.04.sh` runs the server PHPUnit suite inside an `ubuntu:22.04` Podman container with the PHP packages the project needs, as the unprivileged user `nobody`. The first run builds a cached image; pass `--rebuild` after changing the package list. Other arguments go to PHPUnit.
+- In each new terminal, load the development environment with `source scripts/dev-env.sh` (bash, from anywhere in the repository). It sets `MAGUARI_DATABASE` and `MAGUARI_SECRET_KEY_FILE` to `server/var/dev.sqlite` and `server/var/secret.key` (ignored by Git) and `MAGUARI_GCP_CREDENTIALS=application-default`. These variables are for development only. With them loaded, from `server/`: `bin/maguari-server create-secret-key` and `bin/maguari-server migrate` once (and `migrate` again after pulling new migrations), `bin/maguari-server set-base-url --base-url=http://localhost:8080` once, then `php -S localhost:8080 -t public` to run the app.
 - Before each commit, run both the normal tests (`vendor/bin/phpunit` in `server/`) and `scripts/test-ubuntu-22.04.sh`. Both must pass.
 - After committing, push to main when both test suites pass.
 
