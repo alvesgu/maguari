@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Maguari\Server\Clients;
 
 /**
- * How recent an enrolled client's last heartbeat is. Display only: the
- * heartbeat-age check (design section 6.2) comes with Monitoring.
+ * How recent an enrolled client's last heartbeat is. Display only.
+ *
+ * TEMPORARY (MVP): to be replaced by Monitoring's heartbeat-age check, based
+ * on each instance's interval (design sections 5.2 and 6.2). See
+ * ClientsApi::LATE_AFTER_SECONDS.
  */
 enum HeartbeatState
 {

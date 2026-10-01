@@ -24,6 +24,7 @@
 <?php endforeach; ?>
 </tbody>
 </table>
+<?php /* TEMPORARY (MVP): fixed 90 seconds until Monitoring's heartbeat-age check (ClientsApi::LATE_AFTER_SECONDS). */ ?>
 <p>Heartbeats are expected every minute. A heartbeat older than 90 seconds is late. Reload the page to update.</p>
 <?php endif; ?>
 <form method="post" action="/admin/logout">

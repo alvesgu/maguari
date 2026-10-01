@@ -36,6 +36,11 @@ final class ClientsApi
     /**
      * A heartbeat older than 1.5 times the interval is late, the same factor
      * as for gaps in runs (design section 9.1 item 3).
+     *
+     * TEMPORARY (MVP): judging heartbeat age is Monitoring's job, and a fixed
+     * 90 seconds will be wrong once the interval is configurable per instance.
+     * Replace it with Monitoring's heartbeat-age check, based on each
+     * instance's interval (design sections 5.2 and 6.2).
      */
     public const LATE_AFTER_SECONDS = Protocol::HEARTBEAT_INTERVAL_SECONDS * 3 / 2;
 
@@ -179,6 +184,10 @@ final class ClientsApi
     }
 
     /**
+     * TEMPORARY (MVP): the On time / Late judgment here belongs to
+     * Monitoring's heartbeat-age check (see LATE_AFTER_SECONDS). Clients will
+     * keep providing the last heartbeat time.
+     *
      * @param int[] $instanceIds
      * @return array<int, HeartbeatStatus> keyed by instance ID, for those of
      *         $instanceIds that are enrolled

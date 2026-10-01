@@ -258,6 +258,7 @@ CREATE INDEX clients_nonces_expires_at ON clients_nonces (expires_at);
 
 - `ClientsApi::heartbeatStatuses(int[] $instanceIds)` returns, per instance: not enrolled, waiting for enrollment (token issued), enrolled with no heartbeat yet or the last heartbeat time.
 - Status labels: **On time** when the last heartbeat is at most 90 seconds old (1.5 times the 60 second interval, the same factor as design 9.1 item 3), **Late** otherwise. Display only, computed when the page renders; nothing is alerted.
+- **Temporary (marked after the 6.3 review):** this judgment is heartbeat-age logic, which belongs to Monitoring, and the fixed 90 seconds will be wrong once the interval is configurable. It stays in Clients for the MVP, marked `TEMPORARY (MVP)` in the code, and will be replaced by Monitoring's heartbeat-age check, based on each instance's interval.
 - **Dashboard (`/admin`):** a table of picked instances (project, instance, zone, status, last heartbeat as UTC time with age, client version). It reads only SQLite, so it works when Google's API does not.
 - **Project page:** the live list gains a column showing the same status for picked instances and the "Enroll" button (D5) for every instance.
 - No auto-refresh (no JavaScript yet). Reload to update.

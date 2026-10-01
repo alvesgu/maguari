@@ -221,6 +221,8 @@ The server checks `protocol_version` (supported versions only), `client_version`
 
 The web app shows each enrolled instance's last heartbeat on the dashboard (`/admin`, every picked instance, read from SQLite only) and on its project's page: "No heartbeat yet", "On time" (at most 90 seconds old, 1.5 times the interval, the same factor as section 9.1 item 3) or "Late". This is display only; the heartbeat-age check that opens incidents (section 6.2) comes with Monitoring.
 
+**Temporary (MVP):** the "On time"/"Late" judgment is heartbeat-age logic, which belongs to Monitoring, and its fixed 90 seconds will be wrong once the heartbeat interval is configurable (section 7.3). It lives in Clients only for the MVP (`ClientsApi::LATE_AFTER_SECONDS`) and will be replaced by Monitoring's heartbeat-age check, based on each instance's interval. Clients will keep providing the last heartbeat time.
+
 ### 5.3 Commands
 
 1. Every command has a unique ID. The client reports its result on the next heartbeat.
