@@ -39,7 +39,7 @@ I would stop after each sub-step for your review before starting the next.
 
 An alternative is three sub-steps, merging 6.2 into 6.3. It saves one round of review but makes 6.3 the biggest and most security-sensitive commit of the project so far. Not recommended.
 
-## Interpretations to confirm
+## Interpretations (confirmed)
 
 **I1. "Heartbeat status" is last contact, not the heartbeat-age check.** Design 6.2 lists "heartbeat age per instance" as a server-side **check**, which belongs to Monitoring and would open incidents. This step only **shows** when each enrolled instance last sent a valid heartbeat and whether that is recent. It stores the time in Clients (protocol-level metadata about the client) and creates no Monitoring code, no check results and no incidents. The heartbeat-age check comes with checks and incidents later and will read the time through `ClientsApi`.
 
@@ -51,7 +51,9 @@ An alternative is three sub-steps, merging 6.2 into 6.3. It saves one round of r
 
 **I5. End-to-end verification is local.** The development server runs on `http://localhost` and is not reachable from GCE instances, and the client is not packaged. So in 6.4 the client runs on the development machine against the local server, using a token issued for a real listed instance. The binding to that instance is real on the server side; the client simply is not running on it. A real instance is first enrolled when packaging and a deployed server exist.
 
-## Decisions (proposed)
+## Decisions (confirmed)
+
+All interpretations and decisions were approved as proposed, with three additions recorded in D10, D20 and "Out of scope": `create-secret-key` refuses root and creates the key with mode 0600; the client's stored secret is a file readable only by the client's own user; nginx-level rate limiting for `/api/client/*` belongs to packaging.
 
 ### Fleet: picking (6.1)
 
@@ -153,7 +155,7 @@ with `Content-Type: application/json` and `Cache-Control: no-store`. Codes are f
 
 **D9. Key file.** 32 raw bytes at `/etc/maguari/secret.key`, mode 0600, readable only by the app user. `MAGUARI_SECRET_KEY_FILE` overrides the path for development and tests only, like `MAGUARI_DATABASE`. A file that is not exactly 32 bytes is an error.
 
-**D10. Who creates the key.** A new subcommand, `maguari-server create-secret-key`, creates the file with mode 0600 if it does not exist and **refuses to overwrite** an existing one, because a new key makes every stored client secret unreadable (every instance would have to enroll again). Like `migrate`, it refuses to run as root. Packaging will later create the file in its post-install step (design 12.2 item 1) and may revisit how.
+**D10. Who creates the key.** A new subcommand, `maguari-server create-secret-key`, creates the file with mode 0600 if it does not exist and **refuses to overwrite** an existing one, because a new key makes every stored client secret unreadable (every instance would have to enroll again). **It refuses to run as root, like `migrate`**, so the key file is never owned by root and the app user can read it. The file is **created with mode 0600** (under a `0077` umask, so it is never readable by others even for a moment) and its directory with mode 0700 if missing. Packaging will later create the file in its post-install step (design 12.2 item 1) and may revisit how.
 
 The web app treats a missing or unreadable key like a database that is not ready: `/admin/*` and `/auth/*` return `503` with a message naming the command, and `/api/client/*` returns `503 unavailable`. One readiness rule is simpler than a half-working app. Existing development databases need one extra command, which the verification section lists.
 
@@ -274,7 +276,7 @@ Commands (`client/bin/maguari-client`):
 | `heartbeat` | Sends one heartbeat and exits `0` on `204` or `200`, non-zero otherwise. For manual checks. |
 | `run` | Sends a heartbeat every 60 seconds on a fixed schedule (no drift), logs failures to stderr and keeps going. The systemd service will run this later. |
 
-- **Credentials file:** `/var/lib/maguari-client/credentials.json`, mode 0600, holding the server URL, `client_id` and secret. `MAGUARI_CLIENT_DIR` overrides the directory for development and tests only. Written atomically (temporary file and rename).
+- **Credentials file:** `/var/lib/maguari-client/credentials.json`, holding the server URL, `client_id` and secret. **Readable only by the client's own user: mode 0600**, and its directory mode 0700 when the client creates it. The temporary file is created under a `0077` umask and chmodded to 0600 before the secret is written, then renamed into place, so the secret is never readable by anyone else, even briefly. `MAGUARI_CLIENT_DIR` overrides the directory for development and tests only. When loading, the client refuses a credentials file that is readable or writable by group or others, with a message saying how to fix the mode.
 - **Server URL:** `https://` only; `http://` accepted only for `localhost`, the same rule as `issue-setup-token --base-url`.
 - **HTTP:** PHP's stream wrapper with peer verification, a 10 second timeout and no redirects followed. This duplicates a little of the server's `StreamHttpClient` on purpose: the client package never contains server code (design 3).
 - Refuses to run as root (design 5.4: the client runs as an unprivileged user).
@@ -294,6 +296,7 @@ Commands (`client/bin/maguari-client`):
 - Removing instances, revoking a client without re-enrolling, rotating the secret key.
 - Settings for the heartbeat interval (fixed at 60 seconds for now).
 - IP rate limiting on `/api/client/enroll` (D12).
+- **nginx-level rate limiting for `/api/client/*`** (`limit_req` per IP, request body size limits). It belongs to packaging, together with the rest of the nginx configuration (design 12.2). The application-level limits in this step (D12, D14 and D15) do not depend on it.
 - Any CSS or JavaScript.
 
 ## Repository changes
@@ -449,7 +452,7 @@ No test touches the network. Compute Engine answers are queued on `FakeHttpClien
 
 **6.2**
 1. `SecretBox`: round trip; a different key or a modified ciphertext fails to decrypt; each encryption uses a new nonce.
-2. Key file: created with mode 0600 and 32 bytes; never overwritten; a wrong length is an error; `create-secret-key` refuses root.
+2. Key file: created with mode 0600 and 32 bytes; never overwritten; a wrong length is an error; `create-secret-key` refuses root (checked in a separate process, like `migrate`).
 3. Readiness: a missing key file makes `/admin`, `/auth` and `/api/client` return 503 (JSON for the last one).
 4. JSON errors: under `/api/client/` an unknown route gives `404 not_found`, a wrong method `405 method_not_allowed` and a thrown exception `500 server_error`, all JSON whatever `Accept` says, with no exception message in the body. Outside `/api/client/` the HTML pages are unchanged. Logging behavior is unchanged.
 5. Enrollment: a valid token returns `client_id` and secret and is consumed; a second use, an expired token and an unknown token all give `invalid_token`; re-enrolling replaces the instance's client; the stored secret is encrypted (the plain secret is not in the database file); an unsupported protocol version gives `unsupported_protocol`; malformed bodies give `bad_request`.
@@ -463,7 +466,7 @@ No test touches the network. Compute Engine answers are queued on `FakeHttpClien
 6. Status: not enrolled, waiting for enrollment, no heartbeat yet, on time at 90 seconds and late at 91 seconds (with `FixedClock`); the dashboard works with a failing fake Compute Engine.
 
 **6.4**
-1. Enroll writes the credentials file with mode 0600 and leaves an existing file untouched on failure; `http://` is refused except for `localhost`.
+1. Enroll writes the credentials file with mode 0600 (and creates its directory with mode 0700); a credentials file with group or other permission bits is refused when loading; enroll leaves an existing file untouched on failure; `http://` is refused except for `localhost`.
 2. Heartbeat requests are signed correctly, checked by the server's verifier.
 3. The runner keeps its schedule after a failed heartbeat and logs a sentence per error code.
 4. End to end: issue a token through `ClientsApi`, enroll with the real client against the Slim app, send a heartbeat and see the status change to "On time".
@@ -531,11 +534,6 @@ client/bin/maguari-client run
 
 Reload `/admin`: the instance shows "On time". Stop the client, wait two minutes, reload: "Late". Run the same `enroll` command again: `invalid_token`.
 
-## Questions for you
+## Answers
 
-1. Is the four-part split (6.1 to 6.4) and its order right, with a review stop after each?
-2. Interpretations I1 to I5, especially I1 (status display only, no Monitoring code yet) and I4 (only the `enroll` command on the page until packaging).
-3. D10: a separate `create-secret-key` subcommand, and the whole app returning 503 while the key is missing?
-4. D4: a 1 hour token lifetime?
-5. D11: the table name `clients_clients`?
-6. D12: no IP rate limit on `/api/client/enroll` for now?
+All five recommendations were approved (split and order, I1 to I5, D10, D4, D11, D12), with the three additions above. Implementation starts with 6.1 and stops for review after it.
