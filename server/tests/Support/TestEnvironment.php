@@ -8,6 +8,7 @@ use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Access\Administrator;
 use Maguari\Server\Access\SeedConfigReader;
 use Maguari\Server\Clients\ClientsApi;
+use Maguari\Server\Clients\EnrolledClient;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Http\App;
 use Maguari\Server\Kernel\Database\Database;
@@ -85,6 +86,16 @@ final class TestEnvironment
             self::ADMINISTRATOR_PASSWORD,
             self::ADMINISTRATOR_PASSWORD,
         );
+    }
+
+    /**
+     * Issues a token for the instance and enrolls a client with it.
+     */
+    public function enrollClient(int $instanceId): EnrolledClient
+    {
+        $token = $this->clients->issueEnrollmentToken($instanceId)->token;
+
+        return $this->clients->enroll(json_encode(['protocol_version' => 1, 'client_version' => '0.1.0', 'token' => $token], JSON_THROW_ON_ERROR));
     }
 
     public function cleanUp(): void

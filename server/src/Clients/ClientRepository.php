@@ -56,4 +56,48 @@ final class ClientRepository
 
         return array_map('intval', $statement->fetchAll(\PDO::FETCH_COLUMN));
     }
+
+    public function secretCiphertext(string $clientId): ?string
+    {
+        $statement = $this->database->pdo()->prepare('SELECT secret_ciphertext FROM clients_clients WHERE client_id = ?');
+        $statement->execute([$clientId]);
+        $ciphertext = $statement->fetchColumn();
+
+        return $ciphertext === false ? null : (string) $ciphertext;
+    }
+
+    public function recordHeartbeat(string $clientId, int $receivedAt, string $clientVersion, int $protocolVersion): void
+    {
+        $this->database->pdo()->prepare(
+            'UPDATE clients_clients SET last_heartbeat_at = ?, client_version = ?, protocol_version = ? WHERE client_id = ?',
+        )->execute([$receivedAt, $clientVersion, $protocolVersion, $clientId]);
+    }
+
+    /**
+     * @param int[] $instanceIds
+     * @return array<int, array{last_heartbeat_at: ?int, client_version: ?string}> keyed by
+     *         instance ID, for those of $instanceIds that have a client
+     */
+    public function heartbeatsAmong(array $instanceIds): array
+    {
+        if ($instanceIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($instanceIds), '?'));
+        $statement = $this->database->pdo()->prepare(
+            "SELECT instance_id, last_heartbeat_at, client_version FROM clients_clients WHERE instance_id IN ({$placeholders})",
+        );
+        $statement->execute(array_values($instanceIds));
+        $heartbeats = [];
+
+        foreach ($statement->fetchAll() as $row) {
+            $heartbeats[(int) $row['instance_id']] = [
+                'last_heartbeat_at' => $row['last_heartbeat_at'] === null ? null : (int) $row['last_heartbeat_at'],
+                'client_version' => $row['client_version'],
+            ];
+        }
+
+        return $heartbeats;
+    }
 }

@@ -45,6 +45,16 @@ final class InstanceRepository
     }
 
     /**
+     * @return Instance[] every picked instance, sorted by GCP project ID, name, then zone
+     */
+    public function all(): array
+    {
+        $statement = $this->database->pdo()->query(self::SELECT . ' ORDER BY p.gcp_project_id, i.name, i.zone');
+
+        return array_map(self::instance(...), $statement->fetchAll());
+    }
+
+    /**
      * @param array<string, mixed> $row
      */
     private static function instance(array $row): Instance

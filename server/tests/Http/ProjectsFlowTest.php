@@ -174,7 +174,7 @@ final class ProjectsFlowTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $body = (string) $response->getBody();
         $this->assertStringContainsString('<h1>my-project</h1>', $body);
-        $this->assertStringContainsString('<tr><td>web-1</td><td>us-east1-b</td><td>Running</td><td>e2-micro</td><td>Not enrolled</td>', $body);
+        $this->assertStringContainsString("<tr><td>web-1</td><td>us-east1-b</td><td>Running</td><td>e2-micro</td>\n<td>Not enrolled</td>", $body);
         $this->assertStringNotContainsString('machineTypes/', $body);
         $this->assertStringContainsString('Some zones could not be reached: us-west1-a.', $body);
         $this->assertStringNotContainsString(FakeTokenSource::TOKEN, $body);
@@ -405,6 +405,7 @@ final class ProjectsFlowTest extends TestCase
         $this->environment->clients->enroll(json_encode(['protocol_version' => 1, 'client_version' => '0.1.0', 'token' => $match[1]]));
         $this->queueListing('web-1');
 
-        $this->assertStringContainsString('<td>Enrolled</td>', (string) $browser->get($path)->getBody());
+        $body = (string) $browser->get($path)->getBody();
+        $this->assertStringContainsString("<td>Enrolled</td>\n<td>No heartbeat yet</td>", $body);
     }
 }

@@ -7,6 +7,7 @@ namespace Maguari\Server\Http\Controller;
 use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Clients\EnrollmentState;
+use Maguari\Server\Clients\HeartbeatStatus;
 use Maguari\Server\Fleet\Exception\InstanceNotFound;
 use Maguari\Server\Fleet\Exception\InvalidInstanceName;
 use Maguari\Server\Fleet\Exception\InvalidProjectId;
@@ -73,7 +74,7 @@ final class ProjectsController
             'title' => $project->gcpProjectId,
             'project' => $project,
             'instances' => $instances,
-            'enrollmentStates' => $this->enrollmentStates($project),
+            ...$this->statuses($project),
             'error' => $error,
         ]);
     }
@@ -132,19 +133,29 @@ final class ProjectsController
     }
 
     /**
-     * @return array<string, EnrollmentState> keyed by "zone/name", for the project's picked instances
+     * The project's picked instances' enrollment states and heartbeat
+     * statuses, keyed by "zone/name" to match the live list.
+     *
+     * @return array{enrollmentStates: array<string, EnrollmentState>, heartbeats: array<string, HeartbeatStatus>}
      */
-    private function enrollmentStates(Project $project): array
+    private function statuses(Project $project): array
     {
         $picked = $this->fleet->pickedInstances($project->id);
-        $states = $this->clients->enrollmentStates(array_map(static fn ($instance): int => $instance->id, $picked));
-        $byName = [];
+        $ids = array_map(static fn ($instance): int => $instance->id, $picked);
+        $states = $this->clients->enrollmentStates($ids);
+        $heartbeats = $this->clients->heartbeatStatuses($ids);
+        $statuses = ['enrollmentStates' => [], 'heartbeats' => []];
 
         foreach ($picked as $instance) {
-            $byName[$instance->zone . '/' . $instance->name] = $states[$instance->id];
+            $key = $instance->zone . '/' . $instance->name;
+            $statuses['enrollmentStates'][$key] = $states[$instance->id];
+
+            if (isset($heartbeats[$instance->id])) {
+                $statuses['heartbeats'][$key] = $heartbeats[$instance->id];
+            }
         }
 
-        return $byName;
+        return $statuses;
     }
 
     private function page(

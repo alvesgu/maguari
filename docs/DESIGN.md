@@ -215,7 +215,11 @@ Response payload:
 - `report_interval`: optional `{seconds, until}` to temporarily increase reporting frequency (real-time mode). It must always have an end time.
 - `upgrade`: optional `{version}` for the updater (section 12.5)
 
-When there is nothing to send, the response body is empty. This matters for the free tier egress limit (section 14).
+When there is nothing to send, the response is `204 No Content` with an empty body. This matters for the free tier egress limit (section 14).
+
+The server checks `protocol_version` (supported versions only), `client_version` (a version such as `1.2.3`), `client_id` (must equal the `X-Maguari-Client` header) and `sent_at` (integer Unix seconds). `readings`, `checks` and `command_results` are optional lists; until the steps that use them, they are accepted and ignored. Unknown fields are ignored. The server stores its **own** receive time as the last heartbeat, never the client's `sent_at`, together with the client and protocol versions.
+
+The web app shows each enrolled instance's last heartbeat on the dashboard (`/admin`, every picked instance, read from SQLite only) and on its project's page: "No heartbeat yet", "On time" (at most 90 seconds old, 1.5 times the interval, the same factor as section 9.1 item 3) or "Late". This is display only; the heartbeat-age check that opens incidents (section 6.2) comes with Monitoring.
 
 ### 5.3 Commands
 
@@ -242,10 +246,14 @@ The package generates the sudoers file (`/etc/sudoers.d/maguari-client`) from th
 
 Each client has its own secret, known only to that client and the server. Every request is signed individually.
 
-- Signature: `HMAC-SHA256(secret, method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + sha256(body))`
-- Headers: `X-Maguari-Client`, `X-Maguari-Timestamp`, `X-Maguari-Nonce`, `X-Maguari-Signature`
-- Replay protection: the server rejects requests with a timestamp more than 5 minutes away from its own clock, and nonces already seen within that window.
+- Signature: `HMAC-SHA256(secret, method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + sha256(body))`, with the method in uppercase, the path as sent and the hashes and the signature as lowercase hex. Both sides use the same code, `shared/src/Signature.php`, tested against fixed vectors.
+- Headers: `X-Maguari-Client` (the client ID, 32 lowercase hex characters), `X-Maguari-Timestamp` (Unix seconds, digits only), `X-Maguari-Nonce` (16 random bytes as 32 lowercase hex characters, new for every request), `X-Maguari-Signature` (64 lowercase hex characters).
+- Signed routes take no query string, because the signature does not cover it: a request with one gets `bad_request`.
+- Replay protection: the server rejects requests with a timestamp more than 5 minutes away from its own clock (`clock_skew`, with `server_time` in the body), and nonces already seen within that window (`replayed_request`).
 - Comparison uses `hash_equals()`.
+- Order of checks: body size (64 KiB at most), query string and header formats, then the clock, all without touching the database; then the client's secret and the signature. Unknown clients and wrong signatures get the same `unauthorized`. Only after the signature is verified does the server, in one `BEGIN IMMEDIATE` transaction, apply the per-client rate limit (section 10.2), reject a seen nonce, record the nonce and delete expired ones. So unauthenticated requests never write to the database.
+- **Nonce storage:** SQLite table `clients_nonces`, scoped per client (php-fpm workers share no memory, so the database is the only store every worker sees). A nonce is kept until `max(timestamp + 300, received_at + 60)`: as long as its request could still pass the clock check, and at least as long as the rate limit window, so a client whose clock runs behind cannot shorten either. Expired nonces are deleted on every accepted request, so no timer is needed. Deleting a client (re-enrollment) deletes its nonces. The table holds about 10 minutes of requests per client at most.
+- A stored secret that the server's key cannot decrypt is a server error (`500`, logged), not the client's fault.
 
 This is per-request signing, not a bearer token like JWT. An intercepted request cannot be altered or reused.
 
@@ -457,7 +465,7 @@ Routes are grouped by surface. Each group has its own middleware chain, so new r
 | Group | Middleware |
 |---|---|
 | `/admin/*` | Session check, CSRF check |
-| `/api/client/*` | HMAC verification, per-client rate limit |
+| `/api/client/*` | HMAC verification, per-client rate limit (at most 20 accepted requests per 60 seconds per client, counted from `clients_nonces`; then `429 rate_limited` with `Retry-After: 60`) |
 | `/auth/*` | IP rate limiting on form submissions; session and CSRF check on forms (setup, local login) |
 
 Security headers are set on every response, whatever the group. CSRF applies to the forms under `/auth/*` only: the future OAuth callback is protected by the OAuth `state` parameter instead.

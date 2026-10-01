@@ -1,5 +1,5 @@
 <?php declare(strict_types=1);
-/** @var \Closure $e @var \Maguari\Server\Fleet\Project $project @var ?\Maguari\Server\Fleet\InstanceList $instances @var array<string, \Maguari\Server\Clients\EnrollmentState> $enrollmentStates @var ?string $error @var string $csrf */ ?>
+/** @var \Closure $e @var \Maguari\Server\Fleet\Project $project @var ?\Maguari\Server\Fleet\InstanceList $instances @var array<string, \Maguari\Server\Clients\EnrollmentState> $enrollmentStates @var array<string, \Maguari\Server\Clients\HeartbeatStatus> $heartbeats @var ?string $error @var string $csrf @var \Closure $partial */ ?>
 <h1><?= $e($project->gcpProjectId) ?></h1>
 <p><a href="/admin/projects">Back to projects</a></p>
 <h2>Instances</h2>
@@ -16,11 +16,12 @@
 <p>No instances in this project.</p>
 <?php else: ?>
 <table>
-<thead><tr><th>Name</th><th>Zone</th><th>Status</th><th>Machine type</th><th>Enrollment</th><th></th></tr></thead>
+<thead><tr><th>Name</th><th>Zone</th><th>Status</th><th>Machine type</th><th>Enrollment</th><th>Heartbeat</th><th>Last heartbeat</th><th></th></tr></thead>
 <tbody>
 <?php foreach ($instances->instances as $instance): ?>
-<?php $enrollment = $enrollmentStates[$instance->zone . '/' . $instance->name] ?? \Maguari\Server\Clients\EnrollmentState::NotEnrolled; ?>
-<tr><td><?= $e($instance->name) ?></td><td><?= $e($instance->zone) ?></td><td><?= $e($instance->status->label()) ?></td><td><?= $e($instance->machineType) ?></td><td><?= $e($enrollment->label()) ?></td>
+<?php $key = $instance->zone . '/' . $instance->name; ?>
+<tr><td><?= $e($instance->name) ?></td><td><?= $e($instance->zone) ?></td><td><?= $e($instance->status->label()) ?></td><td><?= $e($instance->machineType) ?></td>
+<?= $partial('heartbeat', ['enrollment' => $enrollmentStates[$key] ?? \Maguari\Server\Clients\EnrollmentState::NotEnrolled, 'heartbeat' => $heartbeats[$key] ?? null]) ?>
 <td><form method="post" action="/admin/projects/<?= $project->id ?>/instances"><?= $csrf ?><input type="hidden" name="zone" value="<?= $e($instance->zone) ?>"><input type="hidden" name="name" value="<?= $e($instance->name) ?>"><button type="submit">Enroll</button></form></td></tr>
 <?php endforeach; ?>
 </tbody>

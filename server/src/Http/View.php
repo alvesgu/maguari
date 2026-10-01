@@ -9,7 +9,8 @@ use Psr\Http\Message\ServerRequestInterface;
 
 /**
  * Renders plain PHP templates from server/templates/. Templates escape every
- * value with $e(); $csrf holds the already escaped hidden CSRF fields.
+ * value with $e(); $csrf holds the already escaped hidden CSRF fields;
+ * $partial($template, $data) renders another template, without the layout.
  */
 final class View
 {
@@ -79,14 +80,15 @@ final class View
     {
         $file = $this->templateDirectory . '/' . $template . '.php';
         $e = static fn (string $value): string => self::escape($value);
+        $partial = fn (string $template, array $data = []): string => $this->renderFile($template, $data);
 
         ob_start();
 
         try {
-            (static function (string $__file, array $__data, \Closure $e): void {
+            (static function (string $__file, array $__data, \Closure $e, \Closure $partial): void {
                 extract($__data, EXTR_SKIP);
                 require $__file;
-            })($file, $data, $e);
+            })($file, $data, $e, $partial);
         } catch (\Throwable $exception) {
             ob_end_clean();
 

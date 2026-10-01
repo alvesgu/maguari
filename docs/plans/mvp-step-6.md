@@ -246,7 +246,7 @@ CREATE INDEX clients_nonces_expires_at ON clients_nonces (expires_at);
 ```
 
 - **Storage:** SQLite, in the Clients context. php-fpm workers share no memory and APCu is not a dependency, so the database is the only store every worker sees. Nonces are scoped per client.
-- **Expiry:** a request with timestamp `t` passes the clock check while `now <= t + 300`. Its nonce must be remembered exactly that long, so `expires_at = t + 300`. After that, a replay fails the clock check anyway.
+- **Expiry:** a request with timestamp `t` passes the clock check while `now <= t + 300`. Its nonce must be remembered exactly that long, so `expires_at = t + 300`. After that, a replay fails the clock check anyway. **Changed during 6.3:** `expires_at = max(t + 300, received_at + 60)`. With `t + 300` alone, a client whose clock runs 5 minutes behind would have each nonce expire as soon as it was stored, so the rate limit (D15), which counts nonces, would never apply to it.
 - **Cleanup:** every accepted request runs `DELETE FROM clients_nonces WHERE expires_at < :now` inside the same transaction (D14 step 4). The index makes it cheap. No timer is needed, and the daily job (step 8) does not have to exist first. Deleting a client cascades to its nonces.
 - **Size:** at most about 10 minutes of requests per client (a timestamp can be up to 5 minutes ahead), so about 10 rows per instance at the 60 second interval and about 120 in real-time mode. A few thousand rows for a large fleet.
 

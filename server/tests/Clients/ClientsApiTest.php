@@ -6,6 +6,7 @@ namespace Maguari\Server\Tests\Clients;
 
 use Maguari\Server\Clients\EnrollmentState;
 use Maguari\Server\Clients\EnrollmentTokens;
+use Maguari\Server\Clients\HeartbeatState;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
 
@@ -85,5 +86,43 @@ final class ClientsApiTest extends TestCase
 
         $this->assertSame([7 => EnrollmentState::NotEnrolled], $this->environment->clients->enrollmentStates([7]));
         $this->assertSame([], $this->environment->clients->enrollmentStates([]));
+    }
+
+    private function heartbeat(string $clientId): void
+    {
+        $this->environment->clients->recordHeartbeat($clientId, json_encode([
+            'protocol_version' => 1,
+            'client_version' => '0.3.0',
+            'client_id' => $clientId,
+            'sent_at' => $this->environment->clock->now(),
+        ]));
+    }
+
+    public function testHeartbeatStatuses(): void
+    {
+        $this->environment->clients->issueEnrollmentToken(6);
+        $client = $this->environment->enrollClient(7);
+
+        $statuses = $this->environment->clients->heartbeatStatuses([5, 6, 7]);
+
+        $this->assertSame([7], array_keys($statuses), 'Only enrolled instances have a heartbeat status.');
+        $this->assertSame(HeartbeatState::NoHeartbeatYet, $statuses[7]->state);
+        $this->assertNull($statuses[7]->lastHeartbeatAt);
+        $this->assertSame('0.1.0', $statuses[7]->clientVersion);
+
+        $this->heartbeat($client->clientId);
+        $heartbeatAt = $this->environment->clock->now();
+        $this->environment->clock->advance(90);
+        $onTime = $this->environment->clients->heartbeatStatuses([7])[7];
+
+        $this->assertSame(HeartbeatState::OnTime, $onTime->state);
+        $this->assertSame($heartbeatAt, $onTime->lastHeartbeatAt);
+        $this->assertSame(90, $onTime->ageSeconds);
+        $this->assertSame('0.3.0', $onTime->clientVersion);
+
+        $this->environment->clock->advance(1);
+
+        $this->assertSame(HeartbeatState::Late, $this->environment->clients->heartbeatStatuses([7])[7]->state);
+        $this->assertSame([], $this->environment->clients->heartbeatStatuses([]));
     }
 }

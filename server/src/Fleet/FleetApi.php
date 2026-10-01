@@ -108,10 +108,11 @@ final class FleetApi
     }
 
     /**
-     * @return Instance[] the project's picked instances, sorted by name, then zone
+     * @param int|null $projectId one project's instances, or null for every project's
+     * @return Instance[] sorted by name, then zone (by GCP project ID first for every project)
      */
-    public function pickedInstances(int $projectId): array
+    public function pickedInstances(?int $projectId = null): array
     {
-        return $this->instances->inProject($projectId);
+        return $projectId === null ? $this->instances->all() : $this->instances->inProject($projectId);
     }
 }

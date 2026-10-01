@@ -49,6 +49,7 @@ final class MigratorTest extends TestCase
             'Access/0004_access_settings.sql',
             'Clients/0001_clients_enrollment_tokens.sql',
             'Clients/0002_clients_clients.sql',
+            'Clients/0003_clients_nonces.sql',
             'Fleet/0001_fleet_projects.sql',
             'Fleet/0002_fleet_instances.sql',
         ], $migrator->migrate());

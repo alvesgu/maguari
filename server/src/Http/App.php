@@ -10,11 +10,12 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Gcp\AccessTokenSourceFactory;
 use Maguari\Server\Http\Controller\AdminController;
 use Maguari\Server\Http\Controller\EnrollController;
+use Maguari\Server\Http\Controller\HeartbeatController;
 use Maguari\Server\Http\Controller\LoginController;
 use Maguari\Server\Http\Controller\ProjectsController;
 use Maguari\Server\Http\Controller\SetupController;
+use Maguari\Server\Http\Middleware\ClientSignatureMiddleware;
 use Maguari\Server\Http\Middleware\CsrfMiddleware;
-use Maguari\Server\Http\Middleware\FailClosedMiddleware;
 use Maguari\Server\Http\Middleware\RateLimitMiddleware;
 use Maguari\Server\Http\Middleware\RequireAdministratorMiddleware;
 use Maguari\Server\Http\Middleware\SecurityHeadersMiddleware;
@@ -155,9 +156,11 @@ final class App
             $csrf = new CsrfMiddleware($responseFactory);
             $rateLimit = new RateLimitMiddleware($access, $responseFactory);
             $view = new View();
-            $adminController = new AdminController($view);
+            $adminController = new AdminController($fleet, $clients, $view);
             $projectsController = new ProjectsController($fleet, $clients, $access, $view);
             $enrollController = new EnrollController($clients);
+            $heartbeatController = new HeartbeatController($clients);
+            $signature = new ClientSignatureMiddleware($clients, $responseFactory);
             $setupController = new SetupController($access, $view);
             $loginController = new LoginController($access, $view);
 
@@ -182,11 +185,11 @@ final class App
             // Enrollment is not signed: the client has no secret yet, and the
             // one-time token is the credential. Every other client route is in
             // the signed group, so new routes inherit its protection.
-            $app->group('/api/client', function (RouteCollectorProxy $group) use ($enrollController, $responseFactory): void {
+            $app->group('/api/client', function (RouteCollectorProxy $group) use ($enrollController, $heartbeatController, $signature): void {
                 $group->post('/enroll', [$enrollController, 'enroll']);
-                $group->group('', function (RouteCollectorProxy $signed): void {
-                    $signed->post('/heartbeat', fn ($request, ResponseInterface $response): ResponseInterface => $response);
-                })->add(new FailClosedMiddleware($responseFactory));
+                $group->group('', function (RouteCollectorProxy $signed) use ($heartbeatController): void {
+                    $signed->post('/heartbeat', [$heartbeatController, 'receive']);
+                })->add($signature);
             });
         }
 
