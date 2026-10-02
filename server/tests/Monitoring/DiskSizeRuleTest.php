@@ -83,14 +83,23 @@ final class DiskSizeRuleTest extends TestCase
         $this->assertSame(CheckOutcome::Pass, $result->outcome);
     }
 
-    public function testNoRecentRootReadingIsNotChecked(): void
+    public function testNoRecentReadingsAreNotChecked(): void
     {
-        foreach ([[], ['/' => self::total(9.6 * self::GIB, self::AT - 86_401)], ['/boot' => self::total(0.9 * self::GIB)]] as $totals) {
+        foreach ([[], ['/' => self::total(9.6 * self::GIB, self::AT - 86_401)]] as $totals) {
             $result = self::check(10 * self::GIB, $totals);
 
             $this->assertSame(CheckOutcome::NotChecked, $result->outcome);
             $this->assertSame('No disk readings in the last 24 hours.', $result->detail);
         }
+    }
+
+    public function testMissingRootIsNotCheckedRatherThanAFalseFail(): void
+    {
+        // /boot and /boot/efi alone are far below the disk's size.
+        $result = self::check(10 * self::GIB, ['/boot' => self::total(0.9 * self::GIB), '/boot/efi' => self::total(0.1 * self::GIB)]);
+
+        $this->assertSame(CheckOutcome::NotChecked, $result->outcome);
+        $this->assertSame('No reading for / in the last 24 hours, so the boot disk cannot be compared.', $result->detail);
     }
 
     public function testOldReadingsOfOtherFilesystemsAreLeftOut(): void

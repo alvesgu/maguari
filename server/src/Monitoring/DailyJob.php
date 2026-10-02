@@ -8,6 +8,7 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
+use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Shared\Metric;
 
 /**
@@ -18,8 +19,9 @@ use Maguari\Shared\Metric;
 final class DailyJob
 {
     /**
-     * An unfinished run started longer ago than this crashed, and no longer
-     * keeps the job from starting.
+     * An unfinished run started longer ago than this was killed (a failure
+     * the job could catch marks its run failed instead), and no longer keeps
+     * the job from starting.
      */
     public const RUNNING_FOR_AT_MOST_SECONDS = 900;
 
@@ -39,6 +41,7 @@ final class DailyJob
     /**
      * @return CheckResult[] in the order of FleetApi::pickedInstances()
      * @throws DailyJobAlreadyRunning
+     * @throws DailyJobFailed after marking the run failed, without results
      */
     public function run(DailyJobTrigger $trigger): array
     {
@@ -47,9 +50,27 @@ final class DailyJob
             fn (): int => $this->runs->start($trigger, $startedAt, $startedAt - self::RUNNING_FOR_AT_MOST_SECONDS),
         );
 
+        try {
+            return $this->checkAndStore($runId);
+        } catch (\Throwable $exception) {
+            try {
+                $this->runs->fail($runId, $this->clock->now());
+            } catch (\Throwable) {
+                // For example the database itself failing. The run stays
+                // unfinished and stops blocking after 15 minutes.
+            }
+
+            throw new DailyJobFailed($exception);
+        }
+    }
+
+    /**
+     * @return CheckResult[]
+     */
+    private function checkAndStore(int $runId): array
+    {
         // Outside any transaction: the API calls take seconds, and holding the
-        // write lock that long would block heartbeats. A crash here leaves the
-        // run unfinished and without results.
+        // write lock that long would block heartbeats.
         $diskSizes = $this->fleet->diskSizes();
         $at = $this->clock->now();
         $results = [];

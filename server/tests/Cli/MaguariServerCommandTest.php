@@ -245,7 +245,7 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertFileDoesNotExist($path);
     }
 
-    public function testRunDailyJobWithNoInstances(): void
+    public function testRunDailyJobWithNoInstancesIsManualByDefault(): void
     {
         $path = $this->directory . '/maguari.sqlite';
         $this->runCommand($path, ['migrate']);
@@ -256,7 +256,61 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame("No instances to check.\nDaily job finished: 0 passed, 0 failed, 0 not checked.\n", $stdout);
         $this->assertSame('', $stderr);
         $pdo = new \PDO('sqlite:' . $path);
+        $this->assertSame('manual', $pdo->query('SELECT triggered_by FROM monitoring_daily_job_runs')->fetchColumn());
+    }
+
+    public function testRunDailyJobFromTheTimerIsScheduled(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+
+        [$status, , $stderr] = $this->runCommand($path, ['run-daily-job', '--scheduled']);
+
+        $this->assertSame(0, $status, $stderr);
+        $pdo = new \PDO('sqlite:' . $path);
         $this->assertSame('scheduled', $pdo->query('SELECT triggered_by FROM monitoring_daily_job_runs')->fetchColumn());
+    }
+
+    public function testTheTimerPassesScheduled(): void
+    {
+        $service = (string) file_get_contents(dirname(__DIR__, 2) . '/systemd/maguari-server-daily-job.service');
+
+        $this->assertStringContainsString("\nExecStart=/usr/bin/maguari-server run-daily-job --scheduled\n", $service);
+    }
+
+    public function testRunDailyJobRejectsUnknownOptions(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['run-daily-job', '--schedule']);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame("Usage: maguari-server run-daily-job [--scheduled]\n", $stderr);
+        $this->assertFalse((new \PDO('sqlite:' . $path))->query('SELECT 1 FROM monitoring_daily_job_runs')->fetchColumn());
+    }
+
+    public function testRunDailyJobThatFailsPrintsOneLineAndMarksTheRunFailed(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
+        $pdo->exec("INSERT INTO fleet_instances (project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, '1', 'us-east1-b', 'web', 0)");
+        // Storing the results fails.
+        $pdo->exec('DROP TABLE monitoring_check_results');
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['run-daily-job'], [
+            'MAGUARI_GCP_CREDENTIALS' => 'application-default',
+            'HOME' => $this->directory,
+        ]);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertStringStartsWith('The daily job failed: PDOException: ', $stderr);
+        $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
+        $this->assertSame(1, (int) $pdo->query('SELECT failed FROM monitoring_daily_job_runs')->fetchColumn());
     }
 
     public function testRunDailyJobReportsEachInstanceAndExitsZeroWhenChecksCannotRun(): void

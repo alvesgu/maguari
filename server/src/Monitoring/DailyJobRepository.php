@@ -52,4 +52,10 @@ final class DailyJobRepository
     {
         $this->database->pdo()->prepare('UPDATE monitoring_daily_job_runs SET finished_at = ? WHERE id = ?')->execute([$at, $runId]);
     }
+
+    public function fail(int $runId, int $at): void
+    {
+        $this->database->pdo()->prepare('UPDATE monitoring_daily_job_runs SET finished_at = ?, failed = 1 WHERE id = ?')
+            ->execute([$at, $runId]);
+    }
 }

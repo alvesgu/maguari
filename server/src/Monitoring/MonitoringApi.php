@@ -8,6 +8,7 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
+use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
 use Maguari\Shared\Protocol;
 
@@ -45,6 +46,7 @@ final class MonitoringApi
      *
      * @return CheckResult[] in the order of FleetApi::pickedInstances()
      * @throws DailyJobAlreadyRunning
+     * @throws DailyJobFailed after marking the run failed. The caller logs it.
      */
     public function runDailyJob(DailyJobTrigger $trigger): array
     {

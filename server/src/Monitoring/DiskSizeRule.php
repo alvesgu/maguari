@@ -52,8 +52,11 @@ final class DiskSizeRule
             static fn (?MetricRun $run): bool => $run !== null && $at - $run->endAt <= self::MAX_READING_AGE_SECONDS,
         );
 
+        // Without /, the sum would miss most of the disk and fail falsely.
         if (!isset($recent['/'])) {
-            return $result(CheckOutcome::NotChecked, 'No disk readings in the last 24 hours.');
+            return $result(CheckOutcome::NotChecked, $recent === []
+                ? 'No disk readings in the last 24 hours.'
+                : 'No reading for / in the last 24 hours, so the boot disk cannot be compared.');
         }
 
         $filesystemBytes = array_sum(array_map(static fn (MetricRun $run): int|float => $run->value, $recent));

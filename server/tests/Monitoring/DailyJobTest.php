@@ -9,6 +9,7 @@ use Maguari\Server\Monitoring\CheckOutcome;
 use Maguari\Server\Monitoring\CheckResult;
 use Maguari\Server\Monitoring\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
+use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
 
@@ -101,7 +102,7 @@ final class DailyJobTest extends TestCase
         );
         $this->assertSame('No disk readings in the last 24 hours.', $results[2]->detail);
 
-        $this->assertSame([['id' => 1, 'triggered_by' => 'manual', 'started_at' => $at, 'finished_at' => $at]], $this->rows('monitoring_daily_job_runs'));
+        $this->assertSame([['id' => 1, 'triggered_by' => 'manual', 'started_at' => $at, 'finished_at' => $at, 'failed' => 0]], $this->rows('monitoring_daily_job_runs'));
         $stored = $this->rows('monitoring_check_results');
         $this->assertCount(3, $stored);
         $this->assertSame(
@@ -152,7 +153,7 @@ final class DailyJobTest extends TestCase
         $this->assertCount(2, $this->rows('monitoring_daily_job_runs'));
     }
 
-    public function testACrashDuringTheChecksLeavesTheRunUnfinishedWithoutResults(): void
+    public function testAnErrorDuringTheChecksMarksTheRunFailedWithoutResults(): void
     {
         $this->pick('web');
         // No listing queued: the fake HTTP client throws, as an unexpected
@@ -160,12 +161,46 @@ final class DailyJobTest extends TestCase
 
         try {
             $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
-            $this->fail('Expected the error to propagate.');
-        } catch (\RuntimeException $exception) {
-            $this->assertStringContainsString('Unexpected request', $exception->getMessage());
+            $this->fail('Expected DailyJobFailed.');
+        } catch (DailyJobFailed $exception) {
+            $this->assertStringStartsWith('The daily job failed: RuntimeException: Unexpected request: GET https://compute.googleapis.com/', $exception->getMessage());
+            $this->assertInstanceOf(\RuntimeException::class, $exception->getPrevious());
         }
 
-        $this->assertNull($this->rows('monitoring_daily_job_runs')[0]['finished_at']);
+        $run = $this->rows('monitoring_daily_job_runs')[0];
+        $this->assertSame($this->environment->clock->now(), $run['finished_at']);
+        $this->assertSame(1, $run['failed']);
         $this->assertSame([], $this->rows('monitoring_check_results'));
+    }
+
+    public function testAnErrorWhileStoringTheResultsMarksTheRunFailed(): void
+    {
+        $this->environment->database->pdo()->exec('DROP TABLE monitoring_check_results');
+        $this->pick('web');
+        $this->queueListing(['web' => 10]);
+
+        try {
+            $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+            $this->fail('Expected DailyJobFailed.');
+        } catch (DailyJobFailed $exception) {
+            $this->assertStringContainsString('monitoring_check_results', $exception->getMessage());
+        }
+
+        $this->assertSame(1, $this->rows('monitoring_daily_job_runs')[0]['failed']);
+    }
+
+    public function testAFailedRunDoesNotBlockTheNextOne(): void
+    {
+        $this->pick('web');
+
+        try {
+            $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+        } catch (DailyJobFailed) {
+        }
+
+        $this->queueListing(['web' => 10]);
+        $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+
+        $this->assertSame([1, 0], array_column($this->rows('monitoring_daily_job_runs'), 'failed'));
     }
 }

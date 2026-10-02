@@ -79,6 +79,7 @@ All interpretations and decisions were approved as proposed, with these answers:
 | `D - F` is at most 10% of `D` | **Pass** |
 | `D - F` is more than 10% of `D` | **Fail**, with both sizes: "The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB. Rebooting usually extends them (cloud-init); otherwise run growpart and resize2fs." |
 | No `disk_total_bytes:/` run that ended in the last 24 hours | **Not checked**: "No disk readings in the last 24 hours." |
+| *Sentence refined after the 8.1 review:* recent runs for `/boot` or `/boot/efi` but none for `/` | **Not checked**: "No reading for / in the last 24 hours, so the boot disk cannot be compared." (8.1 already reported "Not checked" here, with the first sentence.) |
 | The Compute Engine listing failed, the instance was not found or it has no boot disk | **Not checked**, with Fleet's fixed sentence |
 
 - Why 10%: a filesystem is always smaller than its disk (partition table, the EFI partition, ext4's inode tables and journal). On a 10 GiB Ubuntu boot disk, `/` plus `/boot/efi` total about 9.6 GiB, about 4% less. Growing a 10 GiB disk to 11 GiB leaves about 13% unaccounted for, so even a 1 GiB growth of the smallest Ubuntu disk fails. A 100 GiB disk grown by less than about 6 GiB would pass, which is acceptable: the check is for forgotten resizes, not exact accounting.
@@ -115,11 +116,11 @@ monitoring_check_results(
 - `detail` holds only Maguari's own sentences and sizes, never raw API messages (design 8.1 item 1).
 - Check results are not readings, so the "readings as runs" rule does not apply to them.
 
-**D5. One job at a time.** In one `BEGIN IMMEDIATE` transaction, the job inserts its run row only if no run has `finished_at` NULL and `started_at` within the last 15 minutes; otherwise it refuses ("The daily job is already running, started at 06:00 UTC."). This covers the timer and the button starting at the same moment, as well as a double click. A run that crashed leaves `finished_at` NULL and stops blocking after 15 minutes. The checks then run outside the transaction (D1), the results are written in one transaction and `finished_at` is set.
+**D5. One job at a time.** *Changed after the 8.1 review:* any error the job can catch marks the run failed (a new `failed` column, migration `0003`) and the caller logs it, so the 15 minute rule below only covers runs that were killed. In one `BEGIN IMMEDIATE` transaction, the job inserts its run row only if no run has `finished_at` NULL and `started_at` within the last 15 minutes; otherwise it refuses ("The daily job is already running, started at 06:00 UTC."). This covers the timer and the button starting at the same moment, as well as a double click. A run that crashed leaves `finished_at` NULL and stops blocking after 15 minutes. The checks then run outside the transaction (D1), the results are written in one transaction and `finished_at` is set.
 
 **D6. CLI command `maguari-server run-daily-job`** (design 12.2.1):
 
-- Runs the job with trigger `scheduled` and prints one line per instance and check, then a summary.
+- Runs the job and prints one line per instance and check, then a summary. *Changed after the 8.1 review:* the run is recorded as `manual` unless `--scheduled` is given, which the systemd service passes, so runs started over SSH are labelled correctly.
 - Exit code 0 when the job ran, whatever the check outcomes (a failed check is a result, not a job failure). Exit code 1, with one line on stderr, when the job could not run: already running, database missing or not migrated (it names `migrate`, like the web app's 503) or any other error. So `systemctl status` shows a failure only when the job itself failed.
 - Refuses to run as root, like `migrate` (the database would end up with root-owned WAL files).
 - Builds `FleetApi` and `MonitoringApi` from the environment the same way `App` does (`MAGUARI_DATABASE`, `MAGUARI_GCP_CREDENTIALS`). It needs no secret key: neither context decrypts anything here.
@@ -138,7 +139,7 @@ Description=Maguari daily job
 Type=oneshot
 User=maguari-server
 Group=maguari-server
-ExecStart=/usr/bin/maguari-server run-daily-job
+ExecStart=/usr/bin/maguari-server run-daily-job --scheduled
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
@@ -258,7 +259,7 @@ docs/DESIGN.md
 
 ## Flow
 
-1. At 06:00 UTC, systemd starts `maguari-server-daily-job.service`, which runs `maguari-server run-daily-job` as `maguari-server`. Or an administrator presses "Run now", which posts to `/admin/daily-job`.
+1. At 06:00 UTC, systemd starts `maguari-server-daily-job.service`, which runs `maguari-server run-daily-job --scheduled` as `maguari-server`. Or an administrator presses "Run now", which posts to `/admin/daily-job`.
 2. `MonitoringApi::runDailyJob()` claims the run (D5) or refuses.
 3. It asks `FleetApi::diskSizes()` for every picked instance's boot disk size: one Compute Engine listing per project.
 4. For each instance, it reads the current `disk_total_bytes` runs of `/`, `/boot` and `/boot/efi` and applies `DiskSizeRule`.

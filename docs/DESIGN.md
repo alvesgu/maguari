@@ -355,9 +355,10 @@ A scheduled daily job runs slow or daily-by-nature checks, with a "Run now" butt
 
 The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd timer (section 10.1) and the button run the same code; only the recorded trigger differs (`scheduled` or `manual`). It checks every picked instance and asks Fleet for the instances and their disks, so it never reads another context's tables.
 
-1. **One run at a time.** In one `BEGIN IMMEDIATE` transaction, a run starts only if no run is unfinished and younger than 15 minutes; otherwise it is refused ("The daily job is already running, started at ... UTC."). A run that crashed stays unfinished and stops blocking after 15 minutes.
-2. The Compute Engine calls happen outside any transaction. Then all results are written and the run is marked finished in one transaction. A crash in between leaves the run unfinished and without results.
-3. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Results are shown, not acted on: no incident, alert or notification yet.
+1. **One run at a time.** In one `BEGIN IMMEDIATE` transaction, a run starts only if no run is unfinished and younger than 15 minutes; otherwise it is refused ("The daily job is already running, started at ... UTC.").
+2. The Compute Engine calls happen outside any transaction. Then all results are written and the run is marked finished in one transaction.
+3. **Failures.** Any error the job can catch, during the checks or while storing the results, marks the run finished and failed, without results, and the caller logs it (`The daily job failed: <class>: <message>`): the CLI on stderr, which systemd sends to the journal, and "Run now" in PHP's error log. So the 15 minute rule in item 1 only covers runs that were killed (or whose failure could not be recorded, for example when the database itself fails).
+4. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Results are shown, not acted on: no incident, alert or notification yet.
 
 #### 6.3.1 Disk size check
 
@@ -369,7 +370,8 @@ With the boot disk's size `D` (section 8) and the sum `F` of the current `disk_t
 |---|---|
 | `D - F` is at most 10% of `D` | Pass |
 | `D - F` is more than 10% of `D` | Fail: "The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB. Rebooting usually extends them (cloud-init); otherwise run growpart and resize2fs." |
-| No `disk_total_bytes:/` run that ended in the last 24 hours | Not checked: "No disk readings in the last 24 hours." |
+| No `disk_total_bytes` run of these mount points that ended in the last 24 hours | Not checked: "No disk readings in the last 24 hours." |
+| Recent runs for `/boot` or `/boot/efi`, but none for `/` | Not checked: "No reading for / in the last 24 hours, so the boot disk cannot be compared." Without `/`, the sum would miss most of the disk and fail falsely. |
 | The listing failed, the instance was missing from it or no boot disk size was reported | Not checked, with Fleet's fixed sentence |
 
 A filesystem is always somewhat smaller than its disk (partition table, the EFI partition, ext4's own space): about 4% on a 10 GiB Ubuntu disk. Growing that disk by 1 GiB leaves about 13% unaccounted for, so even the smallest growth of the smallest Ubuntu disk fails. A boot disk with a partition the client does not report (for example swap) can fail falsely; the sentence shows both sizes, so the cause is visible.
@@ -503,7 +505,7 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 
 - Projects and instances
 - Events: alerts, remediation actions, commands and their results
-- Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at)`, with `finished_at` NULL while running or after a crash, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. Every run is kept: about one row per instance per check per day.
+- Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at, failed)`, with `finished_at` NULL while running or after the run was killed and `failed` 1 for a run that hit an error, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. Every run is kept: about one row per instance per check per day.
 - Audit log: logins, configuration changes, manual actions
 - Settings and secrets
 
@@ -529,7 +531,7 @@ Password hashes (local login during setup) use Argon2id.
 - uPlot for charts (runs in the browser, drawing JSON returned by the server)
 - systemd timers for scheduled work (check evaluation, daily job)
 
-The daily job's units live in `server/systemd/` until packaging installs them: `maguari-server-daily-job.service` (`Type=oneshot`, as `maguari-server`, running `maguari-server run-daily-job`, with `ProtectSystem=strict` and only `/var/lib/maguari` writable) and `maguari-server-daily-job.timer` (`OnCalendar=*-*-* 06:00:00 UTC`, `Persistent=true`, so a job missed while the server instance was off runs when it is back). There is no timer in development: run the command by hand, or press "Run now".
+The daily job's units live in `server/systemd/` until packaging installs them: `maguari-server-daily-job.service` (`Type=oneshot`, as `maguari-server`, running `maguari-server run-daily-job --scheduled`, with `ProtectSystem=strict` and only `/var/lib/maguari` writable) and `maguari-server-daily-job.timer` (`OnCalendar=*-*-* 06:00:00 UTC`, `Persistent=true`, so a job missed while the server instance was off runs when it is back). There is no timer in development: run the command by hand, or press "Run now".
 
 ### 10.2 Surfaces and middleware
 
@@ -696,7 +698,7 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Records `<url>` as the server's address (section 5.6). Refuses once an administrator exists. |
 | `set-base-url --base-url=<url>` | Sets or changes the server's address used in enroll commands (section 5.6): for installs set up before it was recorded, after a domain change and in development |
 | `create-secret-key` | Creates the secret key file if it does not exist, and never overwrites it (section 9.3) |
-| `run-daily-job` | Runs the daily job (section 6.3) with the trigger `scheduled`, as the systemd timer does, and prints one line per instance and check plus a summary. Exit code 0 whenever the job ran, whatever the checks found; 1 when it could not run (already running, database missing or not migrated). |
+| `run-daily-job [--scheduled]` | Runs the daily job (section 6.3) and prints one line per instance and check plus a summary. The run is recorded as `manual` (for example when started over SSH) unless `--scheduled` is given, which only the systemd service passes. Exit code 0 whenever the job ran, whatever the checks found; 1 with one line on stderr when it could not run or failed (already running, database missing or not migrated, an error during the job). |
 
 `--base-url` follows one rule everywhere, shared with the client's `--server` (`shared/src/ServerUrl.php`): `https://`, or `http://` only when the host is exactly `localhost` (case-insensitive); no user, password, path, query or fragment.
 
