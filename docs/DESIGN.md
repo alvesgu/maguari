@@ -357,7 +357,7 @@ Certificate expiry is checked both locally and remotely.
 
 A scheduled daily job runs slow or daily-by-nature checks, with a "Run now" button in the dashboard:
 
-- Certificate expiry (local and remote), from MVP step 9. Both fail when fewer than 14 days remain. That is a fixed constant for now; when Let's Encrypt's 45-day certificates arrive (renewed with about 15 days left), it becomes a setting.
+- Certificate expiry (local and remote), from MVP step 9. Both fail when fewer than 14 days remain. That is a fixed constant for now; when Let's Encrypt's 45-day certificates arrive (renewed with about 15 days left), it becomes a setting (section 17 item 3).
 - Compute Engine disk size compared with the filesystem size reported by the client (detects a grown disk whose filesystem was never extended)
 
 The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd timer (section 10.1) and the button run the same code; only the recorded trigger differs (`scheduled` or `manual`). It checks every picked instance and asks Fleet for the instances and their disks, so it never reads another context's tables.
@@ -776,6 +776,11 @@ Gaps the MVP leaves open on purpose that must be closed before 1.0.
 
 1. **The disk size comparison must cover attached disks**, not only the boot disk (section 6.3). Databases and growing applications often live on attached disks, so a grown attached disk whose filesystem was never extended matters as much as the boot disk. The client will need to report which GCP disk each filesystem is on. On Compute Engine, the `/dev/disk/by-id/google-*` links are a likely way to map filesystems to disk device names (the `deviceName` of each disk in the instance resource). Disk usage monitoring itself (section 6.1.2) already covers attached disks.
 2. **The web interface layout will be redesigned** (cards, dashboards and tables). The current styling (section 3.1 item 4) is temporary and kept minimal until then.
+3. **Every threshold Maguari judges with must be configurable as a hierarchy.** This covers certificate expiry days, the disk size rule's percentage, disk usage alert levels, heartbeat lateness and the remediation settings in section 7.3.
+   - Levels: a global default, overridden per project, overridden per instance. The most specific value that is set wins.
+   - Every level uses the slider rules of sections 7.3 and 10.3: soft limits warn, hard limits and coherence rules reject. Coherence rules apply to the effective values of each instance.
+   - Per-user settings cover preferences only (which alerts each administrator receives, timezone and display), never thresholds, so an instance's status is the same for every administrator.
+   - Until then, every threshold is a single named constant, never a literal repeated in code.
 
 ## 18. Roadmap after 1.0
 
