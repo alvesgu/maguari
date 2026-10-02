@@ -1,0 +1,17 @@
+# Runs the Maguari daily job (design section 6.3). Started by
+# maguari-server-daily-job.timer; installed by packaging.
+[Unit]
+Description=Maguari daily job
+Documentation=https://github.com/alvesgu/maguari
+
+[Service]
+Type=oneshot
+User=maguari-server
+Group=maguari-server
+ExecStart=/usr/bin/maguari-server run-daily-job
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+# The database and its WAL files. /etc/maguari stays readable.
+ReadWritePaths=/var/lib/maguari

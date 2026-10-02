@@ -88,10 +88,12 @@ final class App
             return self::create(null, null, null, $sessionPath, $clock, notReadyMessage: self::NO_SECRET_KEY_MESSAGE);
         }
 
+        $fleet = new FleetApi($database, $clock, $tokens, $http);
+
         return self::create(
             new AccessApi($database, $clock),
-            new FleetApi($database, $clock, $tokens, $http),
-            new ClientsApi($database, $clock, $secretBox, new MonitoringApi($database)),
+            $fleet,
+            new ClientsApi($database, $clock, $secretBox, new MonitoringApi($database, $clock, $fleet)),
             $sessionPath,
             $clock,
         );

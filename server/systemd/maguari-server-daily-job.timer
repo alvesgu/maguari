@@ -1,0 +1,12 @@
+# Starts the Maguari daily job every day at 06:00 UTC (design section 6.3).
+# Persistent= runs a missed job once the server instance is back up.
+[Unit]
+Description=Run the Maguari daily job every day
+Documentation=https://github.com/alvesgu/maguari
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

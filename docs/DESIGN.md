@@ -172,7 +172,7 @@ server/public/               Web root: index.php and static assets (assets/magua
 4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. nginx will serve `/assets/` directly (packaging).
 5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more.
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
-7. Internal structure of each context (layers) is decided in a later design step, starting with the core contexts. Monitoring, the first core context with code, stays flat like Fleet and Clients for now: a public `MonitoringApi`, small classes and `Migrations/`, with rules such as the run rule written as pure classes without database access. Its layers are decided when checks arrive and it has more than one concern.
+7. Internal structure of each context (layers) is decided in a later design step, starting with the core contexts. Monitoring, the first core context with code, stays flat like Fleet and Clients for now: a public `MonitoringApi`, small classes and `Migrations/`, with rules such as the run rule written as pure classes without database access. It stayed flat when the daily job brought its first check (MVP step 8: a `DailyJob` class and a pure `DiskSizeRule`). Its layers are decided with the certificate step (MVP step 9), when it has two kinds of checks and two sources of input.
 
 ## 4. Versioning
 
@@ -350,8 +350,29 @@ Certificate expiry is checked both locally and remotely.
 
 A scheduled daily job runs slow or daily-by-nature checks, with a "Run now" button in the dashboard:
 
-- Certificate expiry (local and remote)
+- Certificate expiry (local and remote), from MVP step 9
 - Compute Engine disk size compared with the filesystem size reported by the client (detects a grown disk whose filesystem was never extended)
+
+The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd timer (section 10.1) and the button run the same code; only the recorded trigger differs (`scheduled` or `manual`). It checks every picked instance and asks Fleet for the instances and their disks, so it never reads another context's tables.
+
+1. **One run at a time.** In one `BEGIN IMMEDIATE` transaction, a run starts only if no run is unfinished and younger than 15 minutes; otherwise it is refused ("The daily job is already running, started at ... UTC."). A run that crashed stays unfinished and stops blocking after 15 minutes.
+2. The Compute Engine calls happen outside any transaction. Then all results are written and the run is marked finished in one transaction. A crash in between leaves the run unfinished and without results.
+3. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Results are shown, not acted on: no incident, alert or notification yet.
+
+#### 6.3.1 Disk size check
+
+Only the **boot disk** is compared for now, because the client does not report which disk each filesystem lives on. On Compute Engine Ubuntu images, `/`, `/boot` (24.04 images) and `/boot/efi` live on the boot disk. Covering attached disks is required before 1.0 (section 17).
+
+With the boot disk's size `D` (section 8) and the sum `F` of the current `disk_total_bytes` runs of `/`, `/boot` and `/boot/efi` that ended in the last 24 hours:
+
+| Situation | Result |
+|---|---|
+| `D - F` is at most 10% of `D` | Pass |
+| `D - F` is more than 10% of `D` | Fail: "The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB. Rebooting usually extends them (cloud-init); otherwise run growpart and resize2fs." |
+| No `disk_total_bytes:/` run that ended in the last 24 hours | Not checked: "No disk readings in the last 24 hours." |
+| The listing failed, the instance was missing from it or no boot disk size was reported | Not checked, with Fleet's fixed sentence |
+
+A filesystem is always somewhat smaller than its disk (partition table, the EFI partition, ext4's own space): about 4% on a 10 GiB Ubuntu disk. Growing that disk by 1 GiB leaves about 13% unaccounted for, so even the smallest growth of the smallest Ubuntu disk fails. A boot disk with a partition the client does not report (for example swap) can fail falsely; the sentence shows both sizes, so the cause is visible.
 
 ## 7. Remediation and safeguards
 
@@ -431,6 +452,8 @@ Coherence rules (warning only):
    - `compute.instances.reset`
    - `compute.disks.get`
 
+   Disk sizes for the daily disk size check (section 6.3.1) come from the instance listing itself: each instance has `disks[]`, with `boot`, `deviceName` and `diskSizeGb` (an int64 sent as a decimal string, in GiB, because Compute Engine's "GB" is 2^30 bytes). So `compute.disks.get` is not used yet. `FleetApi::diskSizes()` makes one aggregated listing per project that has picked instances, matches instances by zone and name and turns a failed listing into its fixed sentence (section 8.1 item 1) for each of that project's instances. A malformed disk never fails a listing; its size is just unknown.
+
 ### 8.1 Administrator workflow
 
 1. **Add a project:** enter the project ID. The server verifies it can list instances there (this confirms the custom role is granted).
@@ -480,6 +503,7 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 
 - Projects and instances
 - Events: alerts, remediation actions, commands and their results
+- Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at)`, with `finished_at` NULL while running or after a crash, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. Every run is kept: about one row per instance per check per day.
 - Audit log: logins, configuration changes, manual actions
 - Settings and secrets
 
@@ -504,6 +528,8 @@ Password hashes (local login during setup) use Argon2id.
 - SQLite
 - uPlot for charts (runs in the browser, drawing JSON returned by the server)
 - systemd timers for scheduled work (check evaluation, daily job)
+
+The daily job's units live in `server/systemd/` until packaging installs them: `maguari-server-daily-job.service` (`Type=oneshot`, as `maguari-server`, running `maguari-server run-daily-job`, with `ProtectSystem=strict` and only `/var/lib/maguari` writable) and `maguari-server-daily-job.timer` (`OnCalendar=*-*-* 06:00:00 UTC`, `Persistent=true`, so a job missed while the server instance was off runs when it is back). There is no timer in development: run the command by hand, or press "Run now".
 
 ### 10.2 Surfaces and middleware
 
@@ -670,12 +696,13 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Records `<url>` as the server's address (section 5.6). Refuses once an administrator exists. |
 | `set-base-url --base-url=<url>` | Sets or changes the server's address used in enroll commands (section 5.6): for installs set up before it was recorded, after a domain change and in development |
 | `create-secret-key` | Creates the secret key file if it does not exist, and never overwrites it (section 9.3) |
+| `run-daily-job` | Runs the daily job (section 6.3) with the trigger `scheduled`, as the systemd timer does, and prints one line per instance and check plus a summary. Exit code 0 whenever the job ran, whatever the checks found; 1 when it could not run (already running, database missing or not migrated). |
 
 `--base-url` follows one rule everywhere, shared with the client's `--server` (`shared/src/ServerUrl.php`): `https://`, or `http://` only when the host is exactly `localhost` (case-insensitive); no user, password, path, query or fragment.
 
 No command ends with a PHP stack trace. Any error is printed as one line on stderr with exit code 1. When the database cannot be created or opened, the line names its path and mentions `MAGUARI_DATABASE`.
 
-`migrate`, `issue-setup-token`, `set-base-url` and `create-secret-key` refuse to run as root, so neither the database nor the key file is ever owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
+`migrate`, `issue-setup-token`, `set-base-url`, `create-secret-key` and `run-daily-job` refuse to run as root, so neither the database nor the key file is ever owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
 
 ### 12.3 APT repository
 

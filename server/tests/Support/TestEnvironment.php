@@ -59,7 +59,7 @@ final class TestEnvironment
         $this->tokens = new FakeTokenSource();
         $this->http = new FakeHttpClient();
         $this->fleet = new FleetApi($this->database, $this->clock, $this->tokens, $this->http);
-        $this->monitoring = new MonitoringApi($this->database);
+        $this->monitoring = new MonitoringApi($this->database, $this->clock, $this->fleet);
         $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox, $this->monitoring);
     }
 

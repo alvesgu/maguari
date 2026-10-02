@@ -4,14 +4,18 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Monitoring;
 
+use Maguari\Server\Fleet\FleetApi;
+use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
 use Maguari\Shared\Protocol;
 
 /**
- * The Monitoring context's public interface: readings stored as runs, and
- * later checks. Instances are referred to by their Fleet ID. Monitoring does
- * not know where readings come from.
+ * The Monitoring context's public interface: readings stored as runs, and the
+ * daily job with its checks. Instances are referred to by their Fleet ID.
+ * Monitoring does not know where readings come from. It asks Fleet for the
+ * picked instances and their disks.
  */
 final class MonitoringApi
 {
@@ -23,12 +27,28 @@ final class MonitoringApi
 
     private readonly MetricRunRepository $runs;
     private readonly RunRule $runRule;
+    private readonly DailyJob $dailyJob;
 
     public function __construct(
         private readonly Database $database,
+        Clock $clock,
+        FleetApi $fleet,
     ) {
         $this->runs = new MetricRunRepository($database);
         $this->runRule = new RunRule(self::EXPECTED_INTERVAL_SECONDS);
+        $this->dailyJob = new DailyJob($database, $clock, $fleet, $this->runs);
+    }
+
+    /**
+     * Runs the daily checks on every picked instance and stores the results
+     * (design section 6.3). Calls the Compute Engine API, so it takes seconds.
+     *
+     * @return CheckResult[] in the order of FleetApi::pickedInstances()
+     * @throws DailyJobAlreadyRunning
+     */
+    public function runDailyJob(DailyJobTrigger $trigger): array
+    {
+        return $this->dailyJob->run($trigger);
     }
 
     /**

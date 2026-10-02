@@ -65,7 +65,7 @@ All interpretations and decisions were approved as proposed, with these answers:
 *Verified (2026-10-02)* against a real project with the aggregated call Fleet uses: each instance has `disks[]`, and the boot disk reads `{"deviceName": "instance-1", "boot": true, "diskSizeGb": "15", ...}`. `diskSizeGb` is a decimal string (int64 in JSON), like the instance `id`. No `compute.disks.get` fallback is needed.
 
 - `ComputeEngine` reads `disks[]` into Fleet's own model (design 2.1 rule 4). `diskSizeGb` is in GiB (Compute Engine's "GB" is 2^30 bytes), so Fleet converts it to bytes and no other context sees the API's unit.
-- New `FleetApi::diskSizes(): array<int, InstanceDisks|ProjectAccessProblem>`, keyed by Fleet instance ID, for every picked instance: one listing per project that has picked instances, matched by zone and name (the key in `fleet_instances`, so an instance recreated under the same name still matches). An instance missing from the listing gets "not found". A project whose listing fails gives every one of its instances that project's problem, using the fixed sentences of design 8.1 item 1.
+- New `FleetApi::diskSizes(): array<int, InstanceDisks>`, keyed by Fleet instance ID, for every picked instance (*refined in 8.1:* an `InstanceDisks` holds either the disks or the fixed sentence saying why they are unknown): one listing per project that has picked instances, matched by zone and name (the key in `fleet_instances`, so an instance recreated under the same name still matches). An instance missing from the listing gets "not found" (*added in 8.1:* or, when its zone was unreachable or the listing was cut short, a sentence saying so). A project whose listing fails gives every one of its instances that project's problem, using the fixed sentences of design 8.1 item 1.
 - Not inside a transaction: the API calls take seconds (same reason as `addProject`).
 
 **D2. Only the boot disk is compared.** The client reports mount points and sizes but not which disk each filesystem lives on, so a filesystem on an attached disk cannot be matched to its disk. The boot disk can: on Compute Engine Ubuntu images, `/`, `/boot` (24.04 images) and `/boot/efi` live on it. A grown boot disk is also the common case (small instances that run out of space).
@@ -93,7 +93,7 @@ All interpretations and decisions were approved as proposed, with these answers:
 ```
 monitoring_daily_job_runs(
     id INTEGER PRIMARY KEY,
-    trigger TEXT NOT NULL,          -- 'scheduled' or 'manual'
+    triggered_by TEXT NOT NULL,     -- 'scheduled' or 'manual'
     started_at INTEGER NOT NULL,
     finished_at INTEGER             -- NULL while running, or if it crashed
 )
@@ -109,6 +109,8 @@ monitoring_check_results(
 )
 ```
 
+- *Changed in 8.1:* the column is `triggered_by`, not `trigger`, which is an SQL keyword.
+- An index on `monitoring_check_results (job_run_id)` serves reading a run's results (8.2).
 - Every run and its results are kept: about one row per instance per check per day (a few thousand a year for 10 instances), so no retention is needed now. The history will serve the Logs screen later.
 - `detail` holds only Maguari's own sentences and sizes, never raw API messages (design 8.1 item 1).
 - Check results are not readings, so the "readings as runs" rule does not apply to them.
@@ -212,28 +214,28 @@ server/
   src/
     Fleet/
       FleetApi.php                          diskSizes() (D1)
-      InstanceDisks.php                     boot disk size and other disks, in bytes
+      InstanceDisks.php                     the disks, or why they are unknown
       AttachedDisk.php                      device name, boot, size in bytes
       DiscoveredInstance.php                carries its disks
       Gcp/ComputeEngine.php                 reads disks[] (D1)
     Monitoring/
-      MonitoringApi.php                     runDailyJob() (D5)
+      MonitoringApi.php                     runDailyJob() (D5); gets the clock and FleetApi
       DailyJob.php                          runs the checks
       DiskSizeRule.php                      pass, fail or not checked (D3)
       CheckOutcome.php                      Pass, Fail, NotChecked
       CheckResult.php
-      DailyJobRun.php
       DailyJobTrigger.php                   Scheduled, Manual
       DailyJobRepository.php                SQL only (D4, D5)
-      MetricRunRepository.php               current runs for several metrics
       Exception/DailyJobAlreadyRunning.php
       Migrations/0002_monitoring_daily_job.sql
+    Http/App.php                            builds FleetApi once, for MonitoringApi too
   tests/
     Fleet/ComputeEngineTest.php             disks[] parsed, GiB to bytes
     Fleet/FleetApiTest.php                  diskSizes(): matching, per-project failures
     Monitoring/DiskSizeRuleTest.php
     Monitoring/DailyJobTest.php
     Cli/MaguariServerCommandTest.php        run-daily-job
+    Support/TestEnvironment.php             MonitoringApi gets the clock and FleetApi
     Kernel/Database/MigratorTest.php        the new migration
 docs/DESIGN.md
 ```
@@ -244,6 +246,7 @@ docs/DESIGN.md
 server/
   src/
     Monitoring/MonitoringApi.php            lastDailyJobRun(), latestCheckResults() (D10)
+    Monitoring/DailyJobRun.php              (moved from 8.1, which did not need it)
     Http/App.php                            route, MonitoringApi for the dashboard
     Http/Controller/AdminController.php     shows results; runDailyJob() (D9)
   templates/admin.php                       Daily job section, Disk size column

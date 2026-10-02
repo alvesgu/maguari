@@ -115,4 +115,63 @@ final class FleetApi
     {
         return $projectId === null ? $this->instances->all() : $this->instances->inProject($projectId);
     }
+
+    /**
+     * Every picked instance's attached disks, from one Compute Engine listing
+     * per project that has picked instances (design section 6.3). Instances
+     * are matched by zone and name. A project whose listing fails gives each
+     * of its instances that failure's sentence. Nothing is stored.
+     *
+     * @return array<int, InstanceDisks> by instance ID, for every picked instance
+     */
+    public function diskSizes(): array
+    {
+        $byProject = [];
+
+        foreach ($this->instances->all() as $instance) {
+            $byProject[$instance->gcpProjectId][] = $instance;
+        }
+
+        $disks = [];
+
+        foreach ($byProject as $gcpProjectId => $instances) {
+            try {
+                $list = $this->computeEngine->listInstances((string) $gcpProjectId);
+            } catch (ProjectNotAccessible $notAccessible) {
+                foreach ($instances as $instance) {
+                    $disks[$instance->id] = InstanceDisks::unavailable($notAccessible->getMessage());
+                }
+
+                continue;
+            }
+
+            $listed = [];
+
+            foreach ($list->instances as $discovered) {
+                $listed[$discovered->zone . '/' . $discovered->name] = $discovered;
+            }
+
+            foreach ($instances as $instance) {
+                $discovered = $listed[$instance->zone . '/' . $instance->name] ?? null;
+                $disks[$instance->id] = $discovered === null
+                    ? InstanceDisks::unavailable(self::missingFromList($instance, $list))
+                    : InstanceDisks::listed($discovered->disks);
+            }
+        }
+
+        return $disks;
+    }
+
+    private static function missingFromList(Instance $instance, InstanceList $list): string
+    {
+        if (in_array($instance->zone, $list->unreachableZones, true)) {
+            return 'Google Cloud could not list the instances in this instance\'s zone.';
+        }
+
+        if ($list->truncated) {
+            return 'This instance was not in the listing, which was cut short because the project has too many instances.';
+        }
+
+        return 'This instance was not found in the project.';
+    }
 }

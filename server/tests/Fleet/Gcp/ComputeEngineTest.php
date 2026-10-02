@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Tests\Fleet\Gcp;
 
+use Maguari\Server\Fleet\AttachedDisk;
 use Maguari\Server\Fleet\DiscoveredInstance;
 use Maguari\Server\Fleet\Exception\InstanceNotFound;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
@@ -315,6 +316,65 @@ final class ComputeEngineTest extends TestCase
         $this->queuePage(['zones/us-east1-b' => ['instances' => [$instance]]]);
 
         $this->assertSame('', $this->computeEngine->listInstances('my-project')->instances[0]->machineType);
+    }
+
+    public function testReadsAttachedDisksInGibibytes(): void
+    {
+        $instance = self::apiInstance('web', 'us-east1-b');
+        // As the API sends them: diskSizeGb is an int64, so a string.
+        $instance['disks'] = [
+            ['deviceName' => 'web', 'boot' => true, 'diskSizeGb' => '15', 'type' => 'PERSISTENT', 'index' => 0],
+            ['deviceName' => 'data', 'boot' => false, 'diskSizeGb' => '500', 'type' => 'PERSISTENT', 'index' => 1],
+        ];
+        $this->queuePage(['zones/us-east1-b' => ['instances' => [$instance]]]);
+
+        $this->assertEquals(
+            [new AttachedDisk('web', true, 15 * 1024 ** 3), new AttachedDisk('data', false, 500 * 1024 ** 3)],
+            $this->computeEngine->listInstances('my-project')->instances[0]->disks,
+        );
+    }
+
+    /**
+     * @return array<string, array{mixed, ?int}>
+     */
+    public static function diskSizes(): array
+    {
+        return [
+            'integer' => [10, 10 * 1024 ** 3],
+            'missing' => [null, null],
+            'zero' => ['0', null],
+            'negative' => ['-10', null],
+            'fraction' => ['10.5', null],
+            'not a number' => ['ten', null],
+            'too large to be real' => ['99999999999999999999', null],
+        ];
+    }
+
+    /**
+     * @dataProvider diskSizes
+     */
+    public function testDiskSizeThatCannotBeUsedIsNull(mixed $sizeGb, ?int $expected): void
+    {
+        $instance = self::apiInstance('web', 'us-east1-b');
+        $instance['disks'] = [['deviceName' => 'web', 'boot' => true] + ($sizeGb === null ? [] : ['diskSizeGb' => $sizeGb])];
+        $this->queuePage(['zones/us-east1-b' => ['instances' => [$instance]]]);
+
+        $this->assertSame($expected, $this->computeEngine->listInstances('my-project')->instances[0]->disks[0]->sizeBytes);
+    }
+
+    public function testMalformedDisksNeverFailTheListing(): void
+    {
+        $noDisks = self::apiInstance('db', 'us-east1-b');
+        $notAList = self::apiInstance('web', 'us-east1-b') + ['disks' => 'none'];
+        $oddDisks = self::apiInstance('app', 'us-east1-b') + ['disks' => ['not a disk', ['boot' => 'yes', 'deviceName' => 7]]];
+        $this->queuePage(['zones/us-east1-b' => ['instances' => [$noDisks, $notAList, $oddDisks]]]);
+
+        $instances = $this->computeEngine->listInstances('my-project')->instances;
+
+        // Sorted by name: app, db, web.
+        $this->assertEquals([new AttachedDisk('', false, null)], $instances[0]->disks);
+        $this->assertSame([], $instances[1]->disks);
+        $this->assertSame([], $instances[2]->disks);
     }
 
     /**

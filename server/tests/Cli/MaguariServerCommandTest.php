@@ -36,12 +36,13 @@ final class MaguariServerCommandTest extends TestCase
 
     /**
      * @param string[] $args
+     * @param array<string, string> $extraEnvironment
      * @return array{int, string, string} exit code, stdout and stderr
      */
-    private function runCommand(string $database, array $args): array
+    private function runCommand(string $database, array $args, array $extraEnvironment = []): array
     {
         $command = array_merge([PHP_BINARY, dirname(__DIR__, 2) . '/bin/maguari-server'], $args);
-        $environment = getenv() + [];
+        $environment = $extraEnvironment + getenv();
         $environment['MAGUARI_DATABASE'] = $database;
         $environment['MAGUARI_SECRET_KEY_FILE'] = $this->directory . '/secret.key';
         $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
@@ -230,5 +231,65 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('', $stdout);
         $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
         $this->assertFileDoesNotExist($path);
+    }
+
+    public function testRunDailyJobNeedsAMigratedDatabase(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['run-daily-job']);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame("The database {$path} is missing or not up to date. Run maguari-server migrate first.\n", $stderr);
+        $this->assertFileDoesNotExist($path);
+    }
+
+    public function testRunDailyJobWithNoInstances(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['run-daily-job']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame("No instances to check.\nDaily job finished: 0 passed, 0 failed, 0 not checked.\n", $stdout);
+        $this->assertSame('', $stderr);
+        $pdo = new \PDO('sqlite:' . $path);
+        $this->assertSame('scheduled', $pdo->query('SELECT triggered_by FROM monitoring_daily_job_runs')->fetchColumn());
+    }
+
+    public function testRunDailyJobReportsEachInstanceAndExitsZeroWhenChecksCannotRun(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
+        $pdo->exec("INSERT INTO fleet_instances (project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, '1', 'us-east1-b', 'web', 0)");
+
+        // No gcloud credentials in this HOME, so no request is ever sent.
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['run-daily-job'], [
+            'MAGUARI_GCP_CREDENTIALS' => 'application-default',
+            'HOME' => $this->directory,
+        ]);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertStringStartsWith('my-project/us-east1-b/web: Disk size: Not checked. Maguari could not obtain Google Cloud credentials.', $stdout);
+        $this->assertStringEndsWith("\nDaily job finished: 0 passed, 0 failed, 1 not checked.\n", $stdout);
+        $this->assertSame('', $stderr);
+    }
+
+    public function testRunDailyJobRefusesWhileRunning(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $startedAt = time() - 60;
+        (new \PDO('sqlite:' . $path))->exec("INSERT INTO monitoring_daily_job_runs (triggered_by, started_at) VALUES ('manual', {$startedAt})");
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['run-daily-job']);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame('The daily job is already running, started at ' . gmdate('Y-m-d H:i', $startedAt) . " UTC.\n", $stderr);
     }
 }

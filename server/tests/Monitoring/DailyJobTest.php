@@ -1,0 +1,171 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Maguari\Server\Tests\Monitoring;
+
+use Maguari\Server\Fleet\Instance;
+use Maguari\Server\Monitoring\CheckOutcome;
+use Maguari\Server\Monitoring\CheckResult;
+use Maguari\Server\Monitoring\DailyJobTrigger;
+use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
+use Maguari\Server\Tests\Support\TestEnvironment;
+use PHPUnit\Framework\TestCase;
+
+final class DailyJobTest extends TestCase
+{
+    private const GIB = 1024 ** 3;
+
+    private TestEnvironment $environment;
+
+    protected function setUp(): void
+    {
+        $this->environment = new TestEnvironment();
+        $this->environment->http->queueJson(200, ['kind' => 'compute#instanceAggregatedList']);
+        $this->environment->fleet->addProject('my-project');
+    }
+
+    protected function tearDown(): void
+    {
+        $this->environment->cleanUp();
+    }
+
+    private function pick(string $name): Instance
+    {
+        $zoneUrl = 'https://www.googleapis.com/compute/v1/projects/my-project/zones/us-east1-b';
+        $this->environment->http->queueJson(200, ['id' => '1', 'name' => $name, 'zone' => $zoneUrl, 'status' => 'RUNNING']);
+
+        return $this->environment->fleet->pickInstance(1, 'us-east1-b', $name);
+    }
+
+    /**
+     * @param array<string, int> $bootDiskGb by instance name
+     */
+    private function queueListing(array $bootDiskGb): void
+    {
+        $instances = [];
+
+        foreach ($bootDiskGb as $name => $sizeGb) {
+            $instances[] = [
+                'id' => '1', 'name' => $name, 'status' => 'RUNNING',
+                'zone' => 'https://www.googleapis.com/compute/v1/projects/my-project/zones/us-east1-b',
+                'disks' => [['deviceName' => $name, 'boot' => true, 'diskSizeGb' => (string) $sizeGb]],
+            ];
+        }
+
+        $this->environment->http->queueJson(200, ['items' => ['zones/us-east1-b' => ['instances' => $instances]]]);
+    }
+
+    private function recordRootTotal(int $instanceId, int $bytes): void
+    {
+        $monitoring = $this->environment->monitoring;
+        $monitoring->recordReadings($instanceId, $this->environment->clock->now(), $monitoring->parseReadings([
+            ['metric' => 'disk_used_bytes:/', 'value' => intdiv($bytes, 2)],
+            ['metric' => 'disk_total_bytes:/', 'value' => $bytes],
+        ]));
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function rows(string $table): array
+    {
+        return $this->environment->database->pdo()->query("SELECT * FROM {$table} ORDER BY id")->fetchAll();
+    }
+
+    private function insertUnfinishedRun(int $startedAt): void
+    {
+        $this->environment->database->pdo()->prepare(
+            "INSERT INTO monitoring_daily_job_runs (triggered_by, started_at) VALUES ('scheduled', ?)",
+        )->execute([$startedAt]);
+    }
+
+    public function testChecksEveryPickedInstanceAndStoresTheResults(): void
+    {
+        $grown = $this->pick('grown');
+        $fine = $this->pick('fine');
+        $silent = $this->pick('silent');
+        $this->recordRootTotal($grown->id, (int) (9.6 * self::GIB));
+        $this->recordRootTotal($fine->id, (int) (14.5 * self::GIB));
+        $this->environment->clock->advance(3600);
+        $this->queueListing(['fine' => 15, 'grown' => 20, 'silent' => 10]);
+        $at = $this->environment->clock->now();
+
+        $results = $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+
+        // In the order of FleetApi::pickedInstances(): by name.
+        $this->assertSame([$fine->id, $grown->id, $silent->id], array_map(static fn (CheckResult $result): int => $result->instanceId, $results));
+        $this->assertSame(
+            [CheckOutcome::Pass, CheckOutcome::Fail, CheckOutcome::NotChecked],
+            array_map(static fn (CheckResult $result): CheckOutcome => $result->outcome, $results),
+        );
+        $this->assertSame('No disk readings in the last 24 hours.', $results[2]->detail);
+
+        $this->assertSame([['id' => 1, 'triggered_by' => 'manual', 'started_at' => $at, 'finished_at' => $at]], $this->rows('monitoring_daily_job_runs'));
+        $stored = $this->rows('monitoring_check_results');
+        $this->assertCount(3, $stored);
+        $this->assertSame(
+            ['id' => 2, 'job_run_id' => 1, 'instance_id' => $grown->id, 'check_name' => 'disk_size', 'outcome' => 'fail', 'detail' => $results[1]->detail, 'checked_at' => $at],
+            $stored[1],
+        );
+    }
+
+    public function testRunsWithNoInstancesWithoutCallingTheApi(): void
+    {
+        $requests = count($this->environment->http->requests);
+
+        $this->assertSame([], $this->environment->monitoring->runDailyJob(DailyJobTrigger::Scheduled));
+        $this->assertCount($requests, $this->environment->http->requests);
+        $this->assertSame('scheduled', $this->rows('monitoring_daily_job_runs')[0]['triggered_by']);
+        $this->assertNotNull($this->rows('monitoring_daily_job_runs')[0]['finished_at']);
+    }
+
+    public function testRefusesWhileARunIsInProgress(): void
+    {
+        $startedAt = $this->environment->clock->now() - 899;
+        $this->insertUnfinishedRun($startedAt);
+
+        try {
+            $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+            $this->fail('Expected DailyJobAlreadyRunning.');
+        } catch (DailyJobAlreadyRunning $exception) {
+            $this->assertSame('The daily job is already running, started at ' . gmdate('Y-m-d H:i', $startedAt) . ' UTC.', $exception->getMessage());
+        }
+
+        $this->assertCount(1, $this->rows('monitoring_daily_job_runs'));
+    }
+
+    public function testAFinishedRunDoesNotBlock(): void
+    {
+        $this->environment->monitoring->runDailyJob(DailyJobTrigger::Scheduled);
+        $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+
+        $this->assertCount(2, $this->rows('monitoring_daily_job_runs'));
+    }
+
+    public function testAnUnfinishedRunStopsBlockingAfterFifteenMinutes(): void
+    {
+        $this->insertUnfinishedRun($this->environment->clock->now() - 900);
+
+        $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+
+        $this->assertCount(2, $this->rows('monitoring_daily_job_runs'));
+    }
+
+    public function testACrashDuringTheChecksLeavesTheRunUnfinishedWithoutResults(): void
+    {
+        $this->pick('web');
+        // No listing queued: the fake HTTP client throws, as an unexpected
+        // error would.
+
+        try {
+            $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+            $this->fail('Expected the error to propagate.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('Unexpected request', $exception->getMessage());
+        }
+
+        $this->assertNull($this->rows('monitoring_daily_job_runs')[0]['finished_at']);
+        $this->assertSame([], $this->rows('monitoring_check_results'));
+    }
+}

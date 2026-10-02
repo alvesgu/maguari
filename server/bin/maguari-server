@@ -9,11 +9,18 @@ use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Access\Exception\InvalidSeedConfig;
 use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Access\SeedConfigReader;
+use Maguari\Server\Fleet\FleetApi;
+use Maguari\Server\Fleet\Gcp\AccessTokenSourceFactory;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\DatabaseUnavailable;
 use Maguari\Server\Kernel\Database\Migrator;
+use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\SystemClock;
+use Maguari\Server\Monitoring\CheckOutcome;
+use Maguari\Server\Monitoring\DailyJobTrigger;
+use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
+use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Shared\ServerUrl;
 
 /**
@@ -39,6 +46,10 @@ function maguariServerMain(array $args): int
         return refuseRoot(array_slice($args, 1)) ?? setBaseUrlCommand(array_slice($args, 2));
     }
 
+    if ($command === 'run-daily-job') {
+        return refuseRoot(array_slice($args, 1)) ?? runDailyJobCommand();
+    }
+
     if ($command === 'create-secret-key') {
         return refuseRoot(array_slice($args, 1), 'the key file would end up owned by root') ?? createSecretKeyCommand();
     }
@@ -48,7 +59,8 @@ function maguariServerMain(array $args): int
         . "  maguari-server migrate\n"
         . "  maguari-server issue-setup-token --base-url=https://maguari.example.com\n"
         . "  maguari-server set-base-url --base-url=https://maguari.example.com\n"
-        . "  maguari-server create-secret-key\n");
+        . "  maguari-server create-secret-key\n"
+        . "  maguari-server run-daily-job\n");
 
     return 1;
 }
@@ -199,6 +211,62 @@ function createSecretKeyCommand(): int
 
     echo "Created the secret key file {$keyFile->path()} (mode 0600). Back it up, but not together with the database: "
         . "a backup holding both would expose the secrets the key protects. Without the key, every instance must enroll again.\n";
+
+    return 0;
+}
+
+/**
+ * Runs the daily job (design section 6.3), as the systemd timer does. Exits
+ * with 0 whenever the job ran, whatever the checks found, so systemd reports a
+ * failure only when the job itself failed.
+ */
+function runDailyJobCommand(): int
+{
+    $database = Database::fromEnvironment();
+
+    if (!(new Migrator($database))->isUpToDate()) {
+        fwrite(STDERR, "The database {$database->path()} is missing or not up to date. Run maguari-server migrate first.\n");
+
+        return 1;
+    }
+
+    $clock = new SystemClock();
+    $http = new StreamHttpClient();
+    $fleet = new FleetApi($database, $clock, AccessTokenSourceFactory::fromEnvironment($http, $clock), $http);
+    $monitoring = new MonitoringApi($database, $clock, $fleet);
+
+    try {
+        $results = $monitoring->runDailyJob(DailyJobTrigger::Scheduled);
+    } catch (DailyJobAlreadyRunning $exception) {
+        fwrite(STDERR, $exception->getMessage() . "\n");
+
+        return 1;
+    }
+
+    $names = [];
+
+    foreach ($fleet->pickedInstances() as $instance) {
+        $names[$instance->id] = "{$instance->gcpProjectId}/{$instance->zone}/{$instance->name}";
+    }
+
+    $counts = array_fill_keys(array_map(static fn (CheckOutcome $outcome): string => $outcome->value, CheckOutcome::cases()), 0);
+
+    foreach ($results as $result) {
+        $counts[$result->outcome->value]++;
+        $name = $names[$result->instanceId] ?? "instance {$result->instanceId}";
+        echo "{$name}: Disk size: {$result->outcome->label()}. {$result->detail}\n";
+    }
+
+    if ($results === []) {
+        echo "No instances to check.\n";
+    }
+
+    printf(
+        "Daily job finished: %d passed, %d failed, %d not checked.\n",
+        $counts[CheckOutcome::Pass->value],
+        $counts[CheckOutcome::Fail->value],
+        $counts[CheckOutcome::NotChecked->value],
+    );
 
     return 0;
 }

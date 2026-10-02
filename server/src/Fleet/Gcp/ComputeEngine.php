@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Fleet\Gcp;
 
+use Maguari\Server\Fleet\AttachedDisk;
 use Maguari\Server\Fleet\DiscoveredInstance;
 use Maguari\Server\Fleet\Exception\InstanceNotFound;
 use Maguari\Server\Fleet\Exception\ProjectNotAccessible;
@@ -26,6 +27,11 @@ final class ComputeEngine
     // and 10 API calls per listing.
     private const PAGE_SIZE = 500;
     private const MAX_PAGES = 10;
+    // Compute Engine's "GB" in disk sizes is 2^30 bytes.
+    private const BYTES_PER_GB = 1 << 30;
+    // Far above Compute Engine's largest disk (64 TB), and small enough that
+    // the size in bytes fits in a PHP int.
+    private const MAX_DISK_SIZE_GB = 1_000_000;
 
     public function __construct(
         private readonly HttpClient $http,
@@ -231,7 +237,54 @@ final class ComputeEngine
             self::lastSegment($zone),
             InstanceStatus::fromComputeEngine($status),
             is_string($machineType) ? self::lastSegment($machineType) : '',
+            self::disks(is_array($item) ? ($item['disks'] ?? []) : []),
         );
+    }
+
+    /**
+     * The instance's attached disks. Leniently read: the disks only feed the
+     * daily disk size check, so a malformed disk never fails a listing.
+     *
+     * @return AttachedDisk[]
+     */
+    private static function disks(mixed $disks): array
+    {
+        if (!is_array($disks)) {
+            return [];
+        }
+
+        $attached = [];
+
+        foreach ($disks as $disk) {
+            if (!is_array($disk)) {
+                continue;
+            }
+
+            $deviceName = $disk['deviceName'] ?? null;
+            $attached[] = new AttachedDisk(
+                is_string($deviceName) ? $deviceName : '',
+                ($disk['boot'] ?? false) === true,
+                self::diskSizeBytes($disk['diskSizeGb'] ?? null),
+            );
+        }
+
+        return $attached;
+    }
+
+    /**
+     * diskSizeGb is an int64, which the API sends as a decimal string.
+     */
+    private static function diskSizeBytes(mixed $sizeGb): ?int
+    {
+        if (is_string($sizeGb) && ctype_digit($sizeGb) && strlen($sizeGb) <= 7) {
+            $sizeGb = (int) $sizeGb;
+        }
+
+        if (!is_int($sizeGb) || $sizeGb < 1 || $sizeGb > self::MAX_DISK_SIZE_GB) {
+            return null;
+        }
+
+        return $sizeGb * self::BYTES_PER_GB;
     }
 
     /**

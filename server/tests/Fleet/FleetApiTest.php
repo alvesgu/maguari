@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Tests\Fleet;
 
+use Maguari\Server\Fleet\AttachedDisk;
 use Maguari\Server\Fleet\Exception\InstanceNotFound;
 use Maguari\Server\Fleet\Exception\InvalidInstanceName;
 use Maguari\Server\Fleet\Exception\InvalidProjectId;
@@ -229,5 +230,122 @@ final class FleetApiTest extends TestCase
         $this->expectException(ProjectNotFound::class);
 
         $this->environment->fleet->pickInstance(42, 'us-east1-b', 'web');
+    }
+
+    private function pick(Project $project, string $name, string $zone = 'us-east1-b'): Instance
+    {
+        $this->queueInstance($name, $zone, '1');
+
+        return $this->environment->fleet->pickInstance($project->id, $zone, $name);
+    }
+
+    /**
+     * An aggregated listing page with the given instances, each with a boot
+     * disk of $bootDiskGb GiB.
+     *
+     * @param array<string, int> $bootDiskGb by "zone/name"
+     * @param array<string, mixed> $extra
+     */
+    private function queueListing(string $gcpProjectId, array $bootDiskGb, array $extra = []): void
+    {
+        $items = [];
+
+        foreach ($bootDiskGb as $key => $sizeGb) {
+            [$zone, $name] = explode('/', $key);
+            $zoneUrl = "https://www.googleapis.com/compute/v1/projects/{$gcpProjectId}/zones/{$zone}";
+            $items["zones/{$zone}"]['instances'][] = [
+                'id' => '1', 'name' => $name, 'zone' => $zoneUrl, 'status' => 'RUNNING',
+                'disks' => [['deviceName' => $name, 'boot' => true, 'diskSizeGb' => (string) $sizeGb]],
+            ];
+        }
+
+        $this->environment->http->queueJson(200, ['items' => $items] + $extra);
+    }
+
+    public function testDiskSizesOfPickedInstancesWithOneListingPerProject(): void
+    {
+        $project = $this->addMyProject();
+        $this->allowListing();
+        $other = $this->environment->fleet->addProject('other-project');
+        $this->allowListing();
+        $this->environment->fleet->addProject('no-picks-project');
+        $web = $this->pick($project, 'web');
+        $db = $this->pick($project, 'db', 'us-east1-c');
+        $app = $this->pick($other, 'app');
+        $requests = count($this->environment->http->requests);
+        // Sorted by GCP project ID: my-project, then other-project.
+        $this->queueListing('my-project', ['us-east1-b/web' => 10, 'us-east1-c/db' => 20, 'us-east1-b/unpicked' => 30]);
+        $this->queueListing('other-project', ['us-east1-b/app' => 40]);
+
+        $disks = $this->environment->fleet->diskSizes();
+
+        $this->assertSame([$db->id, $web->id, $app->id], array_keys($disks));
+        $this->assertEquals(new AttachedDisk('web', true, 10 * 1024 ** 3), $disks[$web->id]->bootDisk());
+        $this->assertSame(20 * 1024 ** 3, $disks[$db->id]->bootDisk()?->sizeBytes);
+        $this->assertSame(40 * 1024 ** 3, $disks[$app->id]->bootDisk()?->sizeBytes);
+        $this->assertNull($disks[$web->id]->problem);
+        $urls = array_map(static fn ($request): string => $request->url, array_slice($this->environment->http->requests, $requests));
+        $this->assertCount(2, $urls);
+        $this->assertStringContainsString('/projects/my-project/aggregated/instances', $urls[0]);
+        $this->assertStringContainsString('/projects/other-project/aggregated/instances', $urls[1]);
+    }
+
+    public function testNoPickedInstancesMeansNoApiCall(): void
+    {
+        $this->addMyProject();
+        $requests = count($this->environment->http->requests);
+
+        $this->assertSame([], $this->environment->fleet->diskSizes());
+        $this->assertCount($requests, $this->environment->http->requests);
+    }
+
+    public function testOneProjectFailingDoesNotAffectAnother(): void
+    {
+        $project = $this->addMyProject();
+        $this->allowListing();
+        $other = $this->environment->fleet->addProject('other-project');
+        $web = $this->pick($project, 'web');
+        $app = $this->pick($other, 'app');
+        $this->environment->http->queueJson(403, ['error' => ['code' => 403, 'errors' => [['reason' => 'accessNotConfigured']]]]);
+        $this->queueListing('other-project', ['us-east1-b/app' => 40]);
+
+        $disks = $this->environment->fleet->diskSizes();
+
+        $this->assertSame('The Compute Engine API is not enabled in this project.', $disks[$web->id]->problem);
+        $this->assertSame([], $disks[$web->id]->disks);
+        $this->assertSame(40 * 1024 ** 3, $disks[$app->id]->bootDisk()?->sizeBytes);
+    }
+
+    /**
+     * @return array<string, array{array<string, mixed>, string}>
+     */
+    public static function missingInstances(): array
+    {
+        return [
+            'not found' => [[], 'This instance was not found in the project.'],
+            'zone unreachable' => [['unreachables' => ['zones/us-east1-b']], 'Google Cloud could not list the instances in this instance\'s zone.'],
+            'listing cut short' => [['nextPageToken' => 'more'], 'This instance was not in the listing, which was cut short because the project has too many instances.'],
+        ];
+    }
+
+    /**
+     * @dataProvider missingInstances
+     * @param array<string, mixed> $extra
+     */
+    public function testInstanceMissingFromTheListing(array $extra, string $problem): void
+    {
+        $project = $this->addMyProject();
+        $web = $this->pick($project, 'web');
+        $this->queueListing('my-project', ['us-east1-b/other' => 10], $extra);
+
+        // A cut-short listing follows its page token up to ten pages.
+        for ($page = 1; isset($extra['nextPageToken']) && $page < 10; $page++) {
+            $this->queueListing('my-project', [], $extra);
+        }
+
+        $disks = $this->environment->fleet->diskSizes();
+
+        $this->assertSame($problem, $disks[$web->id]->problem);
+        $this->assertNull($disks[$web->id]->bootDisk());
     }
 }
