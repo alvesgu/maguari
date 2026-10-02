@@ -26,7 +26,7 @@ Relevant design sections: 2.1 (contexts), 3.1 (layout, item 7), 5.2 (heartbeat a
 
 ## Is this too large for one step?
 
-Yes. It has a refactor, a root-owned program, a wire change with a client release, a new check, a configuration page and a TLS client. **Proposed split** into four sub-steps, each one commit that passes both test suites, with a review stop after each:
+Yes. It has a refactor, a root-owned program, a wire change with a client release, a new check, a configuration page and a TLS client. **Split (confirmed)** into four sub-steps, each one commit that passes both test suites, with a review stop after each:
 
 | Sub-step | Delivers | Depends on |
 |---|---|---|
@@ -35,11 +35,11 @@ Yes. It has a refactor, a root-owned program, a wire change with a client releas
 | **9.3** The local certificate check | The check in the daily job, a `subject` column on results, the "Certificates" column on the dashboard, the CLI output | 9.2 |
 | **9.4** The remote certificate check | Hostnames per instance on a new instance page, a TLS certificate reader in `Kernel/`, the remote check in the daily job, the "not reloaded" hint | 9.3 |
 
-9.2 is usable on its own (the runs are visible in SQLite), like 7.1 was. 9.4 does not depend on the scanner, so 9.4 could come before 9.2 and 9.3 if remote checks are wanted sooner; this order is proposed because 9.4's suggestions and hint (D13, D15) build on local results.
+9.2 is usable on its own (the runs are visible in SQLite), like 7.1 was. 9.4 does not depend on the scanner, so 9.4 could come before 9.2 and 9.3 if remote checks are wanted sooner; this order was chosen because 9.4's suggestions and hint (D13, D15) build on local results.
 
 *Alternative:* fold 9.1 into 9.3. Not recommended: a move-only commit is easy to review, and mixing it with new code is not.
 
-## Interpretations (proposed)
+## Interpretations (confirmed)
 
 **I1. Results are shown, not acted on**, as in step 8 (I1 there): no incident, alert or notification. Email is step 10.
 
@@ -51,11 +51,13 @@ Yes. It has a refactor, a root-owned program, a wire change with a client releas
 
 **I5. Let's Encrypt only, locally.** The scanner reads certbot's layout (`/etc/letsencrypt/live/*/cert.pem`). Certificates elsewhere are covered only by the remote check. The remote check accepts any CA.
 
-## Decisions (proposed)
+## Decisions (confirmed)
+
+All interpretations and decisions were approved as proposed, with the answers at the end of this plan.
 
 ### Monitoring's layers (9.1)
 
-**D1. Three folders plus the public interface.** Monitoring is a core context (design 2.1) and now has two kinds of input (heartbeat readings and the daily job's API and TLS calls) and three checks. Proposed:
+**D1. Three folders plus the public interface.** Monitoring is a core context (design 2.1) and now has two kinds of input (heartbeat readings and the daily job's API and TLS calls) and three checks:
 
 ```
 server/src/Monitoring/
@@ -183,7 +185,7 @@ exec systemctl start --no-block maguari-certificate-scanner.service
 | Fewer than 14 days left | **Fail**: "Expires on 2026-10-10, in 8 days. certbot normally renews 30 days before expiry, so renewal has been failing." |
 | Already expired | **Fail**: "Expired on 2026-09-30." |
 
-- **Why 14 days:** certbot renews 90-day certificates when 30 days remain and tries twice a day, so 14 days left means about two weeks of failed renewals, which is a real problem and not a passing glitch. With 45-day certificates certbot renews at about a third of the lifetime (15 days), so 14 days would fail after about one day of failed renewals. Revisit the number (or make it depend on the certificate's lifetime) when 45 days becomes Let's Encrypt's default. It is a constant in the rule.
+- **Why 14 days:** certbot renews 90-day certificates when 30 days remain and tries twice a day, so 14 days left means about two weeks of failed renewals, which is a real problem and not a passing glitch. With 45-day certificates certbot renews at about a third of the lifetime (15 days), so 14 days would fail after about one day of failed renewals. It is a constant in the rule for now. *Confirmed:* when 45-day certificates arrive, it becomes a setting (design section 6.3).
 - Days are whole days rounded down. Dates are UTC, like every timestamp.
 
 **D8. Which local certificates are checked.** For each picked instance, every `certificate_expires_at:*` current run that ended in the last 24 hours, the same window as the disk size check. A certificate removed from the instance stops being reported and drops out after a day. An instance that reports none gets no local result at all, not "Not checked": most instances may have no certificate, and a permanent "Not checked" on each would hide the ones that matter.
@@ -373,7 +375,7 @@ No test touches the network. Certificates and keys are generated at test time, n
 
 ## Changes to `docs/DESIGN.md`
 
-- **This plan's answers:** section 15, step 9 names the sub-steps and links this plan.
+- **This plan's answers:** section 15, step 9 names the sub-steps and links this plan; section 6.1.1 (the scanner's own root-owned directory, D3); section 6.3 (14 days becomes a setting when 45-day certificates arrive, D7).
 - **9.1:** section 3.1 item 7 (Monitoring's layers and the purity rule).
 - **9.2:** section 5.2 (the new kind and its subject rule, duplicates, still protocol version 1); section 6.1.1 (separate executable, the file's path and format, unit hardening, the hook starting the service, files in `client/systemd/` and `client/certbot/`); section 12.1 (the scanner executable in the client package).
 - **9.3:** section 6.3 (the certificate checks: the rule, 14 days, which certificates, one result per certificate, the dashboard column); section 9.2 (`subject`).
@@ -441,13 +443,12 @@ Manual check after 9.3: in `server/`, run `bin/maguari-server run-daily-job`. Ex
 
 Manual check after 9.4: open an instance's page, add a hostname you run with a valid certificate, plus `expired.badssl.com`, `wrong.host.badssl.com` and `self-signed.badssl.com`, press "Run now" and check each result: pass, expired, not trusted or wrong name, not trusted or wrong name. Add `does-not-exist.invalid` to see "Could not connect".
 
-## Questions
+## Answers
 
-1. **Split:** 9.1 to 9.4 in this order, with a review after each? Or remote (9.4) before local (9.2 and 9.3)?
-2. **D1, Monitoring's layers:** `Domain/`, `Application/` and `Infrastructure/` with a test that keeps `Domain/` pure? Feature folders (alternative A)? Or flat (alternative B)?
-3. **D3, the file's location:** a separate root-owned directory, `/var/lib/maguari-certificate-scanner/`, instead of the client's own directory as design 6.1.1 suggests?
-4. **D5, wire format:** readings named `certificate_expires_at:<first domain>`, stored as runs, with no protocol version change?
-5. **D7, threshold:** fail under 14 days, for both checks?
-6. **D14, "Run now":** keep it synchronous with a 5 second TLS timeout and the `504` limit documented, or add queued runs in this step?
-7. **D9, results:** one row per certificate with a new `subject` column, or one row per instance?
-8. **D12 and D13:** a new instance page for hostnames, with one-click suggestions from local certificates, and nothing checked remotely unless an administrator adds it?
+1. **Split:** 9.1 to 9.4 in this order, refactor first, with a review after each.
+2. **D1:** `Domain/`, `Application/` and `Infrastructure/`, with a test keeping `Domain/` free of database and network code.
+3. **D3:** the scanner writes to its own root-owned directory, `/var/lib/maguari-certificate-scanner/`. Design 6.1.1 is updated.
+4. **D8:** the local check considers only certificates reported in the last 24 hours, so a removed certificate does not fail forever.
+5. **D7:** 14 days for now, for both checks. It becomes a setting when 45-day certificates arrive (noted in design 6.3).
+6. **D14:** "Run now" stays synchronous, remote checks use a 5 second TLS timeout and the `504` limit stays documented.
+7. **Everything else** approved as proposed.

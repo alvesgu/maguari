@@ -322,7 +322,7 @@ Low CPU usage is never a failure signal on its own.
 
 `/etc/letsencrypt` is often readable only by root, and it also holds private keys, so its permissions are never changed.
 
-1. The client package installs a systemd timer that runs a small scanner **as root**. It reads each certificate's expiry date (public information) and writes only that to a file the client can read (for example `/var/lib/maguari-client/certificates.json`).
+1. The client package installs a systemd timer that runs a small scanner **as root**. It reads each certificate's expiry date (public information) and writes only that to a file the client can read: `/var/lib/maguari-certificate-scanner/certificates.json`, mode 0644, in a directory of its own owned by root (mode 0755). Not the client's directory (`/var/lib/maguari-client/`, owned by the client user): a root process writing into a directory an unprivileged user controls is open to symlink attacks. Domain names and expiry dates are public (certificate transparency logs), so the file can be readable by everyone.
 2. The scanner runs once during package installation (so existing certificates appear immediately) and daily after that.
 3. The package also installs a certbot deploy hook that runs the scanner after each successful renewal. The timer is the main mechanism; the hook only makes renewals show up sooner.
 4. The client itself stays unprivileged and never reads `/etc/letsencrypt`.
@@ -350,7 +350,7 @@ Certificate expiry is checked both locally and remotely.
 
 A scheduled daily job runs slow or daily-by-nature checks, with a "Run now" button in the dashboard:
 
-- Certificate expiry (local and remote), from MVP step 9
+- Certificate expiry (local and remote), from MVP step 9. Both fail when fewer than 14 days remain. That is a fixed constant for now; when Let's Encrypt's 45-day certificates arrive (renewed with about 15 days left), it becomes a setting.
 - Compute Engine disk size compared with the filesystem size reported by the client (detects a grown disk whose filesystem was never extended)
 
 The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd timer (section 10.1) and the button run the same code; only the recorded trigger differs (`scheduled` or `manual`). It checks every picked instance and asks Fleet for the instances and their disks, so it never reads another context's tables.
@@ -753,7 +753,7 @@ Implement in this order, one step at a time:
 6. Receive client heartbeats and show each instance's heartbeat status. Done in four sub-steps (`docs/plans/mvp-step-6.md`): 6.1 pick instances and issue enrollment tokens, 6.2 client API foundations and the enrollment exchange, 6.3 signed heartbeats and heartbeat status, 6.4 the client.
 7. Receive disk used and total every minute and store them as runs (section 9.1). Done in two sub-steps (`docs/plans/mvp-step-7.md`): 7.1 store readings as runs, 7.2 the client measures disk usage.
 8. Daily scheduled job with a "Run now" button, with the boot disk size check (section 6.3) as its first check. Done in two sub-steps (`docs/plans/mvp-step-8.md`): 8.1 the job and the disk size check, 8.2 the dashboard and "Run now".
-9. Certificate expiry: the client's certificate scanner (section 6.1.1) and the local and remote certificate checks in the daily job.
+9. Certificate expiry: the client's certificate scanner (section 6.1.1) and the local and remote certificate checks in the daily job. In four sub-steps (`docs/plans/mvp-step-9.md`): 9.1 Monitoring's layers, 9.2 local expiry dates reach the server, 9.3 the local certificate check, 9.4 the remote certificate check.
 10. Send a test email to the administrator.
 11. Read stored runs through an API endpoint for future charts.
 
