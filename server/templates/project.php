@@ -20,9 +20,10 @@
 <tbody>
 <?php foreach ($instances->instances as $instance): ?>
 <?php $key = $instance->zone . '/' . $instance->name; ?>
+<?php $enrollment = $enrollmentStates[$key] ?? \Maguari\Server\Clients\EnrollmentState::NotEnrolled; ?>
 <tr><td><?= $e($instance->name) ?></td><td><?= $e($instance->zone) ?></td><td><?= $e($instance->status->label()) ?></td><td><?= $e($instance->machineType) ?></td>
-<?= $partial('heartbeat', ['enrollment' => $enrollmentStates[$key] ?? \Maguari\Server\Clients\EnrollmentState::NotEnrolled, 'heartbeat' => $heartbeats[$key] ?? null]) ?>
-<td><form method="post" action="/admin/projects/<?= $project->id ?>/instances"><?= $csrf ?><input type="hidden" name="zone" value="<?= $e($instance->zone) ?>"><input type="hidden" name="name" value="<?= $e($instance->name) ?>"><button type="submit">Enroll</button></form></td></tr>
+<?= $partial('heartbeat', ['enrollment' => $enrollment, 'heartbeat' => $heartbeats[$key] ?? null]) ?>
+<td><form method="post" action="/admin/projects/<?= $project->id ?>/instances"><?= $csrf ?><input type="hidden" name="zone" value="<?= $e($instance->zone) ?>"><input type="hidden" name="name" value="<?= $e($instance->name) ?>"><button type="submit"><?= $enrollment === \Maguari\Server\Clients\EnrollmentState::Enrolled ? 'Re-enroll' : 'Enroll' ?></button></form></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>

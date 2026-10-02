@@ -109,6 +109,19 @@ final class ProjectsController
             return $this->view->render($request, $response, 'enroll', $data + ['error' => $exception->getMessage()], 422);
         }
 
+        // Re-enrolling replaces the instance's client once the new token is
+        // used, so it needs a confirmation. Decided from the stored state, not
+        // the button pressed, so a stale page cannot skip it.
+        $state = $this->clients->enrollmentStates([$instance->id])[$instance->id];
+
+        if ($state === EnrollmentState::Enrolled && FormInput::string($form, 'confirm') !== 're-enroll') {
+            return $this->view->render($request, $response, 'reenroll', [
+                'title' => 'Re-enroll ' . $instance->name,
+                'project' => $project,
+                'instance' => $instance,
+            ]);
+        }
+
         $issued = $this->clients->issueEnrollmentToken($instance->id);
 
         return $this->view->render($request, $response, 'enroll', [

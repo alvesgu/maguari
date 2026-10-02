@@ -408,4 +408,80 @@ final class ProjectsFlowTest extends TestCase
         $body = (string) $browser->get($path)->getBody();
         $this->assertStringContainsString("<td>Enrolled</td>\n<td>No heartbeat yet</td>", $body);
     }
+
+    /**
+     * Enrolls web-1 through the Enroll button and a client.
+     */
+    private function enrollWeb1(Browser $browser, string $path): void
+    {
+        $enrollPage = (string) $this->pressEnroll($browser, $path, self::apiInstance('web-1'))->getBody();
+        preg_match('#--token=([A-Za-z0-9_-]{43})#', $enrollPage, $match);
+        $this->environment->clients->enroll(json_encode(['protocol_version' => 1, 'client_version' => '0.1.0', 'token' => $match[1]]));
+    }
+
+    private function tokenCount(): int
+    {
+        return (int) $this->environment->database->pdo()->query('SELECT COUNT(*) FROM clients_enrollment_tokens')->fetchColumn();
+    }
+
+    public function testEnrolledInstanceHasAReEnrollButton(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $this->enrollWeb1($browser, $path);
+        $this->queueListing('web-1', 'web-2');
+
+        $body = (string) $browser->get($path)->getBody();
+
+        $this->assertStringContainsString('<input type="hidden" name="name" value="web-1"><button type="submit">Re-enroll</button>', $body);
+        $this->assertStringContainsString('<input type="hidden" name="name" value="web-2"><button type="submit">Enroll</button>', $body);
+    }
+
+    public function testReEnrollAsksForConfirmationWithoutIssuingAToken(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $this->enrollWeb1($browser, $path);
+        $tokens = $this->tokenCount();
+
+        $response = $this->pressEnroll($browser, $path, self::apiInstance('web-1'));
+
+        $this->assertSame(200, $response->getStatusCode());
+        $body = (string) $response->getBody();
+        $this->assertStringContainsString('<h1>Re-enroll web-1</h1>', $body);
+        $this->assertStringContainsString("the instance's client will need to enroll again with it.", $body);
+        $this->assertStringContainsString('<input type="hidden" name="confirm" value="re-enroll"><button type="submit">Re-enroll</button>', $body);
+        $this->assertStringContainsString('<a href="' . $path . '">Cancel</a>', $body);
+        $this->assertStringNotContainsString('--token=', $body);
+        $this->assertSame($tokens, $this->tokenCount());
+    }
+
+    public function testConfirmedReEnrollIssuesANewToken(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        $this->enrollWeb1($browser, $path);
+
+        $response = $this->pressEnroll($browser, $path, self::apiInstance('web-1'), ['confirm' => 're-enroll']);
+
+        $body = (string) $response->getBody();
+        $this->assertStringContainsString('<h1>Enroll web-1</h1>', $body);
+        $this->assertSame(1, preg_match('#--token=[A-Za-z0-9_-]{43}#', $body));
+        $this->assertSame(1, $this->tokenCount());
+        // The existing client keeps working until the new token is used.
+        $this->queueListing('web-1');
+        $this->assertStringContainsString('<td>Enrolled</td>', (string) $browser->get($path)->getBody());
+    }
+
+    public function testInstanceNotEnrolledNeedsNoConfirmation(): void
+    {
+        $browser = $this->signedInBrowser();
+        $path = $this->addedProjectPath($browser);
+        // A pending token is not an enrolled client.
+        $this->pressEnroll($browser, $path, self::apiInstance('web-1'));
+
+        $body = (string) $this->pressEnroll($browser, $path, self::apiInstance('web-1'))->getBody();
+
+        $this->assertStringContainsString('<h1>Enroll web-1</h1>', $body);
+    }
 }
