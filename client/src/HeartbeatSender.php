@@ -8,14 +8,16 @@ use Maguari\Shared\Protocol;
 use Maguari\Shared\Signature;
 
 /**
- * Sends one signed heartbeat (design sections 5.2 and 5.5). Readings, checks
- * and command results come in later steps; for now the lists are empty.
+ * Sends one signed heartbeat (design sections 5.2 and 5.5) with the disk
+ * readings. Checks and command results come in later steps; for now those
+ * lists are empty.
  */
 final class HeartbeatSender
 {
     public function __construct(
         private readonly Transport $transport,
         private readonly Clock $clock,
+        private readonly DiskUsage $diskUsage,
     ) {
     }
 
@@ -30,7 +32,7 @@ final class HeartbeatSender
             'client_version' => Version::current(),
             'client_id' => $credentials->clientId,
             'sent_at' => $now,
-            'readings' => [],
+            'readings' => $this->diskUsage->readings(),
             'checks' => [],
             'command_results' => [],
         ], JSON_THROW_ON_ERROR);

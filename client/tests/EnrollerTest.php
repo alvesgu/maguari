@@ -35,7 +35,7 @@ final class EnrollerTest extends TestCase
         $this->assertSame($secret, $credentials->secret);
         [$request] = $this->transport->requests;
         $this->assertSame('https://maguari.example.com/api/client/enroll', $request['url']);
-        $this->assertSame(['protocol_version' => 1, 'client_version' => '0.1.0', 'token' => self::TOKEN], json_decode($request['body'], true));
+        $this->assertSame(['protocol_version' => 1, 'client_version' => '0.2.0', 'token' => self::TOKEN], json_decode($request['body'], true));
     }
 
     /**

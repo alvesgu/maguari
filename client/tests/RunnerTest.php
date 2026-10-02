@@ -7,9 +7,11 @@ namespace Maguari\Client\Tests;
 use Maguari\Client\ClientFailure;
 use Maguari\Client\Clock;
 use Maguari\Client\Credentials;
+use Maguari\Client\DiskUsage;
 use Maguari\Client\HeartbeatSender;
 use Maguari\Client\Runner;
 use Maguari\Client\Tests\Support\FakeClock;
+use Maguari\Client\Tests\Support\FakeFilesystemStats;
 use Maguari\Client\Tests\Support\FakeTransport;
 use Maguari\Client\Transport;
 use Maguari\Client\TransportResponse;
@@ -22,7 +24,7 @@ final class RunnerTest extends TestCase
 
     private function runner(Transport $transport, Clock $clock): Runner
     {
-        return new Runner(new HeartbeatSender($transport, $clock), $clock, function (string $message): void {
+        return new Runner(new HeartbeatSender($transport, $clock, new DiskUsage(new FakeFilesystemStats(), __DIR__ . '/fixtures/mounts-gce')), $clock, function (string $message): void {
             $this->log[] = $message;
         });
     }

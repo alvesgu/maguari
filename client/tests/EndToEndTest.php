@@ -6,7 +6,9 @@ namespace Maguari\Client\Tests;
 
 use Maguari\Client\Cli;
 use Maguari\Client\CredentialsFile;
+use Maguari\Client\DiskUsage;
 use Maguari\Client\Tests\Support\FakeClock;
+use Maguari\Client\Tests\Support\FakeFilesystemStats;
 use Maguari\Client\Tests\Support\TemporaryDirectory;
 use Maguari\Client\Transport;
 use Maguari\Client\TransportResponse;
@@ -25,6 +27,8 @@ final class EndToEndTest extends TestCase
     private TestEnvironment $server;
     private TemporaryDirectory $directory;
     private Transport $transport;
+    /** @var array<string, array{int, int}> total and free bytes, by mount point */
+    private array $sizes = ['/' => [10_000_000, 4_000_000], '/boot' => [1_000_000, 900_000]];
 
     protected function setUp(): void
     {
@@ -60,6 +64,15 @@ final class EndToEndTest extends TestCase
     }
 
     /**
+     * Fixture mounts and fake sizes, because a test container's / is overlay
+     * and would report nothing.
+     */
+    private function diskUsage(): DiskUsage
+    {
+        return new DiskUsage(new FakeFilesystemStats($this->sizes), __DIR__ . '/fixtures/mounts-gce');
+    }
+
+    /**
      * @param string[] $args
      * @return array{int, string}
      */
@@ -68,7 +81,7 @@ final class EndToEndTest extends TestCase
         $stderr = fopen('php://memory', 'w+');
         // The client's clock agrees with the server's.
         $clock = new FakeClock($this->server->clock->now());
-        $cli = new Cli($this->transport, $clock, new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
+        $cli = new Cli($this->transport, $clock, $this->diskUsage(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
         $status = $cli->run(array_merge(['maguari-client'], $args));
         rewind($stderr);
 
@@ -93,10 +106,39 @@ final class EndToEndTest extends TestCase
         $this->assertSame(0, $status, $stderr);
         $this->assertSame(0, $this->server->clients->heartbeatStatuses([7])[7]->ageSeconds);
 
+        // Both heartbeats' readings went into one run per metric.
+        $now = $this->server->clock->now();
+        $this->assertSame([
+            ['instance_id' => 7, 'metric' => 'disk_used_bytes:/', 'value' => 6_000_000, 'start_at' => $now - 60, 'end_at' => $now],
+            ['instance_id' => 7, 'metric' => 'disk_total_bytes:/', 'value' => 10_000_000, 'start_at' => $now - 60, 'end_at' => $now],
+            ['instance_id' => 7, 'metric' => 'disk_used_bytes:/boot', 'value' => 100_000, 'start_at' => $now - 60, 'end_at' => $now],
+            ['instance_id' => 7, 'metric' => 'disk_total_bytes:/boot', 'value' => 1_000_000, 'start_at' => $now - 60, 'end_at' => $now],
+        ], $this->runs());
+
+        // Used space moving more than 0.1% of the total starts a new run.
+        $this->sizes['/'] = [10_000_000, 3_989_999];
+        $this->server->clock->advance(60);
+        [$status, $stderr] = $this->client(['heartbeat']);
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame([6_000_000, 6_010_001], array_column(array_filter(
+            $this->runs(),
+            fn (array $run): bool => $run['metric'] === 'disk_used_bytes:/',
+        ), 'value'));
+
         // The token worked once.
         [$status, $stderr] = $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $token]);
         $this->assertSame(1, $status);
         $this->assertStringContainsString('already used or expired', $stderr);
+    }
+
+    /**
+     * @return list<array{instance_id: int, metric: string, value: int, start_at: int, end_at: int}>
+     */
+    private function runs(): array
+    {
+        return $this->server->database->pdo()->query(
+            'SELECT instance_id, metric, value, start_at, end_at FROM monitoring_metric_runs ORDER BY id',
+        )->fetchAll();
     }
 
     public function testClockSkewIsExplainedInSeconds(): void
@@ -105,7 +147,7 @@ final class EndToEndTest extends TestCase
         $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $token]);
         $this->server->clock->advance(400);
         $stderr = fopen('php://memory', 'w+');
-        $cli = new Cli($this->transport, new FakeClock($this->server->clock->now() - 400), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
+        $cli = new Cli($this->transport, new FakeClock($this->server->clock->now() - 400), $this->diskUsage(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
 
         $this->assertSame(1, $cli->run(['maguari-client', 'heartbeat']));
         rewind($stderr);

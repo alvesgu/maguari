@@ -310,7 +310,7 @@ This is per-request signing, not a bearer token like JWT. An intercepted request
 
 ### 6.1 Client side (local)
 
-- Disk used and total per filesystem (every heartbeat)
+- Disk used and total per filesystem (every heartbeat; section 6.1.2)
 - Service state (for example `systemctl is-active`)
 - Local HTTP health checks (request to a local endpoint with timeout, expecting success)
 - Database health (a query such as `SELECT 1` with timeout)
@@ -326,6 +326,16 @@ Low CPU usage is never a failure signal on its own.
 2. The scanner runs once during package installation (so existing certificates appear immediately) and daily after that.
 3. The package also installs a certbot deploy hook that runs the scanner after each successful renewal. The timer is the main mechanism; the hook only makes renewals show up sooner.
 4. The client itself stays unprivileged and never reads `/etc/letsencrypt`.
+
+#### 6.1.2 Disk usage
+
+On every heartbeat, the client reads `/proc/self/mounts` and measures each mount that is a real local filesystem: type `ext2`, `ext3`, `ext4`, `xfs`, `btrfs` or `vfat`, with a source device under `/dev/`. This covers `/`, `/boot` and `/boot/efi` on current Compute Engine images and attached persistent disks, and leaves out `tmpfs`, `proc`, `overlay`, network filesystems and `squashfs` (snaps, always 100% full). `/boot` is kept because it filling up with old kernels is a common Ubuntu failure.
+
+1. A device mounted more than once (bind mounts) is reported once, at its first mount point in the file. Mount points are decoded from the file's octal escapes (`\040` for a space).
+2. Mount points the server would reject (section 5.2: not absolute, longer than 1,024 bytes or containing control characters) are skipped, so one odd mount cannot make the whole heartbeat fail.
+3. At most 20 filesystems are reported, so at most 40 readings.
+4. `disk_total_bytes` is `disk_total_space()` and `disk_used_bytes` is `disk_total_space() - disk_free_space()`. Both call `statvfs()` and need no privileges (section 5.4). `disk_free_space()` is the space available to unprivileged users, so ext4's root reserve (usually 5%) counts as used: used is a little higher than the "Used" column of `df`, and reaches the total exactly when unprivileged services get "No space left on device", the moment `df`'s "Use%" reaches 100%.
+5. Failures never stop a heartbeat: a filesystem that cannot be measured is skipped for that heartbeat, and with nothing measured the heartbeat is sent with an empty list.
 
 ### 6.2 Server side (remote)
 

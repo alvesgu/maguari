@@ -148,6 +148,8 @@ This leaves out `tmpfs`, `proc`, `sysfs`, `overlay`, network filesystems and `sq
 
 `/boot` is worth keeping: it filling up with old kernels is a common Ubuntu failure.
 
+*Added in 7.2:* a mount point the server would reject (D3: not absolute, over 1,024 bytes or containing control characters, a decoded tab or newline included) is skipped by the client, because one such reading would make the server reject the whole heartbeat.
+
 **D10. What "used" means.** PHP's `disk_total_space()` and `disk_free_space()` call `statvfs()` and need no extra privileges (design 5.4). `disk_free_space()` returns the space **available to unprivileged users**, so the client sends:
 
 - `disk_total_bytes` = `disk_total_space()`
