@@ -12,6 +12,8 @@ use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretDecryptionFailed;
+use Maguari\Server\Monitoring\Exception\InvalidReadings;
+use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Shared\ErrorCode;
 use Maguari\Shared\Protocol;
 use Maguari\Shared\Signature;
@@ -58,6 +60,7 @@ final class ClientsApi
         private readonly Database $database,
         private readonly Clock $clock,
         private readonly SecretBox $secretBox,
+        private readonly MonitoringApi $monitoring,
     ) {
         $this->enrollmentTokens = new EnrollmentTokens($database, $clock);
         $this->clients = new ClientRepository($database);
@@ -171,8 +174,11 @@ final class ClientsApi
     }
 
     /**
-     * Records a heartbeat from an authenticated client. The time stored is the
-     * server's, not the client's sent_at.
+     * Records a heartbeat from an authenticated client and hands its readings
+     * to Monitoring (design section 2.1). The time stored is the server's, not
+     * the client's sent_at, and the readings get the same time. Everything is
+     * validated before anything is written, so a rejected heartbeat writes
+     * nothing.
      *
      * @throws InvalidClientRequest
      * @throws UnsupportedProtocol
@@ -180,7 +186,22 @@ final class ClientsApi
     public function recordHeartbeat(string $clientId, string $requestBody): void
     {
         $heartbeat = HeartbeatRequest::parse($requestBody, $clientId, self::SUPPORTED_PROTOCOL_VERSIONS);
-        $this->clients->recordHeartbeat($clientId, $this->clock->now(), $heartbeat->clientVersion, $heartbeat->protocolVersion);
+
+        try {
+            $readings = $this->monitoring->parseReadings($heartbeat->readings);
+        } catch (InvalidReadings $invalid) {
+            throw new InvalidClientRequest($invalid->getMessage(), 0, $invalid);
+        }
+
+        $now = $this->clock->now();
+        $this->clients->recordHeartbeat($clientId, $now, $heartbeat->clientVersion, $heartbeat->protocolVersion);
+        $instanceId = $this->clients->instanceId($clientId);
+
+        // Two writes, not one transaction, because transactions do not nest.
+        // Null only if the client was replaced since it was authenticated.
+        if ($instanceId !== null) {
+            $this->monitoring->recordReadings($instanceId, $now, $readings);
+        }
     }
 
     /**

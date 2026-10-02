@@ -66,6 +66,15 @@ final class ClientRepository
         return $ciphertext === false ? null : (string) $ciphertext;
     }
 
+    public function instanceId(string $clientId): ?int
+    {
+        $statement = $this->database->pdo()->prepare('SELECT instance_id FROM clients_clients WHERE client_id = ?');
+        $statement->execute([$clientId]);
+        $instanceId = $statement->fetchColumn();
+
+        return $instanceId === false ? null : (int) $instanceId;
+    }
+
     public function recordHeartbeat(string $clientId, int $receivedAt, string $clientVersion, int $protocolVersion): void
     {
         $this->database->pdo()->prepare(

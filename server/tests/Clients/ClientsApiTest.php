@@ -6,6 +6,7 @@ namespace Maguari\Server\Tests\Clients;
 
 use Maguari\Server\Clients\EnrollmentState;
 use Maguari\Server\Clients\EnrollmentTokens;
+use Maguari\Server\Clients\Exception\InvalidClientRequest;
 use Maguari\Server\Clients\HeartbeatState;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
@@ -88,14 +89,63 @@ final class ClientsApiTest extends TestCase
         $this->assertSame([], $this->environment->clients->enrollmentStates([]));
     }
 
-    private function heartbeat(string $clientId): void
+    /**
+     * @param list<mixed> $readings
+     */
+    private function heartbeat(string $clientId, array $readings = []): void
     {
         $this->environment->clients->recordHeartbeat($clientId, json_encode([
             'protocol_version' => 1,
             'client_version' => '0.3.0',
             'client_id' => $clientId,
             'sent_at' => $this->environment->clock->now(),
+            'readings' => $readings,
         ]));
+    }
+
+    /**
+     * @return list<array{instance_id: int, start_at: int, end_at: int}>
+     */
+    private function runs(): array
+    {
+        return $this->environment->database->pdo()->query('SELECT instance_id, start_at, end_at FROM monitoring_metric_runs ORDER BY id')->fetchAll();
+    }
+
+    public function testAHeartbeatHandsItsReadingsToMonitoringAtTheServersTime(): void
+    {
+        $client = $this->environment->enrollClient(7);
+
+        $this->heartbeat($client->clientId, [['metric' => 'disk_total_bytes:/', 'value' => 10]]);
+
+        $now = $this->environment->clock->now();
+        $this->assertSame([['instance_id' => 7, 'start_at' => $now, 'end_at' => $now]], $this->runs());
+    }
+
+    public function testInvalidReadingsRejectTheHeartbeatAndWriteNothing(): void
+    {
+        $client = $this->environment->enrollClient(7);
+
+        try {
+            $this->heartbeat($client->clientId, [['metric' => 'disk_total_bytes:/', 'value' => 10], ['metric' => 'disk_used_bytes:/', 'value' => -1]]);
+            $this->fail('The heartbeat was accepted.');
+        } catch (InvalidClientRequest) {
+        }
+
+        $this->assertSame([], $this->runs());
+        $this->assertNull($this->environment->clients->heartbeatStatuses([7])[7]->lastHeartbeatAt);
+    }
+
+    public function testReEnrollingKeepsTheInstancesRuns(): void
+    {
+        $first = $this->environment->enrollClient(7);
+        $this->heartbeat($first->clientId, [['metric' => 'disk_total_bytes:/', 'value' => 10]]);
+        $this->environment->clock->advance(60);
+
+        $second = $this->environment->enrollClient(7);
+        $this->heartbeat($second->clientId, [['metric' => 'disk_total_bytes:/', 'value' => 10]]);
+
+        $now = $this->environment->clock->now();
+        $this->assertSame([['instance_id' => 7, 'start_at' => $now - 60, 'end_at' => $now]], $this->runs());
     }
 
     public function testHeartbeatStatuses(): void

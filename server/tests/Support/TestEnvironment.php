@@ -15,6 +15,7 @@ use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
+use Maguari\Server\Monitoring\MonitoringApi;
 use Slim\App as SlimApp;
 
 /**
@@ -35,6 +36,7 @@ final class TestEnvironment
     public readonly FakeTokenSource $tokens;
     public readonly FakeHttpClient $http;
     public readonly FleetApi $fleet;
+    public readonly MonitoringApi $monitoring;
     public readonly ClientsApi $clients;
 
     public function __construct(bool $migrate = true)
@@ -57,7 +59,8 @@ final class TestEnvironment
         $this->tokens = new FakeTokenSource();
         $this->http = new FakeHttpClient();
         $this->fleet = new FleetApi($this->database, $this->clock, $this->tokens, $this->http);
-        $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox);
+        $this->monitoring = new MonitoringApi($this->database);
+        $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox, $this->monitoring);
     }
 
     public function writeSeedConfig(string $contents): void

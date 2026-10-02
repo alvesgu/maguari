@@ -52,6 +52,7 @@ final class MigratorTest extends TestCase
             'Clients/0003_clients_nonces.sql',
             'Fleet/0001_fleet_projects.sql',
             'Fleet/0002_fleet_instances.sql',
+            'Monitoring/0001_monitoring_metric_runs.sql',
         ], $migrator->migrate());
         $this->assertTrue($migrator->isUpToDate());
         $this->assertSame([], $migrator->migrate());

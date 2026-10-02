@@ -113,6 +113,32 @@ final class HeartbeatFlowTest extends TestCase
         return $value === null ? null : (int) $value;
     }
 
+    private function runCount(): int
+    {
+        return (int) $this->environment->database->pdo()->query('SELECT COUNT(*) FROM monitoring_metric_runs')->fetchColumn();
+    }
+
+    public function testStoresReadingsAsRuns(): void
+    {
+        $readings = [
+            ['metric' => 'disk_used_bytes:/', 'value' => 8_123_456_512],
+            ['metric' => 'disk_total_bytes:/', 'value' => 10_213_466_112],
+            ['metric' => 'load_average:1m', 'value' => 1],
+        ];
+
+        $this->assertSame(204, $this->send(body: $this->body($this->client, ['readings' => $readings]))->getStatusCode());
+        $this->environment->clock->advance(60);
+        $this->assertSame(204, $this->send(body: $this->body($this->client, ['readings' => $readings]))->getStatusCode());
+
+        $now = $this->environment->clock->now();
+        $this->assertSame([
+            ['instance_id' => 7, 'metric' => 'disk_used_bytes:/', 'value' => 8_123_456_512, 'start_at' => $now - 60, 'end_at' => $now],
+            ['instance_id' => 7, 'metric' => 'disk_total_bytes:/', 'value' => 10_213_466_112, 'start_at' => $now - 60, 'end_at' => $now],
+        ], $this->environment->database->pdo()->query(
+            'SELECT instance_id, metric, value, start_at, end_at FROM monitoring_metric_runs ORDER BY id',
+        )->fetchAll());
+    }
+
     public function testAcceptsASignedHeartbeat(): void
     {
         $this->environment->clock->advance(5);
@@ -298,6 +324,10 @@ final class HeartbeatFlowTest extends TestCase
             'unsupported protocol' => [['protocol_version' => 2], 400, 'unsupported_protocol'],
             'sent_at as a string' => [['sent_at' => '1790000000'], 400, 'bad_request'],
             'readings not a list' => [['readings' => ['disk' => 1]], 400, 'bad_request'],
+            'a reading without a value' => [['readings' => [['metric' => 'disk_total_bytes:/']]], 400, 'bad_request'],
+            'a negative reading' => [['readings' => [['metric' => 'disk_total_bytes:/', 'value' => -1]]], 400, 'bad_request'],
+            'disk used without its total' => [['readings' => [['metric' => 'disk_used_bytes:/', 'value' => 1]]], 400, 'bad_request'],
+            'a relative mount point' => [['readings' => [['metric' => 'disk_total_bytes:boot', 'value' => 1]]], 400, 'bad_request'],
             'bad client_version' => [['client_version' => 'dev'], 400, 'bad_request'],
         ];
     }
@@ -308,8 +338,16 @@ final class HeartbeatFlowTest extends TestCase
      */
     public function testRejectsBadBodies(array $overrides, int $status, string $code): void
     {
+        // A valid reading next to each problem, which must not be stored either.
+        $readings = $overrides['readings'] ?? [];
+
+        if (array_is_list($readings)) {
+            $overrides['readings'] = [['metric' => 'disk_total_bytes:/boot', 'value' => 1], ...$readings];
+        }
+
         $this->assertError($this->send(body: $this->body($this->client, $overrides)), $status, $code);
         $this->assertNull($this->lastHeartbeatAt());
+        $this->assertSame(0, $this->runCount());
     }
 
     public function testOptionalListsMayBeMissing(): void

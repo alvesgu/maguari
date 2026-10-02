@@ -48,7 +48,7 @@ Maguari follows GCP's own wording: the Compute Engine console calls them "VM ins
 | Heartbeat | A signed message from a client to the server |
 | Metric | The kind of thing measured (for example disk used on `/`) |
 | Reading | One measured value at one moment |
-| Run | A stored stretch of consecutive equal readings |
+| Run | A stored stretch of consecutive equal readings (for disk used, nearly equal; section 9.1) |
 | Check | A test with a pass or fail result (HTTP, database, heartbeat age) |
 | Incident | An ongoing problem on one instance, from its first failed check until recovery |
 | Action | Something Maguari does to fix a problem: restart, reboot or reset |
@@ -172,7 +172,7 @@ server/public/               Web root: index.php and static assets (assets/magua
 4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. nginx will serve `/assets/` directly (packaging).
 5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more.
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
-7. Internal structure of each context (layers) is decided in a later design step, starting with the core contexts.
+7. Internal structure of each context (layers) is decided in a later design step, starting with the core contexts. Monitoring, the first core context with code, stays flat like Fleet and Clients for now: a public `MonitoringApi`, small classes and `Migrations/`, with rules such as the run rule written as pure classes without database access. Its layers are decided when checks arrive and it has more than one concern.
 
 ## 4. Versioning
 
@@ -222,7 +222,29 @@ Response payload:
 
 When there is nothing to send, the response is `204 No Content` with an empty body. This matters for the free tier egress limit (section 14).
 
-The server checks `protocol_version` (supported versions only), `client_version` (a version such as `1.2.3`), `client_id` (must equal the `X-Maguari-Client` header) and `sent_at` (integer Unix seconds). `readings`, `checks` and `command_results` are optional lists; until the steps that use them, they are accepted and ignored. Unknown fields are ignored. The server stores its **own** receive time as the last heartbeat, never the client's `sent_at`, together with the client and protocol versions.
+The server checks `protocol_version` (supported versions only), `client_version` (a version such as `1.2.3`), `client_id` (must equal the `X-Maguari-Client` header) and `sent_at` (integer Unix seconds). `readings`, `checks` and `command_results` are optional lists; `checks` and `command_results` are accepted and ignored until the steps that use them. Unknown fields are ignored. The server stores its **own** receive time as the last heartbeat, never the client's `sent_at`, together with the client and protocol versions.
+
+Each reading is one metric and one value:
+
+```
+"readings": [
+    {"metric": "disk_used_bytes:/", "value": 8123456512},
+    {"metric": "disk_total_bytes:/", "value": 10213466112}
+]
+```
+
+- A metric is `<kind>:<subject>`. The kind never contains `:`, so the name is split at the first `:`, even when a mount point contains one. The same string is stored in `monitoring_metric_runs.metric`. Kind names and the separator live in `shared/src/Metric.php`.
+- Kinds so far: `disk_used_bytes` and `disk_total_bytes`, in integer bytes, whose subject is the filesystem's mount point.
+- Readings carry no time of their own. Their time is the server's receive time, the same as the last heartbeat, because `sent_at` may be off by up to 5 minutes.
+
+Clients hands the readings to Monitoring (section 2.1), which validates them before anything is written. Any of these makes the whole heartbeat `bad_request`, and then nothing is stored, the last heartbeat time included:
+
+1. A reading that is not an object with a string `metric` and an integer `value`, or whose value is below 0.
+2. The same metric twice, or more than 100 readings.
+3. A disk metric whose mount point does not start with `/`, is longer than 1,024 bytes or contains control characters.
+4. `disk_used_bytes` without `disk_total_bytes` for the same mount point (the deadband in section 9.1 needs it).
+
+Readings of unknown kinds are ignored, so newer clients keep working with older servers.
 
 The web app shows each enrolled instance's last heartbeat on the dashboard (`/admin`, every picked instance, read from SQLite only) and on its project's page: "No heartbeat yet", "On time" (at most 90 seconds old, 1.5 times the interval, the same factor as section 9.1 item 3) or "Late". This is display only; the heartbeat-age check that opens incidents (section 6.2) comes with Monitoring.
 
@@ -428,10 +450,14 @@ Readings are stored as **runs** instead of individual points (run-length storage
 monitoring_metric_runs(id, instance_id, metric, value, start_at, end_at)
 ```
 
-1. When a reading equals the current run's value, update `end_at`.
+`instance_id` is Fleet's instance ID (no foreign key, section 2.1), so re-enrolling an instance keeps its runs. `value` is `NUMERIC`, so later metrics can be fractional. An index on `(instance_id, metric, start_at)` finds the current run and serves time-range reads. The **current run** of a metric is the one with the latest `start_at`, ties broken by the highest `id`.
+
+1. When a reading equals the current run's value, update `end_at`. For `disk_used_bytes`, "equals" means within a **deadband** of 0.1% of the same filesystem's total (from the same heartbeat), measured against the value that started the run, not the latest reading; the run keeps its first value. Disk used in bytes changes on almost every heartbeat, so without a deadband nearly every reading would be its own run. Every other kind, `disk_total_bytes` included, needs exact equality.
 2. When it differs, insert a new run.
-3. When the gap since `end_at` exceeds 1.5 times the expected interval, insert a new run even if the value is unchanged. This keeps outages visible instead of hiding them inside a flat line.
-4. No deletes are needed.
+3. When the gap since `end_at` exceeds 1.5 times the expected interval, insert a new run even if the value is unchanged. This keeps outages visible instead of hiding them inside a flat line. The limit is computed from the interval, never hard-coded: with the fixed 60 second interval of the MVP it is 90 seconds, so a gap of exactly 90 seconds continues the run and 91 seconds starts a new one.
+4. A reading older than the current run's `end_at` (the server's clock stepped back) is ignored, so runs never overlap or go backwards.
+5. All readings of one heartbeat are applied in one `BEGIN IMMEDIATE` transaction.
+6. No deletes are needed. A filesystem that disappears simply stops getting runs.
 
 Implications:
 
@@ -683,7 +709,7 @@ Implement in this order, one step at a time:
 4. Add one GCP project.
 5. List the project's instances from the API.
 6. Receive client heartbeats and show each instance's heartbeat status. Done in four sub-steps (`docs/plans/mvp-step-6.md`): 6.1 pick instances and issue enrollment tokens, 6.2 client API foundations and the enrollment exchange, 6.3 signed heartbeats and heartbeat status, 6.4 the client.
-7. Receive disk used and total every minute and store them as runs (section 9.1).
+7. Receive disk used and total every minute and store them as runs (section 9.1). Done in two sub-steps (`docs/plans/mvp-step-7.md`): 7.1 store readings as runs, 7.2 the client measures disk usage.
 8. Daily scheduled job with a "Run now" button.
 9. Send a test email to the administrator.
 10. Read stored runs through an API endpoint for future charts.

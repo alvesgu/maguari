@@ -28,6 +28,7 @@ use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\Secrets\SecretKeyUnavailable;
 use Maguari\Server\Kernel\SystemClock;
+use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Shared\ErrorCode;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App as SlimApp;
@@ -90,7 +91,7 @@ final class App
         return self::create(
             new AccessApi($database, $clock),
             new FleetApi($database, $clock, $tokens, $http),
-            new ClientsApi($database, $clock, $secretBox),
+            new ClientsApi($database, $clock, $secretBox, new MonitoringApi($database)),
             $sessionPath,
             $clock,
         );
