@@ -174,7 +174,7 @@ server/public/               Web root: index.php and static assets (assets/magua
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
 7. Monitoring, a core context, is split into layers (MVP step 9). Remediation's structure is decided when it gets code. Supporting and generic contexts (Fleet, Clients, Access and Notifications) stay flat. Monitoring's layers:
    - `MonitoringApi.php` (the public interface) and `Exception/` (the exceptions it throws) at the context's root.
-   - `Domain/`: pure rules and values (for example `RunRule`, `Readings`, `DiskSizeRule`, `CheckResult`). It uses nothing outside `Domain/`, the context's `Exception/` and `shared/`, and no database, network, file or clock functions. `tests/Monitoring/LayersTest.php` enforces this.
+   - `Domain/`: pure rules and values (for example `RunRule`, `Readings`, `DiskSizeRule`, `CheckResult`). It uses nothing outside `Domain/`, the context's `Exception/` and `shared/`, and no database, network, file or clock functions. The rule is about hidden inputs: `gmdate()` is allowed only with an explicit timestamp (not `null`, which means now), and `date()` never, because its output depends on the timezone setting. `tests/Monitoring/LayersTest.php` enforces this.
    - `Application/`: orchestration that uses the other layers (`DailyJob`).
    - `Infrastructure/`: SQL only (`MetricRunRepository`, `DailyJobRepository`).
    - `Migrations/`.

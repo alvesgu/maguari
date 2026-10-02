@@ -7,8 +7,10 @@
  * @var \Maguari\Server\Monitoring\Domain\DailyJobSummary $dailyJob
  * @var \Closure $partial
  */
+use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\DailyJobState;
+use Maguari\Shared\Protocol;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 $lastRun = $dailyJob->lastRun;
@@ -54,8 +56,8 @@ endif; ?></p>
 <?php endforeach; ?>
 </tbody>
 </table>
-<?php /* TEMPORARY (MVP): fixed 90 seconds until Monitoring's heartbeat-age check (ClientsApi::LATE_AFTER_SECONDS). */ ?>
-<p>Heartbeats are expected every minute. A heartbeat older than 90 seconds is late. Reload the page to update.</p>
+<?php /* TEMPORARY (MVP): a fixed limit until Monitoring's heartbeat-age check (ClientsApi::LATE_AFTER_SECONDS). */ ?>
+<p>Heartbeats are expected every <?= Protocol::HEARTBEAT_INTERVAL_SECONDS ?> seconds. A heartbeat older than <?= ClientsApi::LATE_AFTER_SECONDS ?> seconds is late. Reload the page to update.</p>
 <p>Disk size compares each instance's boot disk with the filesystems its client reports on it. Hover over a result for details.</p>
 <?php if ($failures !== []): ?>
 <h3>Disk size failures</h3>

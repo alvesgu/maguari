@@ -9,7 +9,9 @@ use PHPUnit\Framework\TestCase;
 /**
  * Monitoring's Domain/ holds only pure rules and values (design section 3.1
  * item 7): it uses nothing outside Domain/, Monitoring's exceptions and
- * shared/, and no database, network, file or clock functions.
+ * shared/, and no database, network, file or clock functions. The rule is
+ * about hidden inputs: gmdate() is allowed only with an explicit timestamp,
+ * and date() never, because its output depends on the timezone setting.
  */
 final class LayersTest extends TestCase
 {
@@ -22,12 +24,18 @@ final class LayersTest extends TestCase
     /** Global classes for databases and network access. */
     private const FORBIDDEN_CLASSES = ['pdo', 'pdostatement', 'sqlite3', 'mysqli', 'datetime', 'datetimeimmutable'];
 
-    /** Global functions that reach a database, the network, files or the clock. */
+    /**
+     * Global functions that reach a database, the network, files or the
+     * clock, or depend on the timezone setting.
+     */
     private const FORBIDDEN_FUNCTIONS = [
         'fopen', 'fsockopen', 'pfsockopen', 'file', 'file_get_contents', 'file_put_contents', 'readfile',
         'gethostbyname', 'gethostbynamel', 'dns_get_record', 'checkdnsrr', 'getmxrr', 'get_headers',
-        'mail', 'time', 'microtime', 'hrtime', 'date', 'gmdate', 'date_create', 'date_create_immutable',
+        'mail', 'time', 'microtime', 'hrtime', 'date', 'mktime', 'date_create', 'date_create_immutable',
     ];
+
+    /** Allowed only with an explicit timestamp, its second argument. */
+    private const NEEDS_TIMESTAMP = 'gmdate';
 
     private const FORBIDDEN_FUNCTION_PREFIXES = ['curl_', 'socket_', 'stream_', 'sqlite_', 'openssl_'];
 
@@ -54,6 +62,7 @@ final class LayersTest extends TestCase
                     $pdo = new \PDO('sqlite::memory:');
                     $socket = stream_socket_client('tcp://example.com:443');
                     $now = time();
+                    $local = date('Y-m-d', $at);
                     $run = new \Maguari\Server\Monitoring\Infrastructure\MetricRunRepository();
                     $this->time();
                     Metric::name('a', 'b');
@@ -66,8 +75,34 @@ final class LayersTest extends TestCase
             'PDO',
             'stream_socket_client',
             'time',
+            'date',
             'Maguari\\Server\\Monitoring\\Infrastructure\\MetricRunRepository',
         ], self::violations($code));
+    }
+
+    public function testGmdateNeedsAnExplicitTimestamp(): void
+    {
+        $allowed = [
+            "gmdate('Y-m-d', \$at);",
+            "gmdate('Y-m-d', timestamp: \$at);",
+            "gmdate('H:i', max(0, \$at - 60));",
+            "\\gmdate('Y-m-d', \$run->endAt);",
+        ];
+        $forbidden = [
+            "gmdate('Y-m-d');",
+            "\\gmdate('Y-m-d');",
+            "gmdate('Y-m-d', null);",
+            "gmdate('Y-m-d', NULL);",
+            "gmdate(...['Y-m-d', \$at]);",
+        ];
+
+        foreach ($allowed as $call) {
+            $this->assertSame([], self::violations("<?php {$call}"), $call);
+        }
+
+        foreach ($forbidden as $call) {
+            $this->assertSame(['gmdate'], self::violations("<?php {$call}"), $call);
+        }
     }
 
     /**
@@ -118,7 +153,11 @@ final class LayersTest extends TestCase
             $next = $tokens[$i + 1] ?? null;
             $isCall = $next === '(';
 
-            if (
+            if ($isCall && $lower === self::NEEDS_TIMESTAMP) {
+                if (!self::hasExplicitTimestamp($tokens, $i + 1)) {
+                    $violations[] = $name;
+                }
+            } elseif (
                 ($previousId === T_NEW && in_array($lower, self::FORBIDDEN_CLASSES, true))
                 || ($isCall && in_array($lower, self::FORBIDDEN_FUNCTIONS, true))
                 || ($isCall && self::hasForbiddenPrefix($lower))
@@ -131,6 +170,49 @@ final class LayersTest extends TestCase
         }
 
         return $violations;
+    }
+
+    /**
+     * Whether the call whose "(" is at $open has a second argument other
+     * than null (a null timestamp means now). An unpacked argument list
+     * cannot be checked, so it counts as missing.
+     *
+     * @param list<mixed> $tokens without whitespace and comments
+     */
+    private static function hasExplicitTimestamp(array $tokens, int $open): bool
+    {
+        $depth = 0;
+        $arguments = [[]];
+
+        for ($i = $open; $i < count($tokens); $i++) {
+            $token = $tokens[$i];
+            $text = is_array($token) ? $token[1] : $token;
+
+            if (in_array($text, ['(', '[', '{'], true) || (is_array($token) && in_array($token[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true))) {
+                $depth++;
+
+                if ($depth === 1) {
+                    continue;
+                }
+            } elseif (in_array($text, [')', ']', '}'], true)) {
+                $depth--;
+
+                if ($depth === 0) {
+                    break;
+                }
+            } elseif ($depth === 1 && $text === ',') {
+                $arguments[] = [];
+
+                continue;
+            }
+
+            $arguments[count($arguments) - 1][] = $text;
+        }
+
+        $unpacked = ($arguments[0][0] ?? null) === '...';
+        $timestamp = strtolower(implode('', $arguments[1] ?? []));
+
+        return !$unpacked && $timestamp !== '' && $timestamp !== 'null' && $timestamp !== 'timestamp:null';
     }
 
     private static function isAllowed(string $name): bool
