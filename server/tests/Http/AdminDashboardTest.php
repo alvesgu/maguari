@@ -85,7 +85,7 @@ final class AdminDashboardTest extends TestCase
         $this->assertStringContainsString(
             '<tr><td><a href="/admin/projects/1">alpha-project</a></td><td>db</td><td>us-east1-b</td>' . "\n"
                 . '<td>Enrolled</td>' . "\n" . '<td>On time</td>' . "\n" . '<td>' . $heartbeatAt . ' UTC (45 s ago)</td>' . "\n"
-                . '<td>0.1.0</td></tr>',
+                . '<td>0.1.0</td>' . "\n" . '<td></td></tr>',
             $body,
         );
         $this->assertStringContainsString('<td>web</td><td>us-east1-b</td>' . "\n" . '<td>Waiting for enrollment</td>', $body);

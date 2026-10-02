@@ -10,20 +10,29 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Http\Session;
 use Maguari\Server\Http\View;
+use Maguari\Server\Monitoring\DailyJobTrigger;
+use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
+use Maguari\Server\Monitoring\Exception\DailyJobFailed;
+use Maguari\Server\Monitoring\MonitoringApi;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
  * The dashboard: every picked instance with its heartbeat status (design
- * section 15 step 6). It reads only SQLite, so it works while Google Cloud's
- * API does not.
+ * section 15 step 6) and the daily job with its latest results (step 8). It
+ * reads only SQLite, so it works while Google Cloud's API does not.
  */
 final class AdminController
 {
+    /**
+     * @param bool $logErrors log a failed daily job to PHP's error log. Tests pass false.
+     */
     public function __construct(
         private readonly FleetApi $fleet,
         private readonly ClientsApi $clients,
+        private readonly MonitoringApi $monitoring,
         private readonly View $view,
+        private readonly bool $logErrors = true,
     ) {
     }
 
@@ -38,7 +47,28 @@ final class AdminController
             'instances' => $instances,
             'enrollmentStates' => $this->clients->enrollmentStates($ids),
             'heartbeats' => $this->clients->heartbeatStatuses($ids),
+            'dailyJob' => $this->monitoring->dailyJobSummary($ids),
         ]);
+    }
+
+    /**
+     * "Run now" (design section 6.3): runs the daily job inside the request,
+     * then shows the dashboard, which says how the run went.
+     */
+    public function runDailyJob(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface
+    {
+        try {
+            $this->monitoring->runDailyJob(DailyJobTrigger::Manual);
+        } catch (DailyJobAlreadyRunning) {
+            // The dashboard shows the run in progress.
+        } catch (DailyJobFailed $failed) {
+            // The dashboard shows the run failed; the details go to the log only.
+            if ($this->logErrors) {
+                error_log('Maguari: ' . $failed->getMessage());
+            }
+        }
+
+        return $response->withStatus(303)->withHeader('Location', '/admin');
     }
 
     public function logout(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface

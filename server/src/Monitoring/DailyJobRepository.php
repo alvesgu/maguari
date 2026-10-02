@@ -53,6 +53,79 @@ final class DailyJobRepository
         $this->database->pdo()->prepare('UPDATE monitoring_daily_job_runs SET finished_at = ? WHERE id = ?')->execute([$at, $runId]);
     }
 
+    /**
+     * The latest run, optionally only a succeeded or a scheduled one.
+     *
+     * @param int $runningSince an unfinished run started at or before this was killed
+     */
+    public function latest(int $runningSince, bool $succeeded = false, ?DailyJobTrigger $trigger = null): ?DailyJobRun
+    {
+        $conditions = [];
+        $parameters = [];
+
+        if ($succeeded) {
+            $conditions[] = 'finished_at IS NOT NULL AND failed = 0';
+        }
+
+        if ($trigger !== null) {
+            $conditions[] = 'triggered_by = ?';
+            $parameters[] = $trigger->value;
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id, triggered_by, started_at, finished_at, failed FROM monitoring_daily_job_runs'
+                . ($conditions === [] ? '' : ' WHERE ' . implode(' AND ', $conditions))
+                . ' ORDER BY started_at DESC, id DESC LIMIT 1',
+        );
+        $statement->execute($parameters);
+        $row = $statement->fetch();
+
+        if ($row === false) {
+            return null;
+        }
+
+        $startedAt = (int) $row['started_at'];
+        $finishedAt = $row['finished_at'] === null ? null : (int) $row['finished_at'];
+        $state = match (true) {
+            (int) $row['failed'] === 1 => DailyJobState::Failed,
+            $finishedAt !== null => DailyJobState::Succeeded,
+            $startedAt > $runningSince => DailyJobState::Running,
+            default => DailyJobState::Killed,
+        };
+
+        return new DailyJobRun((int) $row['id'], DailyJobTrigger::from($row['triggered_by']), $startedAt, $finishedAt, $state);
+    }
+
+    /**
+     * @param int[] $instanceIds
+     * @return array<int, CheckResult> by instance ID; instances without a result are left out
+     */
+    public function results(int $runId, string $checkName, array $instanceIds): array
+    {
+        if ($instanceIds === []) {
+            return [];
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT instance_id, check_name, outcome, detail, checked_at FROM monitoring_check_results '
+                . 'WHERE job_run_id = ? AND check_name = ? AND instance_id IN (' . implode(', ', array_fill(0, count($instanceIds), '?')) . ')',
+        );
+        $statement->execute([$runId, $checkName, ...array_values($instanceIds)]);
+        $results = [];
+
+        foreach ($statement->fetchAll() as $row) {
+            $results[(int) $row['instance_id']] = new CheckResult(
+                (int) $row['instance_id'],
+                $row['check_name'],
+                CheckOutcome::from($row['outcome']),
+                $row['detail'],
+                (int) $row['checked_at'],
+            );
+        }
+
+        return $results;
+    }
+
     public function fail(int $runId, int $at): void
     {
         $this->database->pdo()->prepare('UPDATE monitoring_daily_job_runs SET finished_at = ?, failed = 1 WHERE id = ?')

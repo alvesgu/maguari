@@ -54,6 +54,17 @@ final class MonitoringApi
     }
 
     /**
+     * The daily job's latest runs and the given instances' latest disk size
+     * results, for the dashboard. Reads only SQLite.
+     *
+     * @param int[] $instanceIds
+     */
+    public function dailyJobSummary(array $instanceIds): DailyJobSummary
+    {
+        return $this->dailyJob->summary($instanceIds);
+    }
+
+    /**
      * Validates a heartbeat's readings without writing anything, so the
      * caller can reject the whole heartbeat first.
      *

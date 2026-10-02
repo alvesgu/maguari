@@ -192,6 +192,14 @@ It uses your Application Default Credentials (design 8), like the project pages.
 - Read from SQLite only, like the rest of the dashboard: opening it never calls the Compute Engine API.
 - New `MonitoringApi::lastDailyJobRun(): ?DailyJobRun` and `MonitoringApi::latestCheckResults(int[] $instanceIds): array<int, CheckResult>`. `AdminController` gains `MonitoringApi`; `App` passes it in.
 
+*Refined in 8.2:*
+
+- One call instead of two: `MonitoringApi::dailyJobSummary(int[] $instanceIds): DailyJobSummary`, holding the last run, the last successful run, the timer's last run, whether it is overdue and the disk size results.
+- A run's state (`DailyJobState`): running, did not finish (unfinished for more than 15 minutes: killed), failed (with the 8.1 review fix) or succeeded.
+- Results come from the **last successful run**, since a failed run has none. When the last run did not succeed, the page says "The results below are from the last successful run, at ...". Instances picked after that run have an empty cell.
+- "Overdue" looks only at **scheduled** runs, because it is about the timer: pressing "Run now" every day must not hide a broken timer. With no scheduled run at all (a fresh install before 06:00, or development), the page says "No scheduled run yet" instead of a warning, because it cannot tell how long the timer has existed.
+- A failed "Run now" is logged by the controller (`Maguari: The daily job failed: ...`), and the dashboard says the details are in the server's error log.
+
 ## Out of scope for this step
 
 - Certificate checks, local and remote (proposed as their own step, above).
@@ -248,12 +256,17 @@ server/
   src/
     Monitoring/MonitoringApi.php            lastDailyJobRun(), latestCheckResults() (D10)
     Monitoring/DailyJobRun.php              (moved from 8.1, which did not need it)
+    Monitoring/DailyJobState.php            running, killed, failed, succeeded
+    Monitoring/DailyJobSummary.php          what the dashboard shows
+    Monitoring/DailyJob.php                 summary()
+    Monitoring/DailyJobRepository.php       latest run, results of a run
     Http/App.php                            route, MonitoringApi for the dashboard
     Http/Controller/AdminController.php     shows results; runDailyJob() (D9)
   templates/admin.php                       Daily job section, Disk size column
-  public/assets/maguari.css                 if the new section needs styles
+  public/assets/maguari.css                 (unchanged: the existing styles were enough)
   tests/
     Http/DailyJobFlowTest.php
+    Http/AdminDashboardTest.php, Http/AppTest.php   the new column and App::create argument
 docs/DESIGN.md
 ```
 

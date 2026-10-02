@@ -70,7 +70,7 @@ final class TestEnvironment
 
     public function app(): SlimApp
     {
-        return App::create($this->access, $this->fleet, $this->clients, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
+        return App::create($this->access, $this->fleet, $this->clients, $this->monitoring, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
     }
 
     public function browser(string $ip = '192.0.2.10'): Browser

@@ -25,6 +25,9 @@ final class DailyJob
      */
     public const RUNNING_FOR_AT_MOST_SECONDS = 900;
 
+    /** The timer runs daily, so a scheduled run older than this is overdue. */
+    public const OVERDUE_AFTER_SECONDS = 25 * 3600;
+
     private readonly DailyJobRepository $runs;
     private readonly DiskSizeRule $diskSizeRule;
 
@@ -62,6 +65,25 @@ final class DailyJob
 
             throw new DailyJobFailed($exception);
         }
+    }
+
+    /**
+     * @param int[] $instanceIds
+     */
+    public function summary(array $instanceIds): DailyJobSummary
+    {
+        $now = $this->clock->now();
+        $runningSince = $now - self::RUNNING_FOR_AT_MOST_SECONDS;
+        $lastSucceeded = $this->runs->latest($runningSince, succeeded: true);
+        $lastScheduled = $this->runs->latest($runningSince, trigger: DailyJobTrigger::Scheduled);
+
+        return new DailyJobSummary(
+            $this->runs->latest($runningSince),
+            $lastSucceeded,
+            $lastScheduled,
+            $lastScheduled !== null && $now - $lastScheduled->startedAt > self::OVERDUE_AFTER_SECONDS,
+            $lastSucceeded === null ? [] : $this->runs->results($lastSucceeded->id, DiskSizeRule::CHECK_NAME, $instanceIds),
+        );
     }
 
     /**
