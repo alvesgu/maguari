@@ -720,9 +720,10 @@ Implement in this order, one step at a time:
 5. List the project's instances from the API.
 6. Receive client heartbeats and show each instance's heartbeat status. Done in four sub-steps (`docs/plans/mvp-step-6.md`): 6.1 pick instances and issue enrollment tokens, 6.2 client API foundations and the enrollment exchange, 6.3 signed heartbeats and heartbeat status, 6.4 the client.
 7. Receive disk used and total every minute and store them as runs (section 9.1). Done in two sub-steps (`docs/plans/mvp-step-7.md`): 7.1 store readings as runs, 7.2 the client measures disk usage.
-8. Daily scheduled job with a "Run now" button.
-9. Send a test email to the administrator.
-10. Read stored runs through an API endpoint for future charts.
+8. Daily scheduled job with a "Run now" button, with the boot disk size check (section 6.3) as its first check. Done in two sub-steps (`docs/plans/mvp-step-8.md`): 8.1 the job and the disk size check, 8.2 the dashboard and "Run now".
+9. Certificate expiry: the client's certificate scanner (section 6.1.1) and the local and remote certificate checks in the daily job.
+10. Send a test email to the administrator.
+11. Read stored runs through an API endpoint for future charts.
 
 First steps after the MVP: the egress indicator (section 10.3) and Google sign-in.
 
@@ -730,7 +731,13 @@ First steps after the MVP: the egress indicator (section 10.3) and Google sign-i
 
 None at the moment. New questions go here as they come up.
 
-## 17. Roadmap after 1.0
+## 17. Required before 1.0
+
+Gaps the MVP leaves open on purpose that must be closed before 1.0.
+
+1. **The disk size comparison must cover attached disks**, not only the boot disk (section 6.3). Databases and growing applications often live on attached disks, so a grown attached disk whose filesystem was never extended matters as much as the boot disk. The client will need to report which GCP disk each filesystem is on. On Compute Engine, the `/dev/disk/by-id/google-*` links are a likely way to map filesystems to disk device names (the `deviceName` of each disk in the instance resource). Disk usage monitoring itself (section 6.1.2) already covers attached disks.
+
+## 18. Roadmap after 1.0
 
 1. Uninstall support.
 2. Full application reset (which would also allow reading the seed config file again).
