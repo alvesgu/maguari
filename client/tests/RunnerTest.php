@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Client\Tests;
 
+use Maguari\Client\CertificateExpiry;
 use Maguari\Client\ClientFailure;
 use Maguari\Client\Clock;
 use Maguari\Client\Credentials;
@@ -24,7 +25,7 @@ final class RunnerTest extends TestCase
 
     private function runner(Transport $transport, Clock $clock): Runner
     {
-        return new Runner(new HeartbeatSender($transport, $clock, new DiskUsage(new FakeFilesystemStats(), __DIR__ . '/fixtures/mounts-gce')), $clock, function (string $message): void {
+        return new Runner(new HeartbeatSender($transport, $clock, new DiskUsage(new FakeFilesystemStats(), __DIR__ . '/fixtures/mounts-gce'), new CertificateExpiry(__DIR__ . '/fixtures/missing')), $clock, function (string $message): void {
             $this->log[] = $message;
         });
     }

@@ -87,6 +87,7 @@ server/src/Monitoring/
 - It reads only `cert.pem` in each directory under `/etc/letsencrypt/live/` (each certbot lineage). Never `privkey.pem`, `fullchain.pem` or `archive/`. Each `cert.pem` is a symlink into `archive/`, which it follows; files over 64 KiB are skipped.
 - For each certificate it parses the first PEM block with `openssl_x509_parse()` (the openssl extension is built into Ubuntu's `php-cli`, so no new dependency) and keeps the lineage name, the DNS names from `subjectAltName` (or the subject CN when there is none) and `validTo_time_t`.
 - A certificate that cannot be read or parsed is left out. With nothing readable (no certbot on the instance), it writes an empty list.
+- *Refined in 9.2:* a `live/` directory that exists but cannot be listed is an error ("Run the certificate scanner as root."), not an empty list, so running it as the wrong user cannot look like "no certificates". Only a PEM certificate block is passed to `openssl_x509_parse()`, which would otherwise read a string starting with `file://` as a path.
 - At most 20 certificates, in lineage name order.
 - It does not require root: it needs read access to the directory. In tests and development it reads a fixture tree as the developer's user.
 - Exit code 0 when it wrote the file, 1 with one line on stderr when it could not. Never a stack trace.
@@ -106,7 +107,7 @@ server/src/Monitoring/
 - World-readable is fine: domain names and expiry dates are public (certificate transparency logs).
 - Written to a temporary file in the same directory and renamed, so the client never reads half a file.
 - `scanned_at` and `name` are for people reading the file; the client sends only domains and dates (D5).
-- `MAGUARI_CERTIFICATES_FILE` overrides the path, for development and tests only (both the scanner and the client read it). `MAGUARI_LETSENCRYPT_DIR` overrides `/etc/letsencrypt` for the scanner, also development and tests only. `scripts/dev-env.sh` sets the first to `client/var/certificates.json`.
+- `MAGUARI_CERTIFICATES_FILE` overrides the path, for development and tests only (both the scanner and the client read it). `MAGUARI_LETSENCRYPT_DIR` overrides `/etc/letsencrypt` for the scanner, also development and tests only. `scripts/dev-env.sh` sets the first to `client/var/certificates.json`. *Refined in 9.2:* it also sets the second, to `client/var/letsencrypt`, so the manual check below needs no inline variable.
 
 **D4. Unit files and the deploy hook**, in `client/systemd/` and `client/certbot/` until packaging installs them (like `server/systemd/` in step 8):
 
@@ -280,22 +281,26 @@ docs/DESIGN.md                              section 3.1 item 7
 ### 9.2 Local expiry dates reach the server
 
 ```
-shared/src/Metric.php                       certificate_expires_at
+shared/src/Metric.php                       certificate_expires_at, isCertificateDomain()
+shared/tests/MetricTest.php
 client/
   VERSION                                   0.3.0
   bin/maguari-certificate-scanner           (D2)
   src/CertificateScanner.php                reads live/*/cert.pem, writes the file (D2, D3)
   src/CertificateExpiry.php                 the client's readings from the file (D5)
+  src/CertificatesFile.php                  the file's path, shared by the scanner and the client
   src/HeartbeatSender.php, src/Cli.php      sends them
   systemd/maguari-certificate-scanner.service   (D4)
   systemd/maguari-certificate-scanner.timer     (D4)
   certbot/maguari-certificate-scanner       deploy hook (D4)
   tests/CertificateScannerTest.php          certificates generated at test time
   tests/CertificateExpiryTest.php
-  tests/HeartbeatSenderTest.php, tests/EndToEndTest.php
+  tests/Support/TestCertificates.php        certificates generated at test time
+  tests/ProcessTest.php                     the scanner from a copy of client/ and shared/
+  tests/HeartbeatSenderTest.php, tests/EndToEndTest.php, CliTest, RunnerTest, EnrollerTest
 server/
   src/Monitoring/Domain/Readings.php        accepts and validates the new kind (D5, D6)
-  tests/Monitoring/ReadingsTest.php, tests/Http/HeartbeatFlowTest.php
+  tests/Monitoring/Domain/ReadingsTest.php, tests/Monitoring/MonitoringApiTest.php
 scripts/dev-env.sh                          MAGUARI_CERTIFICATES_FILE
 docs/DESIGN.md
 ```
@@ -417,7 +422,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout /dev/null -subj /CN=example.te
 Run the scanner on it:
 
 ```
-MAGUARI_LETSENCRYPT_DIR=client/var/letsencrypt client/bin/maguari-certificate-scanner
+client/bin/maguari-certificate-scanner
 ```
 
 ```

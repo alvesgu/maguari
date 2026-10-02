@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Maguari certificate scanner every day
+Documentation=https://github.com/alvesgu/maguari
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

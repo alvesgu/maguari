@@ -1,0 +1,33 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// The certificate scanner (design section 6.1.1). It runs as root from its
+// systemd service, which the daily timer and certbot's deploy hook start.
+// Every failure is one line on stderr with exit code 1, never a stack trace.
+
+use Maguari\Client\CertificateScanner;
+use Maguari\Client\ClientFailure;
+
+require dirname(__DIR__) . '/src/autoload.php';
+
+if (count($argv) > 1) {
+    fwrite(STDERR, "Usage: maguari-certificate-scanner (no arguments)\n");
+    exit(1);
+}
+
+try {
+    $scanner = CertificateScanner::fromEnvironment();
+    $certificates = $scanner->scan();
+    $scanner->write($certificates);
+    fwrite(STDOUT, sprintf("Wrote %d certificate(s) to %s.\n", count($certificates), $scanner->outputPath()));
+    exit(0);
+} catch (ClientFailure $failure) {
+    $message = $failure->getMessage();
+} catch (\Throwable $exception) {
+    $message = 'maguari-certificate-scanner failed: ' . $exception->getMessage();
+}
+
+fwrite(STDERR, str_replace(["\r", "\n"], ' ', $message) . "\n");
+exit(1);

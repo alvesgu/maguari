@@ -215,7 +215,7 @@ Request payload:
 
 - `protocol_version`, `client_version`, `client_id`
 - `sent_at` (UTC)
-- `readings`: disk used and total per filesystem, plus any other metrics
+- `readings`: disk used and total per filesystem, each local certificate's expiry date, plus any other metrics
 - `checks`: results of local checks (services, local HTTP, database query, local certificate files)
 - `command_results`: outcomes of previously received commands, by command ID
 
@@ -241,7 +241,9 @@ Each reading is one metric and one value:
 ```
 
 - A metric is `<kind>:<subject>`. The kind never contains `:`, so the name is split at the first `:`, even when a mount point contains one. The same string is stored in `monitoring_metric_runs.metric`. Kind names and the separator live in `shared/src/Metric.php`.
-- Kinds so far: `disk_used_bytes` and `disk_total_bytes`, in integer bytes, whose subject is the filesystem's mount point.
+- Kinds so far: `disk_used_bytes` and `disk_total_bytes`, in integer bytes, whose subject is the filesystem's mount point; and `certificate_expires_at`, in integer Unix seconds, whose subject is the certificate's first domain (section 6.1.1), for example `certificate_expires_at:example.com`.
+- A certificate subject is a lowercase DNS name of letters, digits and hyphens, at most 253 bytes, optionally a wildcard such as `*.example.com` (`Metric::isCertificateDomain()`, shared by both sides). Internationalized names appear in their `xn--` form, as in certificates.
+- Adding `certificate_expires_at` did not change the protocol version: older servers ignore it (below).
 - Readings carry no time of their own. Their time is the server's receive time, the same as the last heartbeat, because `sent_at` may be off by up to 5 minutes.
 
 Clients hands the readings to Monitoring (section 2.1), which validates them before anything is written. Any of these makes the whole heartbeat `bad_request`, and then nothing is stored, the last heartbeat time included:
@@ -250,6 +252,7 @@ Clients hands the readings to Monitoring (section 2.1), which validates them bef
 2. The same metric twice, or more than 100 readings.
 3. A disk metric whose mount point does not start with `/`, is longer than 1,024 bytes or contains control characters.
 4. `disk_used_bytes` without `disk_total_bytes` for the same mount point (the deadband in section 9.1 needs it).
+5. A `certificate_expires_at` metric whose subject is not a certificate subject as defined above.
 
 Readings of unknown kinds are ignored, so newer clients keep working with older servers.
 
@@ -329,10 +332,28 @@ Low CPU usage is never a failure signal on its own.
 
 `/etc/letsencrypt` is often readable only by root, and it also holds private keys, so its permissions are never changed.
 
-1. The client package installs a systemd timer that runs a small scanner **as root**. It reads each certificate's expiry date (public information) and writes only that to a file the client can read: `/var/lib/maguari-certificate-scanner/certificates.json`, mode 0644, in a directory of its own owned by root (mode 0755). Not the client's directory (`/var/lib/maguari-client/`, owned by the client user): a root process writing into a directory an unprivileged user controls is open to symlink attacks. Domain names and expiry dates are public (certificate transparency logs), so the file can be readable by everyone.
+1. The client package installs a systemd timer that runs a small scanner **as root**: `maguari-certificate-scanner`, a separate executable in the client package rather than a client command, so the code that runs as root stays small and `maguari-client` keeps refusing root. It reads each certificate's expiry date (public information) and writes only that to a file the client can read: `/var/lib/maguari-certificate-scanner/certificates.json`, mode 0644, in a directory of its own owned by root (mode 0755). Not the client's directory (`/var/lib/maguari-client/`, owned by the client user): a root process writing into a directory an unprivileged user controls is open to symlink attacks. Domain names and expiry dates are public (certificate transparency logs), so the file can be readable by everyone.
 2. The scanner runs once during package installation (so existing certificates appear immediately) and daily after that.
 3. The package also installs a certbot deploy hook that runs the scanner after each successful renewal. The timer is the main mechanism; the hook only makes renewals show up sooner.
 4. The client itself stays unprivileged and never reads `/etc/letsencrypt`.
+
+What the scanner reads and writes:
+
+1. Only `cert.pem` in each directory under `/etc/letsencrypt/live/` (one per certbot lineage), following its symlink into `archive/`. Never `privkey.pem` or anything else. Only the first PEM certificate block of a file is parsed, files over 64 KiB are skipped and so is anything that does not parse.
+2. For each certificate: the lineage name, the DNS names of `subjectAltName` in order (the subject's common name when there are none) and the expiry date. At most 20, in lineage name order.
+3. A missing `live/` means no certbot: the file gets an empty list. A `live/` that exists but cannot be listed is an error (the scanner was not run as root).
+4. The file is `{"scanned_at": <Unix seconds>, "certificates": [{"name": "example.com", "domains": ["example.com", "www.example.com"], "expires_at": <Unix seconds>}]}`, replaced atomically (a temporary file in the same directory, renamed into place).
+5. Like the client, it fails with one line on stderr and exit code 1, never a stack trace.
+
+The client reads that file on every heartbeat and sends one `certificate_expires_at` reading per certificate (section 5.2), named by its first domain. Two lineages can share a first domain (certbot's `example.com-0001`), and the server rejects a metric sent twice, so the client keeps the latest expiry for each domain: that is the certificate in use. It lowercases domains, skips any it could not send (section 5.2) and sends at most 20. A missing or malformed file gives no certificate readings and never stops a heartbeat.
+
+The units and the hook live in `client/systemd/` and `client/certbot/` until packaging installs them:
+
+- `maguari-certificate-scanner.service`: `Type=oneshot`, as root, with `StateDirectory=maguari-certificate-scanner` (mode 0755, so systemd creates the directory), `PrivateNetwork=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `NoNewPrivileges=yes` and `CapabilityBoundingSet=CAP_DAC_READ_SEARCH`, the one capability reading needs.
+- `maguari-certificate-scanner.timer`: daily, with up to an hour of random delay, `Persistent=true`.
+- The deploy hook (`/etc/letsencrypt/renewal-hooks/deploy/maguari-certificate-scanner`) runs `systemctl start --no-block maguari-certificate-scanner.service`, so renewals go through the same service and protections.
+
+`MAGUARI_CERTIFICATES_FILE` (for the scanner and the client) and `MAGUARI_LETSENCRYPT_DIR` (for the scanner) override the paths for development and tests only.
 
 #### 6.1.2 Disk usage
 
@@ -683,7 +704,7 @@ Running behind the Cloudflare proxy is not supported for now. If added later as 
 | `maguari-updater` | all | (none beyond base Ubuntu) |
 | `maguari-archive-keyring` | all | (none) |
 
-The client package ships its systemd service and the certificate scanner timer and deploy hook (section 6.1.1), creates its system user and generates its sudoers file (section 5.4).
+The client package ships its systemd service, the certificate scanner (`maguari-certificate-scanner`) with its service, timer and deploy hook (section 6.1.1), creates its system user and generates its sudoers file (section 5.4).
 
 ### 12.2 Server installation
 

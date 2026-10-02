@@ -1,0 +1,20 @@
+# Reads each Let's Encrypt certificate's expiry date as root and writes only
+# the dates and domains to a file the client can read (design section 6.1.1).
+# The timer and certbot's deploy hook start it.
+[Unit]
+Description=Maguari certificate scanner
+Documentation=https://github.com/alvesgu/maguari
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/maguari-certificate-scanner
+StateDirectory=maguari-certificate-scanner
+StateDirectoryMode=0755
+UMask=0022
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+# Keeps only the capability to read any file, which is all the scanner needs.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH

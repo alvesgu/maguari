@@ -8,6 +8,7 @@ use Maguari\Client\ClientFailure;
 use Maguari\Client\Enroller;
 use Maguari\Client\Tests\Support\FakeClock;
 use Maguari\Client\Tests\Support\FakeTransport;
+use Maguari\Client\Version;
 use PHPUnit\Framework\TestCase;
 
 final class EnrollerTest extends TestCase
@@ -35,7 +36,7 @@ final class EnrollerTest extends TestCase
         $this->assertSame($secret, $credentials->secret);
         [$request] = $this->transport->requests;
         $this->assertSame('https://maguari.example.com/api/client/enroll', $request['url']);
-        $this->assertSame(['protocol_version' => 1, 'client_version' => '0.2.0', 'token' => self::TOKEN], json_decode($request['body'], true));
+        $this->assertSame(['protocol_version' => 1, 'client_version' => Version::current(), 'token' => self::TOKEN], json_decode($request['body'], true));
     }
 
     /**

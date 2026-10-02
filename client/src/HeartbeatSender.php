@@ -8,9 +8,9 @@ use Maguari\Shared\Protocol;
 use Maguari\Shared\Signature;
 
 /**
- * Sends one signed heartbeat (design sections 5.2 and 5.5) with the disk
- * readings. Checks and command results come in later steps; for now those
- * lists are empty.
+ * Sends one signed heartbeat (design sections 5.2 and 5.5) with the disk and
+ * certificate readings. Checks and command results come in later steps; for
+ * now those lists are empty.
  */
 final class HeartbeatSender
 {
@@ -18,6 +18,7 @@ final class HeartbeatSender
         private readonly Transport $transport,
         private readonly Clock $clock,
         private readonly DiskUsage $diskUsage,
+        private readonly CertificateExpiry $certificates,
     ) {
     }
 
@@ -32,7 +33,7 @@ final class HeartbeatSender
             'client_version' => Version::current(),
             'client_id' => $credentials->clientId,
             'sent_at' => $now,
-            'readings' => $this->diskUsage->readings(),
+            'readings' => array_merge($this->diskUsage->readings(), $this->certificates->readings()),
             'checks' => [],
             'command_results' => [],
         ], JSON_THROW_ON_ERROR);

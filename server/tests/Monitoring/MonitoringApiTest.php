@@ -81,6 +81,18 @@ final class MonitoringApiTest extends TestCase
         $this->assertCount(2, $this->runs());
     }
 
+    public function testACertificateExpiryRunLastsUntilRenewal(): void
+    {
+        $this->record(7, self::AT, ['certificate_expires_at:example.com' => 1_797_000_000]);
+        $this->record(7, self::AT + 60, ['certificate_expires_at:example.com' => 1_797_000_000]);
+        $this->record(7, self::AT + 120, ['certificate_expires_at:example.com' => 1_802_000_000]);
+
+        $this->assertSame([
+            [7, 'certificate_expires_at:example.com', 1_797_000_000, self::AT, self::AT + 60],
+            [7, 'certificate_expires_at:example.com', 1_802_000_000, self::AT + 120, self::AT + 120],
+        ], $this->runs());
+    }
+
     public function testAGapStartsANewRun(): void
     {
         $this->record(7, self::AT, ['disk_total_bytes:/' => 10]);

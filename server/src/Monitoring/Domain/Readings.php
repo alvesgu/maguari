@@ -65,14 +65,18 @@ final class Readings
             }
 
             $seen[$metric] = true;
-            [$kind, $mountPoint] = Metric::split($metric);
+            [$kind, $subject] = Metric::split($metric);
 
-            if (!in_array($kind, self::DISK_KINDS, true)) {
+            if (in_array($kind, self::DISK_KINDS, true)) {
+                if (!self::isMountPoint($subject)) {
+                    throw new InvalidReadings('A disk metric must name an absolute mount point.');
+                }
+            } elseif ($kind === Metric::CERTIFICATE_EXPIRES_AT) {
+                if ($subject === null || !Metric::isCertificateDomain($subject)) {
+                    throw new InvalidReadings('A certificate metric must name a lowercase domain.');
+                }
+            } else {
                 continue;
-            }
-
-            if (!self::isMountPoint($mountPoint)) {
-                throw new InvalidReadings('A disk metric must name an absolute mount point.');
             }
 
             $values[$metric] = $value;

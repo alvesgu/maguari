@@ -1,0 +1,5 @@
+#!/bin/sh
+# certbot deploy hook (design section 6.1.1): rescan after each successful
+# renewal, through the service so the same protections apply. --no-block
+# keeps certbot from waiting for it.
+exec systemctl start --no-block maguari-certificate-scanner.service

@@ -23,6 +23,7 @@ final class Cli
         private readonly Transport $transport,
         private readonly Clock $clock,
         private readonly DiskUsage $diskUsage,
+        private readonly CertificateExpiry $certificates,
         private readonly CredentialsFile $credentialsFile,
         private readonly int $effectiveUserId,
         private $stdout,
@@ -36,6 +37,7 @@ final class Cli
             new StreamTransport(),
             new SystemClock(),
             new DiskUsage(new StatvfsFilesystemStats()),
+            CertificateExpiry::fromEnvironment(),
             CredentialsFile::fromEnvironment(),
             posix_geteuid(),
             STDOUT,
@@ -110,7 +112,7 @@ final class Cli
     private function heartbeat(): int
     {
         $credentials = $this->credentialsFile->load();
-        (new HeartbeatSender($this->transport, $this->clock, $this->diskUsage))->send($credentials);
+        (new HeartbeatSender($this->transport, $this->clock, $this->diskUsage, $this->certificates))->send($credentials);
         fwrite($this->stdout, sprintf("Heartbeat accepted by %s.\n", $credentials->serverUrl));
 
         return 0;
@@ -124,7 +126,7 @@ final class Cli
         $log = static function (string $message) use ($stderr, $clock): void {
             fwrite($stderr, gmdate('Y-m-d H:i:s', $clock->now()) . ' UTC ' . $message . "\n");
         };
-        (new Runner(new HeartbeatSender($this->transport, $this->clock, $this->diskUsage), $this->clock, $log))->run($credentials);
+        (new Runner(new HeartbeatSender($this->transport, $this->clock, $this->diskUsage, $this->certificates), $this->clock, $log))->run($credentials);
 
         return 0;
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Client\Tests;
 
+use Maguari\Client\CertificateExpiry;
 use Maguari\Client\Cli;
 use Maguari\Client\CredentialsFile;
 use Maguari\Client\DiskUsage;
@@ -73,6 +74,19 @@ final class EndToEndTest extends TestCase
     }
 
     /**
+     * The scanner's file, as the root-owned scanner would write it.
+     */
+    private function certificates(): CertificateExpiry
+    {
+        $path = $this->directory->path . '/certificates.json';
+        file_put_contents($path, json_encode(['scanned_at' => 1, 'certificates' => [
+            ['name' => 'example.com', 'domains' => ['example.com', 'www.example.com'], 'expires_at' => 1_797_000_000],
+        ]]));
+
+        return new CertificateExpiry($path);
+    }
+
+    /**
      * @param string[] $args
      * @return array{int, string}
      */
@@ -81,7 +95,7 @@ final class EndToEndTest extends TestCase
         $stderr = fopen('php://memory', 'w+');
         // The client's clock agrees with the server's.
         $clock = new FakeClock($this->server->clock->now());
-        $cli = new Cli($this->transport, $clock, $this->diskUsage(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
+        $cli = new Cli($this->transport, $clock, $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
         $status = $cli->run(array_merge(['maguari-client'], $args));
         rewind($stderr);
 
@@ -113,6 +127,7 @@ final class EndToEndTest extends TestCase
             ['instance_id' => 7, 'metric' => 'disk_total_bytes:/', 'value' => 10_000_000, 'start_at' => $now - 60, 'end_at' => $now],
             ['instance_id' => 7, 'metric' => 'disk_used_bytes:/boot', 'value' => 100_000, 'start_at' => $now - 60, 'end_at' => $now],
             ['instance_id' => 7, 'metric' => 'disk_total_bytes:/boot', 'value' => 1_000_000, 'start_at' => $now - 60, 'end_at' => $now],
+            ['instance_id' => 7, 'metric' => 'certificate_expires_at:example.com', 'value' => 1_797_000_000, 'start_at' => $now - 60, 'end_at' => $now],
         ], $this->runs());
 
         // Used space moving more than 0.1% of the total starts a new run.
@@ -147,7 +162,7 @@ final class EndToEndTest extends TestCase
         $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $token]);
         $this->server->clock->advance(400);
         $stderr = fopen('php://memory', 'w+');
-        $cli = new Cli($this->transport, new FakeClock($this->server->clock->now() - 400), $this->diskUsage(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
+        $cli = new Cli($this->transport, new FakeClock($this->server->clock->now() - 400), $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
 
         $this->assertSame(1, $cli->run(['maguari-client', 'heartbeat']));
         rewind($stderr);

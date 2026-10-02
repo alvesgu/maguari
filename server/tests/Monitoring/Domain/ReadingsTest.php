@@ -49,6 +49,17 @@ final class ReadingsTest extends TestCase
         ]));
     }
 
+    public function testAcceptsCertificateReadingsWithoutADeadband(): void
+    {
+        $this->assertSame([
+            'certificate_expires_at:example.com' => [1_797_000_000, 0],
+            'certificate_expires_at:*.example.org' => [1_798_000_000, 0],
+        ], self::parsed([
+            self::reading('certificate_expires_at:example.com', 1_797_000_000),
+            self::reading('certificate_expires_at:*.example.org', 1_798_000_000),
+        ]));
+    }
+
     public function testAcceptsNoReadings(): void
     {
         $this->assertSame([], Readings::parse([])->readings);
@@ -124,6 +135,11 @@ final class ReadingsTest extends TestCase
             'newline in the mount point' => [[self::reading("disk_total_bytes:/mnt\n", 1)]],
             'NUL in the mount point' => [[self::reading("disk_total_bytes:/mnt\0x", 1)]],
             'DEL in the mount point' => [[self::reading("disk_total_bytes:/mnt\x7f", 1)]],
+            'certificate metric without a domain' => [[self::reading('certificate_expires_at', 1)]],
+            'certificate metric with an empty domain' => [[self::reading('certificate_expires_at:', 1)]],
+            'certificate domain in uppercase' => [[self::reading('certificate_expires_at:Example.com', 1)]],
+            'certificate domain with a space' => [[self::reading('certificate_expires_at:example .com', 1)]],
+            'negative expiry' => [[self::reading('certificate_expires_at:example.com', -1)]],
             'the same metric twice' => [[self::reading('disk_total_bytes:/', 1), self::reading('disk_total_bytes:/', 1)]],
             'disk used without its total' => [[self::reading('disk_used_bytes:/', 1), self::reading('disk_total_bytes:/boot', 1)]],
             'too many' => [$tooMany],

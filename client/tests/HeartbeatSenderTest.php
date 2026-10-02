@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace Maguari\Client\Tests;
 
+use Maguari\Client\CertificateExpiry;
 use Maguari\Client\ClientFailure;
 use Maguari\Client\Credentials;
 use Maguari\Client\DiskUsage;
 use Maguari\Client\HeartbeatSender;
+use Maguari\Client\Version;
 use Maguari\Client\Tests\Support\FakeClock;
 use Maguari\Client\Tests\Support\FakeFilesystemStats;
 use Maguari\Client\Tests\Support\FakeTransport;
+use Maguari\Client\Tests\Support\TemporaryDirectory;
 use Maguari\Shared\Signature;
 use PHPUnit\Framework\TestCase;
 
@@ -20,14 +23,25 @@ final class HeartbeatSenderTest extends TestCase
     private FakeClock $clock;
     private Credentials $credentials;
     private HeartbeatSender $sender;
+    private TemporaryDirectory $directory;
 
     protected function setUp(): void
     {
+        $this->directory = new TemporaryDirectory();
+        $certificates = $this->directory->path . '/certificates.json';
+        file_put_contents($certificates, json_encode(['scanned_at' => 1, 'certificates' => [
+            ['name' => 'example.com', 'domains' => ['example.com'], 'expires_at' => 1_797_000_000],
+        ]]));
         $this->transport = new FakeTransport();
         $this->clock = new FakeClock();
         $this->credentials = new Credentials('https://maguari.example.com', str_repeat('c', 32), random_bytes(32));
         $stats = new FakeFilesystemStats(['/' => [10_000, 4_000]]);
-        $this->sender = new HeartbeatSender($this->transport, $this->clock, new DiskUsage($stats, __DIR__ . '/fixtures/mounts-gce'));
+        $this->sender = new HeartbeatSender($this->transport, $this->clock, new DiskUsage($stats, __DIR__ . '/fixtures/mounts-gce'), new CertificateExpiry($certificates));
+    }
+
+    protected function tearDown(): void
+    {
+        $this->directory->remove();
     }
 
     public function testSendsASignedHeartbeat(): void
@@ -53,12 +67,13 @@ final class HeartbeatSenderTest extends TestCase
         ));
         $this->assertSame([
             'protocol_version' => 1,
-            'client_version' => '0.2.0',
+            'client_version' => Version::current(),
             'client_id' => str_repeat('c', 32),
             'sent_at' => 1_790_000_000,
             'readings' => [
                 ['metric' => 'disk_used_bytes:/', 'value' => 6_000],
                 ['metric' => 'disk_total_bytes:/', 'value' => 10_000],
+                ['metric' => 'certificate_expires_at:example.com', 'value' => 1_797_000_000],
             ],
             'checks' => [],
             'command_results' => [],

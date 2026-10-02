@@ -20,9 +20,30 @@ final class Metric
     /** Total bytes of a filesystem; the subject is its mount point. */
     public const DISK_TOTAL_BYTES = 'disk_total_bytes';
 
+    /**
+     * When a certificate on the instance expires, in Unix seconds; the subject
+     * is the certificate's first domain (design section 5.2).
+     */
+    public const CERTIFICATE_EXPIRES_AT = 'certificate_expires_at';
+
+    /** The longest DNS name. */
+    public const MAX_DOMAIN_BYTES = 253;
+
     public static function name(string $kind, string $subject): string
     {
         return $kind . self::SEPARATOR . $subject;
+    }
+
+    /**
+     * Whether $domain is a certificate_expires_at subject: a lowercase DNS
+     * name of letters, digits and hyphens, optionally a wildcard such as
+     * "*.example.com". The client skips anything else and the server rejects
+     * it.
+     */
+    public static function isCertificateDomain(string $domain): bool
+    {
+        return strlen($domain) <= self::MAX_DOMAIN_BYTES
+            && preg_match('/^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*$/D', $domain) === 1;
     }
 
     /**

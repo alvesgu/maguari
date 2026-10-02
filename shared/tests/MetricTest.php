@@ -34,4 +34,39 @@ final class MetricTest extends TestCase
     {
         $this->assertSame([$kind, $subject], Metric::split($metric));
     }
+
+    /**
+     * @return array<string, array{string, bool}>
+     */
+    public static function certificateDomains(): array
+    {
+        return [
+            'domain' => ['example.com', true],
+            'subdomain with digits and hyphens' => ['www-2.example.com', true],
+            'single label' => ['intranet', true],
+            'wildcard' => ['*.example.com', true],
+            'punycode' => ['xn--bcher-kva.example', true],
+            'longest' => [str_repeat('a', 63) . '.' . str_repeat('b', 63) . '.' . str_repeat('c', 63) . '.' . str_repeat('d', 61), true],
+            'too long' => [str_repeat('a', 63) . '.' . str_repeat('b', 63) . '.' . str_repeat('c', 63) . '.' . str_repeat('d', 62), false],
+            'empty' => ['', false],
+            'uppercase' => ['Example.com', false],
+            'empty label' => ['example..com', false],
+            'leading dot' => ['.example.com', false],
+            'trailing dot' => ['example.com.', false],
+            'wildcard not first' => ['www.*.example.com', false],
+            'bare wildcard' => ['*', false],
+            'space' => ['example .com', false],
+            'newline at the end' => ["example.com\n", false],
+            'non-ASCII' => ['bücher.example', false],
+            'slash' => ['example.com/a', false],
+        ];
+    }
+
+    /**
+     * @dataProvider certificateDomains
+     */
+    public function testCertificateDomains(string $domain, bool $valid): void
+    {
+        $this->assertSame($valid, Metric::isCertificateDomain($domain));
+    }
 }
