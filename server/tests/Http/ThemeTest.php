@@ -40,6 +40,8 @@ final class ThemeTest extends TestCase
 
         $this->assertStringContainsString('color-scheme: dark;', $css);
         $this->assertStringContainsString('--background: #000000;', $css);
+        // Table values such as project IDs, zones and timestamps never wrap.
+        $this->assertMatchesRegularExpression('/\nth,\ntd \{[^}]*white-space: nowrap;/', $css);
     }
 
     public function testNoTemplateUsesInlineStyles(): void
