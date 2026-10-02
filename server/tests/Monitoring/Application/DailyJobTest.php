@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Tests\Monitoring;
+namespace Maguari\Server\Tests\Monitoring\Application;
 
 use Maguari\Server\Fleet\Instance;
-use Maguari\Server\Monitoring\CheckOutcome;
-use Maguari\Server\Monitoring\CheckResult;
-use Maguari\Server\Monitoring\DailyJobTrigger;
+use Maguari\Server\Monitoring\Domain\CheckOutcome;
+use Maguari\Server\Monitoring\Domain\CheckResult;
+use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Tests\Support\TestEnvironment;

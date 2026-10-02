@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Monitoring;
+namespace Maguari\Server\Monitoring\Domain;
 
 /**
  * What the dashboard shows about the daily job (design section 6.3).

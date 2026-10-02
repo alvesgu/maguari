@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Tests\Monitoring;
+namespace Maguari\Server\Tests\Monitoring\Domain;
 
-use Maguari\Server\Monitoring\CheckOutcome;
-use Maguari\Server\Monitoring\CheckResult;
-use Maguari\Server\Monitoring\DiskSizeRule;
-use Maguari\Server\Monitoring\MetricRun;
+use Maguari\Server\Monitoring\Domain\CheckOutcome;
+use Maguari\Server\Monitoring\Domain\CheckResult;
+use Maguari\Server\Monitoring\Domain\DiskSizeRule;
+use Maguari\Server\Monitoring\Domain\MetricRun;
 use PHPUnit\Framework\TestCase;
 
 final class DiskSizeRuleTest extends TestCase

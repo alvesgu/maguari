@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Monitoring;
+namespace Maguari\Server\Monitoring\Domain;
 
 /**
  * The result of one check on one instance.

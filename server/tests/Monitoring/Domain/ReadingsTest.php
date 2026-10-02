@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Tests\Monitoring;
+namespace Maguari\Server\Tests\Monitoring\Domain;
 
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
-use Maguari\Server\Monitoring\Reading;
-use Maguari\Server\Monitoring\Readings;
+use Maguari\Server\Monitoring\Domain\Reading;
+use Maguari\Server\Monitoring\Domain\Readings;
 use PHPUnit\Framework\TestCase;
 
 final class ReadingsTest extends TestCase

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Monitoring;
+namespace Maguari\Server\Monitoring\Domain;
 
 /**
  * Compares an instance's boot disk with the filesystems on it, to find a grown

@@ -7,9 +7,17 @@ namespace Maguari\Server\Monitoring;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Monitoring\Application\DailyJob;
+use Maguari\Server\Monitoring\Domain\CheckResult;
+use Maguari\Server\Monitoring\Domain\DailyJobSummary;
+use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
+use Maguari\Server\Monitoring\Domain\Readings;
+use Maguari\Server\Monitoring\Domain\RunDecision;
+use Maguari\Server\Monitoring\Domain\RunRule;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
+use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
 use Maguari\Shared\Protocol;
 
 /**

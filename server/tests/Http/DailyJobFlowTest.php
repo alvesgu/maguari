@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Tests\Http;
 
-use Maguari\Server\Monitoring\DailyJobTrigger;
+use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Tests\Support\Browser;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;

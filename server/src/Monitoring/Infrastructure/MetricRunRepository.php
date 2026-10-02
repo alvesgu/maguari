@@ -2,9 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Monitoring;
+namespace Maguari\Server\Monitoring\Infrastructure;
 
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Monitoring\Domain\MetricRun;
 
 final class MetricRunRepository
 {

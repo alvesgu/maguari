@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Monitoring;
+namespace Maguari\Server\Monitoring\Domain;
 
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
 use Maguari\Shared\Metric;

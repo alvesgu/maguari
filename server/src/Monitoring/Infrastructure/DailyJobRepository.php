@@ -2,9 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Monitoring;
+namespace Maguari\Server\Monitoring\Infrastructure;
 
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Monitoring\Domain\CheckOutcome;
+use Maguari\Server\Monitoring\Domain\CheckResult;
+use Maguari\Server\Monitoring\Domain\DailyJobRun;
+use Maguari\Server\Monitoring\Domain\DailyJobState;
+use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 
 final class DailyJobRepository

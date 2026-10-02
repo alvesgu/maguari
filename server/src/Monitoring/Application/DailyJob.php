@@ -2,13 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Monitoring;
+namespace Maguari\Server\Monitoring\Application;
 
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Monitoring\Domain\CheckResult;
+use Maguari\Server\Monitoring\Domain\DailyJobSummary;
+use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
+use Maguari\Server\Monitoring\Domain\DiskSizeRule;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
+use Maguari\Server\Monitoring\Infrastructure\DailyJobRepository;
+use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
 use Maguari\Shared\Metric;
 
 /**

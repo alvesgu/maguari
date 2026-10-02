@@ -172,7 +172,14 @@ server/public/               Web root: index.php and static assets (assets/magua
 4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. The content area is up to 96rem wide so the dashboard table fits on wide screens, paragraphs keep a readable line length (72 characters) and table cells never wrap: project IDs, zones and timestamps stay on one line, and a table wider than the window scrolls sideways. This styling is temporary and kept minimal until the redesign before 1.0 (section 17). It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. nginx will serve `/assets/` directly (packaging).
 5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more.
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
-7. Internal structure of each context (layers) is decided in a later design step, starting with the core contexts. Monitoring, the first core context with code, stays flat like Fleet and Clients for now: a public `MonitoringApi`, small classes and `Migrations/`, with rules such as the run rule written as pure classes without database access. It stayed flat when the daily job brought its first check (MVP step 8: a `DailyJob` class and a pure `DiskSizeRule`). Its layers are decided with the certificate step (MVP step 9), when it has two kinds of checks and two sources of input.
+7. Monitoring, a core context, is split into layers (MVP step 9). Remediation's structure is decided when it gets code. Supporting and generic contexts (Fleet, Clients, Access and Notifications) stay flat. Monitoring's layers:
+   - `MonitoringApi.php` (the public interface) and `Exception/` (the exceptions it throws) at the context's root.
+   - `Domain/`: pure rules and values (for example `RunRule`, `Readings`, `DiskSizeRule`, `CheckResult`). It uses nothing outside `Domain/`, the context's `Exception/` and `shared/`, and no database, network, file or clock functions. `tests/Monitoring/LayersTest.php` enforces this.
+   - `Application/`: orchestration that uses the other layers (`DailyJob`).
+   - `Infrastructure/`: SQL only (`MetricRunRepository`, `DailyJobRepository`).
+   - `Migrations/`.
+
+   Other contexts and `Http/` use only `MonitoringApi`, its exceptions and the `Domain/` types it returns.
 
 ## 4. Versioning
 

@@ -10,7 +10,7 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Http\Session;
 use Maguari\Server\Http\View;
-use Maguari\Server\Monitoring\DailyJobTrigger;
+use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\MonitoringApi;

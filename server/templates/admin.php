@@ -4,11 +4,11 @@
  * @var \Maguari\Server\Fleet\Instance[] $instances
  * @var array<int, \Maguari\Server\Clients\EnrollmentState> $enrollmentStates
  * @var array<int, \Maguari\Server\Clients\HeartbeatStatus> $heartbeats
- * @var \Maguari\Server\Monitoring\DailyJobSummary $dailyJob
+ * @var \Maguari\Server\Monitoring\Domain\DailyJobSummary $dailyJob
  * @var \Closure $partial
  */
-use Maguari\Server\Monitoring\CheckOutcome;
-use Maguari\Server\Monitoring\DailyJobState;
+use Maguari\Server\Monitoring\Domain\CheckOutcome;
+use Maguari\Server\Monitoring\Domain\DailyJobState;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 $lastRun = $dailyJob->lastRun;

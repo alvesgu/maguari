@@ -72,7 +72,7 @@ server/src/Monitoring/
   Migrations/
 ```
 
-- Rule: `Domain/` uses nothing outside `Domain/` and `shared/`. A test enforces it by scanning `use` statements, so it cannot drift.
+- Rule: `Domain/` uses nothing outside `Domain/`, Monitoring's `Exception/` and `shared/`, and no database, network, file or clock functions. A test enforces it by scanning the code's tokens, so it cannot drift. *Refined in 9.1:* the exceptions are allowed because `Readings` throws `InvalidReadings`, which `MonitoringApi` passes on.
 - Namespaces follow the folders (`Maguari\Server\Monitoring\Domain\...`). Other contexts and `Http/` keep using only `MonitoringApi` and the types it returns, which move namespace; their `use` lines change and nothing else.
 - Fleet, Clients, Access and the others stay flat: they are supporting or generic (design 2.1).
 
@@ -269,10 +269,11 @@ Instance names on the dashboard and on the project page link to it. Adding a hos
 
 ```
 server/src/Monitoring/            files moved into Domain/, Application/, Infrastructure/ (D1)
-server/src/Clients/ClientsApi.php           use lines
-server/src/Http/...                         use lines
-server/templates/admin.php                  use lines, if any
+server/bin/maguari-server                   use lines
+server/src/Http/Controller/AdminController.php   use lines
+server/templates/admin.php                  use lines
 server/tests/Monitoring/                    moved to match, plus LayersTest (Domain/ purity)
+server/tests/Http/DailyJobFlowTest.php      use lines
 docs/DESIGN.md                              section 3.1 item 7
 ```
 

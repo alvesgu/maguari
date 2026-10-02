@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Tests\Monitoring;
+namespace Maguari\Server\Tests\Monitoring\Domain;
 
-use Maguari\Server\Monitoring\MetricRun;
-use Maguari\Server\Monitoring\Reading;
-use Maguari\Server\Monitoring\RunDecision;
-use Maguari\Server\Monitoring\RunRule;
+use Maguari\Server\Monitoring\Domain\MetricRun;
+use Maguari\Server\Monitoring\Domain\Reading;
+use Maguari\Server\Monitoring\Domain\RunDecision;
+use Maguari\Server\Monitoring\Domain\RunRule;
 use PHPUnit\Framework\TestCase;
 
 final class RunRuleTest extends TestCase
