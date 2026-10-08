@@ -10,7 +10,6 @@
 use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
-use Maguari\Server\Monitoring\Domain\DailyJobState;
 use Maguari\Shared\Protocol;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
@@ -22,13 +21,7 @@ $certificateFailures = [];
 <p>Signed in as <?= $e($administrator->name) ?> (<?= $e($administrator->email) ?>).</p>
 <p><a href="/admin/projects">Projects</a></p>
 <h2>Daily job</h2>
-<p><?php if ($lastRun === null): ?>The daily job has never run.<?php
-elseif ($lastRun->state === DailyJobState::Running): ?>Running since <?= $e($utc($lastRun->startedAt)) ?> (<?= $e($lastRun->trigger->value) ?>).<?php
-elseif ($lastRun->state === DailyJobState::Killed): ?>The last run, started at <?= $e($utc($lastRun->startedAt)) ?> (<?= $e($lastRun->trigger->value) ?>), did not finish.<?php
-elseif ($lastRun->state === DailyJobState::Failed): ?>The last run, started at <?= $e($utc($lastRun->startedAt)) ?> (<?= $e($lastRun->trigger->value) ?>), failed. The details are in the server's error log.<?php
-else: ?><?php $took = (int) $lastRun->finishedAt - $lastRun->startedAt; ?>Last run: <?= $e($utc($lastRun->startedAt)) ?> (<?= $e($lastRun->trigger->value) ?>), took <?= $took ?> <?= $took === 1 ? 'second' : 'seconds' ?>.<?php
-endif; ?></p>
-<?php if ($dailyJob->lastScheduledRun === null): ?>
+<?= $partial('daily-job-status', ['run' => $lastRun]) ?><?php if ($dailyJob->lastScheduledRun === null): ?>
 <p>No scheduled run yet. On the server, the maguari-server-daily-job timer runs the job every day at 06:00 UTC.</p>
 <?php elseif ($dailyJob->overdue): ?>
 <p><strong>The daily job is overdue:</strong> no scheduled run started in the last 25 hours. Check the maguari-server-daily-job timer on the server.</p>

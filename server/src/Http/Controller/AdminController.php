@@ -53,7 +53,10 @@ final class AdminController
 
     /**
      * "Run now" (design section 6.3): runs the daily job inside the request,
-     * then shows the dashboard, which says how the run went.
+     * then shows the page the button was on, which says how the run went: the
+     * instance page when the form names a picked instance, otherwise the
+     * dashboard. The address is built from the instance's ID, never taken
+     * from the request.
      */
     public function runDailyJob(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface
     {
@@ -68,7 +71,10 @@ final class AdminController
             }
         }
 
-        return $response->withStatus(303)->withHeader('Location', '/admin');
+        $instanceId = FormInput::string((array) $request->getParsedBody(), 'instance_id');
+        $instance = preg_match('/^[1-9][0-9]{0,17}$/D', $instanceId) === 1 ? $this->fleet->pickedInstance((int) $instanceId) : null;
+
+        return $response->withStatus(303)->withHeader('Location', $instance === null ? '/admin' : '/admin/instances/' . $instance->id);
     }
 
     public function logout(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface

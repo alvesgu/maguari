@@ -3,7 +3,8 @@
  * @var \Closure $e @var string $csrf @var \Closure $partial
  * @var \Maguari\Server\Fleet\Instance $instance
  * @var \Maguari\Server\Monitoring\Domain\CheckResult[] $certificates from $resultsRun
- * @var ?\Maguari\Server\Monitoring\Domain\DailyJobRun $resultsRun
+ * @var ?\Maguari\Server\Monitoring\Domain\DailyJobRun $lastRun the daily job's latest run, whatever its state
+ * @var ?\Maguari\Server\Monitoring\Domain\DailyJobRun $resultsRun the last successful run
  * @var \Maguari\Server\Monitoring\Domain\CertificateHostname[] $hostnames
  * @var string[] $suggestions
  * @var string $hostname @var ?string $error
@@ -14,12 +15,18 @@ use Maguari\Server\Monitoring\Domain\CertificateHostname;
 <h1><?= $e($instance->name) ?></h1>
 <p><a href="/admin">Back to the dashboard</a> · Project <a href="/admin/projects/<?= $instance->projectId ?>"><?= $e($instance->gcpProjectId) ?></a> · Zone <?= $e($instance->zone) ?></p>
 <h2>Certificates</h2>
+<?= $partial('daily-job-status', ['run' => $lastRun]) ?>
+<form method="post" action="/admin/daily-job">
+<?= $csrf ?>
+<input type="hidden" name="instance_id" value="<?= $instance->id ?>">
+<p><button type="submit">Run now</button> Runs the daily job for every instance, as on the dashboard, then comes back here.</p>
+</form>
 <?php if ($resultsRun === null): ?>
 <p>No results yet: the daily job has not finished a run.</p>
 <?php elseif ($certificates === []): ?>
-<p>The last daily job, at <?= $e(gmdate('Y-m-d H:i', $resultsRun->startedAt)) ?> UTC, found no certificates for this instance.</p>
+<p>The last successful run, at <?= $e(gmdate('Y-m-d H:i', $resultsRun->startedAt)) ?> UTC, found no certificates for this instance.</p>
 <?php else: ?>
-<p>From the last daily job, at <?= $e(gmdate('Y-m-d H:i', $resultsRun->startedAt)) ?> UTC.</p>
+<p>From the last successful run, at <?= $e(gmdate('Y-m-d H:i', $resultsRun->startedAt)) ?> UTC.</p>
 <table>
 <thead><tr><th>Certificate</th><th>Checked</th><th>Result</th></tr></thead>
 <tbody>

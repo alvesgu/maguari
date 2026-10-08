@@ -93,6 +93,7 @@ final class InstancesController
             'title' => $instance->name,
             'instance' => $instance,
             'certificates' => $summary->certificateResults[$instance->id] ?? [],
+            'lastRun' => $summary->lastRun,
             'resultsRun' => $summary->lastSucceededRun,
             'hostnames' => $this->monitoring->certificateHostnames($instance->id),
             'suggestions' => $this->monitoring->certificateHostnameSuggestions($instance->id),

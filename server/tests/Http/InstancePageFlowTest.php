@@ -75,6 +75,9 @@ final class InstancePageFlowTest extends TestCase
         $this->assertStringContainsString('<h1>web</h1>', $body);
         $this->assertStringContainsString('<a href="/admin/projects/1">my-project</a> · Zone us-east1-b', $body);
         $this->assertStringContainsString('No results yet: the daily job has not finished a run.', $body);
+        $this->assertStringContainsString('<p>The daily job has never run.</p>', $body);
+        $this->assertStringContainsString('<form method="post" action="/admin/daily-job">', $body);
+        $this->assertStringContainsString('<input type="hidden" name="instance_id" value="' . $this->instanceId . '">', $body);
         $this->assertStringContainsString("<h2>Hostnames checked remotely</h2>", $body);
         $this->assertStringContainsString('<p>None yet.</p>', $body);
         $this->assertStringContainsString('<input id="hostname" name="hostname" type="text" value=""', $body);
@@ -199,7 +202,7 @@ final class InstancePageFlowTest extends TestCase
 
         $body = (string) $this->signedInBrowser()->get($this->page())->getBody();
 
-        $this->assertStringContainsString('From the last daily job, at ' . gmdate('Y-m-d H:i', $now) . ' UTC.', $body);
+        $this->assertStringContainsString('From the last successful run, at ' . gmdate('Y-m-d H:i', $now) . ' UTC.', $body);
         $this->assertStringContainsString('<tr><td>www.example.com</td><td>On the instance</td><td>Pass<span class="info">', $body);
         $this->assertStringContainsString('<tr><td>www.example.com</td><td>Served on port 443</td><td>Pass<span class="info">', $body);
 
@@ -207,6 +210,61 @@ final class InstancePageFlowTest extends TestCase
         $this->assertStringContainsString('<a href="' . $this->page() . '">web</a>', $dashboard);
         $this->assertStringContainsString('>Pass (2)<span class="info">', $dashboard);
         $this->assertStringContainsString("www.example.com, on the instance: Valid until " . gmdate('Y-m-d', $now + 60 * self::DAY) . " (60 days).\nwww.example.com, served: Valid until", $dashboard);
+    }
+
+    public function testRunNowComesBackToTheInstancePage(): void
+    {
+        $now = $this->environment->clock->now();
+        $this->environment->monitoring->addCertificateHostname($this->instanceId, 'www.example.com');
+        $this->environment->tls->serve('www.example.com', $now + 60 * self::DAY);
+        $this->environment->http->queueJson(200, ['items' => []]);
+        $browser = $this->signedInBrowser();
+
+        $response = $browser->post('/admin/daily-job', Browser::csrfFields($browser->get($this->page())) + ['instance_id' => (string) $this->instanceId]);
+
+        $this->assertSame(303, $response->getStatusCode());
+        $this->assertSame($this->page(), $response->getHeaderLine('Location'));
+        $body = (string) $browser->get($this->page())->getBody();
+        $this->assertStringContainsString('<p>Last run: ' . gmdate('Y-m-d H:i', $now) . ' UTC (manual), took 0 seconds.</p>', $body);
+        $this->assertStringContainsString('<tr><td>www.example.com</td><td>Served on port 443</td><td>Pass<span class="info">', $body);
+    }
+
+    public function testAFailedRunNowSaysSoOnTheInstancePage(): void
+    {
+        // No listing queued: the fake HTTP client throws, so the job fails.
+        $browser = $this->signedInBrowser();
+
+        $response = $browser->post('/admin/daily-job', Browser::csrfFields($browser->get($this->page())) + ['instance_id' => (string) $this->instanceId]);
+
+        $this->assertSame($this->page(), $response->getHeaderLine('Location'));
+        $this->assertStringContainsString("failed. The details are in the server's error log.", (string) $browser->get($this->page())->getBody());
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function otherInstanceIds(): array
+    {
+        return [
+            'not picked' => ['999'],
+            'not a number' => ['1/../../evil'],
+            'an address' => ['https://evil.example/'],
+            'zero' => ['0'],
+            'empty' => [''],
+        ];
+    }
+
+    /**
+     * @dataProvider otherInstanceIds
+     */
+    public function testRunNowOtherwiseGoesToTheDashboard(string $instanceId): void
+    {
+        $this->environment->http->queueJson(200, ['items' => []]);
+        $browser = $this->signedInBrowser();
+
+        $response = $browser->post('/admin/daily-job', Browser::csrfFields($browser->get($this->page())) + ['instance_id' => $instanceId]);
+
+        $this->assertSame('/admin', $response->getHeaderLine('Location'));
     }
 
     public function testTheProjectPageLinksPickedInstances(): void
