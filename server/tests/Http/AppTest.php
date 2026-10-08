@@ -38,7 +38,7 @@ final class AppTest extends TestCase
      */
     private function notReadyApp(bool $logErrors = false): SlimApp
     {
-        return App::create(null, null, null, null, MAGUARI_TEST_SESSION_PATH, logErrors: $logErrors);
+        return App::create(null, null, null, null, null, MAGUARI_TEST_SESSION_PATH, logErrors: $logErrors);
     }
 
     /**
@@ -65,7 +65,7 @@ final class AppTest extends TestCase
     private function appWithFailingRoute(bool $logErrors): SlimApp
     {
         $environment = $this->environment;
-        $app = App::create($environment->access, $environment->fleet, $environment->clients, $environment->monitoring, MAGUARI_TEST_SESSION_PATH, $environment->clock, $logErrors);
+        $app = App::create($environment->access, $environment->fleet, $environment->clients, $environment->monitoring, $environment->notifications, MAGUARI_TEST_SESSION_PATH, $environment->clock, $logErrors);
         $app->get('/test-failure', function (): never {
             throw new RuntimeException('secret-detail');
         });

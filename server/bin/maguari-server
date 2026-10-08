@@ -10,6 +10,7 @@ use Maguari\Server\Access\Exception\InvalidSeedConfig;
 use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Access\SeedConfigReader;
 use Maguari\Server\Cli\DailyJobReport;
+use Maguari\Server\Cli\SeedConfigReport;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Gcp\AccessTokenSourceFactory;
 use Maguari\Server\Kernel\Database\Database;
@@ -274,7 +275,7 @@ function runDailyJobCommand(array $args): int
  */
 function checkSeedConfigCommand(array $args): int
 {
-    $path = '/etc/maguari/seed.ini';
+    $path = SeedConfigReader::fromEnvironment()->path();
 
     foreach ($args as $arg) {
         if (str_starts_with($arg, '--path=')) {
@@ -301,7 +302,13 @@ function checkSeedConfigCommand(array $args): int
     echo "Seed config file: {$path}\n";
     echo "Administrator: {$seedConfig->administratorName} <{$seedConfig->administratorEmail}>\n";
     echo "Allowlist: " . implode(', ', $seedConfig->allowlist) . "\n";
-    echo "Nothing applied: applying seeded values is not implemented yet.\n";
+
+    foreach (SeedConfigReport::smtpLines($seedConfig->smtp) as $line) {
+        echo $line . "\n";
+    }
+
+    echo "Nothing applied here. The setup wizard prefills the administrator, and the Email page in the web app "
+        . "offers to apply the SMTP settings while none are stored.\n";
 
     return 0;
 }

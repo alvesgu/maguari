@@ -18,26 +18,26 @@ Relevant design sections: 2.1, 3.1, 9.2, 9.3, 10.2, 11.3, 11.5, 12.2.1, 13.
 
 ## Is this too large for one step?
 
-Slightly. It has a new context, a new dependency, a settings page with an encrypted secret, a seed file section and the sending itself. **Proposed split** into two sub-steps, each one commit that passes both test suites, with a review stop after each:
+Slightly. It has a new context, a new dependency, a settings page with an encrypted secret, a seed file section and the sending itself. **Split (confirmed)** into two sub-steps, each one commit that passes both test suites, with a review stop after each:
 
 | Sub-step | Delivers | Depends on |
 |---|---|---|
-| **10.1** SMTP settings | The Notifications context, its table with the encrypted password, the "Email" page to view and save settings, the seed file's `[smtp]` section and its import, masking in `check-seed-config` | Step 9 |
+| **10.1** SMTP settings | The Notifications context, its table with the encrypted password, the "Email" page to view and save settings (showing the recipient), the seed file's `[smtp]` section and its import, `MAGUARI_SEED_FILE`, masking in `check-seed-config` | Step 9 |
 | **10.2** The test email | PHPMailer, the sending adapter, the "Send test email" button, the error sentences, a fake SMTP server for tests | 10.1 |
 
 10.1 is usable on its own (settings are stored and visible), like 7.1 and 9.2 were.
 
-*Alternative:* one commit. Fine if you prefer it; the split mainly keeps the secret handling reviewable apart from the network code.
+## Interpretations (confirmed)
 
-## Interpretations (to confirm)
+All interpretations and decisions were approved, with the changes recorded in "Answers" at the end of this plan.
 
-**I1. "The administrator" is the signed-in administrator.** The MVP has exactly one administrator (local login, no allowlist sign-in yet). The test email goes to the email address of whoever pressed the button, read from Access. Notifications receives the address as a plain string and never reads `access_administrators` (design 2.1 rule 2).
+**I1. "The administrator" is the signed-in administrator, for now.** The MVP has exactly one administrator (local login, no allowlist sign-in yet). The test email goes to the email address of whoever pressed the button, read from Access, and the Email page shows that address. Notifications receives the address as a plain string and never reads `access_administrators` (design 2.1 rule 2). **With multiple administrators, the test email goes to the alert recipients instead**, so the test proves the path alerts take (design 17 item 3: which alerts each administrator receives).
 
 **I2. Only a test email.** No alert templates, no queue, no retries, no record of sent emails in the database. The test email is sent inside the request and its outcome is shown on the page.
 
 **I3. Settings are global.** One SMTP configuration for the server. Per-administrator alert preferences (design 17 item 3) are later.
 
-## Decisions (proposed)
+## Decisions (confirmed)
 
 ### The library
 
@@ -70,14 +70,14 @@ PHPMailer only *suggests* mbstring, which is not a server dependency (see `Acces
 | Setting | Rule |
 |---|---|
 | Host | A DNS name (letters, digits and hyphens in dot-separated labels, at most 253 bytes, lowercased), or exactly `localhost`. No IP addresses, schemes or ports. |
-| Port | 1 to 65535, default 587. Port 25 is refused: "Compute Engine blocks outbound port 25. Use port 587." |
+| Port | 1 to 65535, default 587 (an empty port means 587). Port 465 uses implicit TLS (D5). Port 25 is refused: "Compute Engine blocks outbound port 25. Use port 587." |
 | Username | Optional, up to 254 bytes, no control characters. Empty means no authentication (Google Workspace SMTP relay by IP address). |
 | Password | Required when a username is set, up to 1,024 bytes, no control characters. Never shown again after saving. |
 | From address | Required, a valid email address (`FILTER_VALIDATE_EMAIL`), lowercased. Gmail only sends from the account's own address or a verified alias. |
 
 Each refusal has its own sentence, shown next to its field (`422`), like the setup wizard.
 
-**Deviation from design 13 (to confirm):** the port becomes a setting with default 587, instead of being fixed. Reasons: tests need a fake server on a random port, development needs a local server on an unprivileged port (Verification below), and the Google Workspace relay also listens on 465 and 25, which some administrators may try. 465 (implicit TLS) is still not supported: only STARTTLS (D5). *Alternative:* keep 587 fixed in production and allow another port only through a development environment variable. More rules, less useful.
+**Change to design 13 (confirmed):** the port is a setting with default 587, instead of being fixed. Reasons: tests need a fake server on a random port, development needs a local server on an unprivileged port (Verification below), and Gmail and the Google Workspace relay also listen on 465.
 
 **D3. Storage:** one table, one row, in `server/src/Notifications/Migrations/0001_notifications_smtp_settings.sql`:
 
@@ -101,7 +101,15 @@ No row means email is not set up. A typed single row instead of a key-value tabl
 2. The plaintext exists only in memory while saving and while sending. It is never logged, never in an exception message and never rendered. Method parameters that carry it are marked `#[\SensitiveParameter]`, as in `SecretBox`.
 3. A stored password the key cannot decrypt (the key file was replaced) is not a crash: the page says "The stored SMTP password cannot be decrypted with this server's secret key. Enter the password again and save." Sending refuses with the same sentence.
 
-**D5. STARTTLS is required, except for `localhost`.** For any host but exactly `localhost`, the adapter sets `SMTPSecure = 'tls'` (STARTTLS), so a server that does not offer STARTTLS, or whose certificate does not verify against the system's CA store and match the host, fails before the password is sent. Certificate verification is never turned off. For `localhost` only, the connection is plain, for a development server (Verification below). This is the same rule as `--base-url` and `--server`, where `http://` is accepted only for `localhost` (design 5.6).
+**D5. Encryption follows the port, and is required except for `localhost`** (`SmtpEncryption`, derived from host and port, never stored):
+
+| Host and port | Encryption |
+|---|---|
+| Port 465, any host | Implicit TLS (PHPMailer's `SMTPSecure = 'ssl'`) |
+| `localhost`, any other port | None, for a development server (Verification below) |
+| Any other host and port | STARTTLS (`SMTPSecure = 'tls'`) |
+
+A server that does not offer STARTTLS, or whose certificate does not verify against the system's CA store and match the host, fails before the password is sent. Certificate verification is never turned off. The `localhost` exception is the same rule as `--base-url` and `--server`, where `http://` is accepted only for `localhost` (design 5.6). The Email page shows the encryption next to the saved settings.
 
 **D6. The seed file gets an optional `[smtp]` section:**
 
@@ -117,15 +125,16 @@ from = "alerts@example.com"
 
 1. Access still owns the seed file (design 2.1). `SeedConfigReader` checks only that the section's values are strings (port also accepts an integer, in case it is left unquoted) and returns them as a `SeedSmtp` value inside `SeedConfig` (null when the section is absent). Notifications validates them with the same rules as the form (D2), so there is one set of rules.
 2. **Applying it.** The Email page shows "Use the SMTP settings from the seed file" as a button (`POST /admin/email/import-seed`) only while no SMTP settings are stored and the seed file has an `[smtp]` section. Pressing it reads the file, validates and stores the settings (password encrypted). Once settings are stored, the button disappears and the web app owns them, as design 11.5 item 1 says. A seed section that fails validation shows its sentences and stores nothing.
-3. `check-seed-config` prints the section with the password masked (`password = (set, 12 characters hidden)` or `(not set)`), as design 11.5.1 item 8 requires.
+3. `check-seed-config` prints the section with the password masked (`SMTP password: (set, hidden)` or `(not set)`, never its length), as design 11.5.1 item 8 requires. A password that is not text (left unquoted) is refused without repeating its value.
 4. `server/config/seed.ini.example` gets the section with example values and comments, like its `[administrator]` section.
+5. `MAGUARI_SEED_FILE` overrides the seed file's path, for development and tests only, like the other `MAGUARI_*` variables. `scripts/dev-env.sh` sets it to `server/var/seed.ini`. The web app and `check-seed-config` both use it; `--path` still wins on the command line.
 
 Why a button and not automatic: design 11.5.1 item 7 still defers applying seed values, and "first start" has no defined moment yet. A button applies only this section, explicitly, without putting the password into the page (prefilling a password field would send it to the browser).
 
 *Alternative A:* prefill only host, port, username and from address from the seed file and have the administrator type the password. Simpler, but then the password never comes from the seed file.
 *Alternative B:* apply `[smtp]` automatically on the first view of the Email page. Saves a click, but a page view writing settings is a state-changing GET (forbidden, design 11.3).
 
-**Known gap, unchanged by this step:** the seed file now can hold a secret, and the warning while it exists (design 10.3, 11.5 item 3) is not built yet. Question Q3 asks whether to add it to section 17.
+**Known gap, unchanged by this step:** the seed file now can hold the SMTP password, and the warning while it exists (design 10.3, 11.5 item 3) is not built yet. It is added to design section 17 (required before 1.0).
 
 ### Triggering the test email
 
@@ -133,7 +142,7 @@ Why a button and not automatic: design 11.5.1 item 7 still defers applying seed 
 
 | Route | Does |
 |---|---|
-| `GET /admin/email` | Shows the settings form (password never shown), the import button when it applies (D6) and the "Send test email" button with the recipient: "Sends a test email to jane@example.com with the saved settings." |
+| `GET /admin/email` | Shows the recipient ("Emails go to jane@example.com, the address you signed in with."), the saved settings with their encryption, the settings form (password never shown), the import button when it applies (D6) and, from 10.2, the "Send test email" button |
 | `POST /admin/email` | Validates and saves. `422` with the sentences and what was typed (except the password), or `303` back to the page. |
 | `POST /admin/email/test` | Sends the test email with the **saved** settings (never unsaved form values) to the signed-in administrator, inside the request. The response is the page itself with the outcome (no redirect, as with the enrollment token page): `200` when sent, `409` when email is not set up, `502` when sending failed. |
 | `POST /admin/email/import-seed` | D6 item 2. `303` back on success, `422` with sentences otherwise. |
@@ -161,7 +170,7 @@ With host `smtp.gmail.com`, port 587, from `alerts@example.com` and recipient `j
 | Not set up | "Email is not set up yet. Fill in the SMTP settings and save them first." |
 | Stored password unreadable | "The stored SMTP password cannot be decrypted with this server's secret key. Enter the password again and save." |
 | Connect (DNS, refused, timeout) | "Could not connect to smtp.gmail.com on port 587. Check the host and port, and that this server can reach them." |
-| STARTTLS not offered, handshake failed or certificate not verified | "smtp.gmail.com did not set up an encrypted connection (STARTTLS), so the password was not sent. Check that the port is the submission port, usually 587, and that the host name matches the server's certificate." |
+| STARTTLS not offered, TLS handshake failed or certificate not verified | "smtp.gmail.com did not set up an encrypted connection, so the password was not sent. Check the port (587 uses STARTTLS, 465 uses TLS from the start) and that the host name matches the server's certificate." |
 | AUTH refused | "smtp.gmail.com did not accept the username and password (reply 535). For Gmail, use an app password, not the account password." |
 | MAIL FROM refused with 530 (authentication required) | "smtp.gmail.com requires a username and password." |
 | MAIL FROM refused otherwise | "smtp.gmail.com refused the sender address alerts@example.com (reply 553). Use an address this account is allowed to send from." |
@@ -182,9 +191,11 @@ With host `smtp.gmail.com`, port 587, from `alerts@example.com` and recipient `j
 server/src/Notifications/
   NotificationsApi.php          smtpSettings(), saveSmtpSettings(), importSeedSmtp(), sendTestEmail()
   Exception/                    InvalidSmtpSettings (sentences by field), EmailNotSetUp, EmailNotSent (one sentence)
-  SmtpSettings.php              the stored values; the password only in memory
+  SmtpSettingsInput.php         what the form or the seed file gave, before validation
+  SmtpSettingsSummary.php       the stored values as the page shows them, without the password
+  SmtpEncryption.php            D5: implicit TLS, STARTTLS or none, from host and port
   SmtpSettingsRules.php         D2's validation, used by the form and the seed import
-  SmtpSettingsRepository.php    SQL, encrypts and decrypts with SecretBox
+  SmtpSettingsRepository.php    SQL only; NotificationsApi encrypts with SecretBox
   Mailer.php                    interface: send(SmtpSettings, TestEmail); throws SendFailure
   SmtpMailer.php                the PHPMailer adapter (D5, D7 timeouts)
   StageRecordingSmtp.php        D8's subclass of PHPMailer\PHPMailer\SMTP
@@ -194,23 +205,23 @@ server/src/Notifications/
   Migrations/0001_notifications_smtp_settings.sql
 ```
 
-Plus `Http/Controller/EmailController.php` (thin), `templates/email.php`, routes in `Http/App.php`, the dashboard link, `Access/SeedSmtp.php` and the `[smtp]` parsing in `SeedConfigReader`. `bin/maguari-server check-seed-config` masks the password. `composer.json` requires `phpmailer/phpmailer`.
+Plus `Http/Controller/EmailController.php` (thin), `templates/email.php`, routes in `Http/App.php`, the dashboard link, `Access/SeedSmtp.php`, the `[smtp]` parsing and `fromEnvironment()` in `SeedConfigReader` and `Cli/SeedConfigReport.php` for `check-seed-config`'s masked lines. In 10.2, `composer.json` requires `phpmailer/phpmailer`.
 
 ## Tests
 
 **10.1**
 
-1. Rules: every accepted and refused value of D2 with its sentence; port 25; username without password; `localhost`.
+1. Rules: every accepted and refused value of D2 with its sentence; port 25; username without password; `localhost`; D5's encryption for each host and port.
 2. Repository: the password is stored encrypted (the column is not the plaintext and decrypts with the key); a new nonce on every save; an empty password field keeps the stored one; clearing the username clears it; a ciphertext from another key gives the "cannot be decrypted" sentence.
-3. Seed: the `[smtp]` section parsed, absent and invalid (types); `check-seed-config` never prints the password; the import button only while nothing is stored; import validates with the same rules.
+3. Seed: the `[smtp]` section parsed, absent and invalid (types); an unquoted password refused without repeating it; `MAGUARI_SEED_FILE`; `check-seed-config` never prints the password; the import button only while nothing is stored; import validates with the same rules.
 4. Page: needs a session; posts need CSRF; the password never appears in any response, including `422`; `GET` on the post routes is `405`.
 5. Migration applies on top of step 9's.
 
 **10.2**
 
 1. Sentences: each row of D8, with and without a reply code.
-2. Adapter against a fake SMTP server: a PHP fixture like `tests/fixtures/tls-server.php` (`tests/fixtures/smtp-server.php`), started with a script of replies, speaking STARTTLS with a test certificate for `127.0.0.1`, trusted through `SMTPOptions` (tests only). Cases: success (the received message has the headers and body of D7); no STARTTLS offered (and the password never sent); an untrusted certificate; AUTH 535; MAIL 530; RCPT 550; DATA 554; a server that never answers (the 10 second timeout, shortened in the test); nothing listening.
-3. `localhost` connects without STARTTLS; any other host never does.
+2. Adapter against a fake SMTP server: a PHP fixture like `tests/fixtures/tls-server.php` (`tests/fixtures/smtp-server.php`), started with a script of replies, speaking STARTTLS or implicit TLS with a test certificate for `127.0.0.1`, trusted through `SMTPOptions` (tests only). Cases: success over STARTTLS and over implicit TLS (the received message has the headers and body of D7); no STARTTLS offered (and the password never sent); an untrusted certificate; AUTH 535; MAIL 530; RCPT 550; DATA 554; a server that never answers (the 10 second timeout, shortened in the test); nothing listening.
+3. `localhost` on a port other than 465 connects unencrypted; any other host never does.
 4. The error log line never contains the password or the username.
 5. Page: "Send test email" goes to the signed-in administrator, uses saved settings, `409`, `502` and `200` with their sentences (with a fake `Mailer`).
 6. The Ubuntu 22.04 run confirms PHPMailer 7.1 on PHP 8.1 and OpenSSL 3.0.
@@ -218,7 +229,7 @@ Plus `Http/Controller/EmailController.php` (thin), `templates/email.php`, routes
 ## Changes to `docs/DESIGN.md`
 
 - **This plan's answers:** section 15, step 10 names the sub-steps and links this plan.
-- **10.1:** section 9.2 (`notifications_smtp_settings`); section 9.3 (the SMTP password's column); section 11.5.1 (the `[smtp]` section, its import button and masking); section 13 (the settings, the port default and the 25 refusal, STARTTLS with the `localhost` exception); section 3.1 (Notifications' files).
+- **10.1:** section 9.2 (`notifications_smtp_settings`); section 9.3 (the SMTP password's column); section 9 (`MAGUARI_SEED_FILE` among the development variables); section 11.5.1 (the `[smtp]` section, its import button and masking); section 12.2.1 (`check-seed-config` prints the masked section); section 13 (the settings, the port default, 465 and the 25 refusal, encryption with the `localhost` exception, the Email page and its recipient); section 17 (the seed file warning).
 - **10.2:** section 13 (PHPMailer and why, the test email, timeouts, the error sentences, no debug transcript); README licence note for PHPMailer.
 
 ## Verification
@@ -237,7 +248,7 @@ scripts/test-ubuntu-22.04.sh
 
 No `--rebuild` is needed: PHPMailer comes from Composer, not apt, and the script installs Composer packages on every run.
 
-### Manual check in development
+### Manual check after 10.1
 
 In each terminal, from the repository root:
 
@@ -245,11 +256,44 @@ In each terminal, from the repository root:
 source scripts/dev-env.sh
 ```
 
-Then from `server/`, after pulling the step's migration:
+Then from `server/`, apply the new migration:
 
 ```
 bin/maguari-server migrate
 ```
+
+Copy the example seed file to the development path (`MAGUARI_SEED_FILE`):
+
+```
+cp config/seed.ini.example var/seed.ini
+```
+
+Check what it would seed. The password line must say `(set, hidden)`:
+
+```
+bin/maguari-server check-seed-config
+```
+
+Start the app and sign in:
+
+```
+php -S localhost:8080 -t public
+```
+
+1. The dashboard links to "Email". The Email page (`http://localhost:8080/admin/email`) says "Email is not set up yet", names your address as the recipient and offers "Use the SMTP settings from the seed file".
+2. Press it. The saved settings show `smtp.gmail.com`, port 587, STARTTLS and "Stored (encrypted)", and the button is gone. The password never appears in the page source.
+3. Change the port to 25 and save: "Compute Engine blocks outbound port 25. Use port 587." Change it to 465 and save: the encryption becomes "TLS from the start (port 465)".
+4. Set host `localhost`, port `1025`, an empty username, from `maguari@example.test` and save: the encryption is "none (allowed only for localhost)" and no password is stored. These are the settings for the aiosmtpd check after 10.2.
+
+The stored password is encrypted, not plain text:
+
+```
+sqlite3 var/dev.sqlite "SELECT host, port, username, length(password_ciphertext), from_address FROM notifications_smtp_settings"
+```
+
+### Manual check after 10.2
+
+With the development environment loaded as above.
 
 **Without a real mail account**, with a local SMTP server that prints every message it receives. `aiosmtpd` is in Ubuntu's archive:
 
@@ -263,24 +307,19 @@ In a second terminal:
 python3 -m aiosmtpd -n -l localhost:1025
 ```
 
-In the Email page (`http://localhost:8080/admin/email`), set host `localhost`, port `1025`, no username, from `maguari@example.test`, save, then press "Send test email". The message appears in the aiosmtpd terminal. Stop aiosmtpd and press it again: "Could not connect to localhost on port 1025."
+In the Email page, with host `localhost`, port `1025`, no username and from `maguari@example.test` saved, press "Send test email". The message appears in the aiosmtpd terminal. Stop aiosmtpd and press it again: "Could not connect to localhost on port 1025."
 
-**With Gmail**, to exercise STARTTLS and authentication for real. Create an app password for a Google account with 2-Step Verification (Google Account, Security, App passwords). In the Email page, set host `smtp.gmail.com`, port `587`, username and from address the account's address, and the app password. Press "Send test email" and check the inbox. Then save a wrong password and press it again: "smtp.gmail.com did not accept the username and password (reply 535). ..."
+**With Gmail**, to exercise STARTTLS and authentication for real. Create an app password for a Google account with 2-Step Verification (Google Account, Security, App passwords). In the Email page, set host `smtp.gmail.com`, port `587`, username and from address the account's address, and the app password. Press "Send test email" and check the inbox. Repeat with port 465. Then save a wrong password and press it again: "smtp.gmail.com did not accept the username and password (reply 535). ..."
 
-**The seed file:** the example file has an `[smtp]` section (D6 item 4):
+## Answers
 
-```
-bin/maguari-server check-seed-config --path=config/seed.ini.example
-```
+1. **Library and port:** PHPMailer 7.1 as proposed. The port is a setting with default 587; port 465 uses implicit TLS, every other port requires STARTTLS, and 25 is refused (D2, D5).
+2. **Encryption:** STARTTLS (or implicit TLS on 465) is required, except for `localhost` (D5).
+3. **Seed file:** applied with a button (D6), and `MAGUARI_SEED_FILE` added for development and tests only (D6 item 5).
+4. **Seed file warning:** added to design section 17, noting that the seed file can now contain the SMTP password.
+5. **Split:** 10.1 and 10.2. The test email goes to the signed-in administrator for now, the Email page shows the recipient, and with multiple administrators it goes to the alert recipients (I1).
 
-Expected: the `[smtp]` section printed with the password masked. Pressing the import button in development needs a seed file the web app can find; the path has no development override today (Q2).
+## Status
 
-## Questions
-
-**Q1.** Confirm the library (D1, PHPMailer 7.1) and the port as a setting with default 587, refusing 25 (D2, a deviation from design 13).
-
-**Q2.** Confirm the seed import as a button (D6), not prefilling (alternative A). For testing the import from the web page in development, the seed file's path needs a development override like the others: add `MAGUARI_SEED_FILE` (development and tests only) to `scripts/dev-env.sh`? Without it, the import is covered by automated tests only.
-
-**Q3.** The seed file can now hold a secret, and its warning (design 10.3) is not built. Add "the seed file warning" to section 17 (required before 1.0), or leave it where it is?
-
-**Q4.** Confirm the split into 10.1 and 10.2, and I1 (the signed-in administrator receives the test email).
+- **10.1:** implemented.
+- **10.2:** not started; waits for review of 10.1.

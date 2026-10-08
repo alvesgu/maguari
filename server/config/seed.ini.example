@@ -14,3 +14,18 @@ email = jane@example.com
 ; Repeat the key for multiple addresses.
 allowlist[] = jane@example.com
 allowlist[] = ops@example.com
+
+[smtp]
+; Optional. The SMTP server for email (see docs/DESIGN.md section 13).
+; While no SMTP settings are stored, the Email page in the web app offers a
+; button that applies this section once. After that, change them there.
+; Port defaults to 587. Port 465 uses TLS from the start, every other port
+; must offer STARTTLS, and port 25 is refused (Compute Engine blocks it).
+; For Gmail, use an app password, not the account password. If the password
+; contains a double quote, a backslash or ${, enter it on the Email page
+; instead. This file holds a secret now: delete it once setup is done.
+host = "smtp.gmail.com"
+port = "587"
+username = "alerts@example.com"
+password = "app password here"
+from = "alerts@example.com"

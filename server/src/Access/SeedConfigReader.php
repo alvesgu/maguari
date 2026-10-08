@@ -8,9 +8,26 @@ use Maguari\Server\Access\Exception\InvalidSeedConfig;
 
 final class SeedConfigReader
 {
+    public const DEFAULT_PATH = '/etc/maguari/seed.ini';
+
     public function __construct(
-        private readonly string $path = '/etc/maguari/seed.ini',
+        private readonly string $path = self::DEFAULT_PATH,
     ) {
+    }
+
+    /**
+     * MAGUARI_SEED_FILE overrides the path for development and tests only.
+     */
+    public static function fromEnvironment(): self
+    {
+        $path = getenv('MAGUARI_SEED_FILE');
+
+        return new self(is_string($path) && $path !== '' ? $path : self::DEFAULT_PATH);
+    }
+
+    public function path(): string
+    {
+        return $this->path;
     }
 
     public function read(): ?SeedConfig
@@ -42,7 +59,50 @@ final class SeedConfigReader
 
         $allowlist = $this->readAllowlist($data, $administratorEmail);
 
-        return new SeedConfig($administratorName, $administratorEmail, $allowlist);
+        return new SeedConfig($administratorName, $administratorEmail, $allowlist, $this->readSmtp($data));
+    }
+
+    /**
+     * The optional [smtp] section, as text. The port may also be left
+     * unquoted, which INI_SCANNER_TYPED reads as an integer.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function readSmtp(array $data): ?SeedSmtp
+    {
+        if (!array_key_exists('smtp', $data)) {
+            return null;
+        }
+
+        $section = $data['smtp'];
+
+        if (!is_array($section)) {
+            throw new InvalidSeedConfig(sprintf(
+                'Seed config file "%s" has an invalid [smtp] section.',
+                $this->path,
+            ));
+        }
+
+        $text = function (string $key) use ($section): string {
+            if (!array_key_exists($key, $section)) {
+                return '';
+            }
+
+            if ($key === 'port' && is_int($section[$key])) {
+                return (string) $section[$key];
+            }
+
+            // The usual hint repeats the value, which must not happen for a password.
+            if ($key === 'password' && !is_string($section[$key])) {
+                throw new InvalidSeedConfig(
+                    'Seed config key "smtp.password" must be text. Quote it in double quotes, for example: password = "...".',
+                );
+            }
+
+            return $this->requireString($section, $key, 'smtp.' . $key);
+        };
+
+        return new SeedSmtp($text('host'), $text('port'), $text('username'), $text('password'), $text('from'));
     }
 
     /**

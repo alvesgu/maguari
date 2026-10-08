@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Maguari\Server\Http;
 
 use Maguari\Server\Access\AccessApi;
+use Maguari\Server\Access\SeedConfigReader;
 use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Gcp\AccessTokenSourceFactory;
 use Maguari\Server\Http\Controller\AdminController;
+use Maguari\Server\Http\Controller\EmailController;
 use Maguari\Server\Http\Controller\EnrollController;
 use Maguari\Server\Http\Controller\HeartbeatController;
 use Maguari\Server\Http\Controller\LoginController;
@@ -31,6 +33,7 @@ use Maguari\Server\Kernel\Secrets\SecretKeyUnavailable;
 use Maguari\Server\Kernel\SystemClock;
 use Maguari\Server\Kernel\Tls\StreamTlsCertificateReader;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Notifications\NotificationsApi;
 use Maguari\Shared\ErrorCode;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App as SlimApp;
@@ -52,7 +55,8 @@ final class App
      * path) and the secret key file at MAGUARI_SECRET_KEY_FILE (or the default
      * path). Sessions are kept in a sessions/ directory next to the database.
      * Google Cloud credentials come from MAGUARI_GCP_CREDENTIALS (the metadata
-     * server unless it says otherwise).
+     * server unless it says otherwise), and the seed config file from
+     * MAGUARI_SEED_FILE (or the default path).
      *
      * Never throws: when anything needed at startup fails (for example a
      * database that cannot be opened), the details go to the error log and
@@ -65,7 +69,7 @@ final class App
         } catch (\Throwable $exception) {
             error_log(sprintf('Maguari could not start: %s: %s', $exception::class, $exception->getMessage()));
 
-            return self::create(null, null, null, null, '', new SystemClock(), notReadyMessage: self::STARTUP_FAILED_MESSAGE);
+            return self::create(null, null, null, null, null, '', new SystemClock(), notReadyMessage: self::STARTUP_FAILED_MESSAGE);
         }
     }
 
@@ -78,7 +82,7 @@ final class App
         $sessionPath = dirname($database->path()) . '/sessions';
 
         if (!(new Migrator($database))->isUpToDate()) {
-            return self::create(null, null, null, null, $sessionPath, $clock);
+            return self::create(null, null, null, null, null, $sessionPath, $clock);
         }
 
         try {
@@ -87,17 +91,18 @@ final class App
             // The reason (which names the path) goes to the log, not the page.
             error_log('Maguari: ' . $unavailable->getMessage());
 
-            return self::create(null, null, null, null, $sessionPath, $clock, notReadyMessage: self::NO_SECRET_KEY_MESSAGE);
+            return self::create(null, null, null, null, null, $sessionPath, $clock, notReadyMessage: self::NO_SECRET_KEY_MESSAGE);
         }
 
         $fleet = new FleetApi($database, $clock, $tokens, $http);
         $monitoring = new MonitoringApi($database, $clock, $fleet, new StreamTlsCertificateReader());
 
         return self::create(
-            new AccessApi($database, $clock),
+            new AccessApi($database, $clock, SeedConfigReader::fromEnvironment()),
             $fleet,
             new ClientsApi($database, $clock, $secretBox, $monitoring),
             $monitoring,
+            new NotificationsApi($database, $clock, $secretBox),
             $sessionPath,
             $clock,
         );
@@ -110,6 +115,7 @@ final class App
      * @param FleetApi|null $fleet null in the same case as $access
      * @param ClientsApi|null $clients null in the same case as $access
      * @param MonitoringApi|null $monitoring null in the same case as $access
+     * @param NotificationsApi|null $notifications null in the same case as $access
      * @param bool $logErrors log uncaught errors to PHP's error log. Tests pass false.
      * @param string $notReadyMessage what /admin and /auth say while not ready
      */
@@ -118,6 +124,7 @@ final class App
         ?FleetApi $fleet,
         ?ClientsApi $clients,
         ?MonitoringApi $monitoring,
+        ?NotificationsApi $notifications,
         string $sessionPath,
         Clock $clock = new SystemClock(),
         bool $logErrors = true,
@@ -153,7 +160,7 @@ final class App
         );
         $app->add(new SecurityHeadersMiddleware());
 
-        if ($access === null || $fleet === null || $clients === null || $monitoring === null) {
+        if ($access === null || $fleet === null || $clients === null || $monitoring === null || $notifications === null) {
             $app->any('/{surface:admin|auth}[/{rest:.*}]', function ($request, ResponseInterface $response) use ($notReadyMessage): ResponseInterface {
                 $response->getBody()->write($notReadyMessage);
 
@@ -168,13 +175,14 @@ final class App
             $adminController = new AdminController($fleet, $clients, $monitoring, $view, $logErrors);
             $projectsController = new ProjectsController($fleet, $clients, $access, $view);
             $instancesController = new InstancesController($fleet, $monitoring, $view);
+            $emailController = new EmailController($access, $notifications, $view);
             $enrollController = new EnrollController($clients);
             $heartbeatController = new HeartbeatController($clients);
             $signature = new ClientSignatureMiddleware($clients, $responseFactory);
             $setupController = new SetupController($access, $view);
             $loginController = new LoginController($access, $view);
 
-            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController): void {
+            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController, $emailController): void {
                 $group->get('', [$adminController, 'show']);
                 $group->post('/logout', [$adminController, 'logout']);
                 $group->post('/daily-job', [$adminController, 'runDailyJob']);
@@ -185,6 +193,9 @@ final class App
                 $group->get('/instances/{id:[0-9]+}', [$instancesController, 'show']);
                 $group->post('/instances/{id:[0-9]+}/certificate-hostnames', [$instancesController, 'addHostname']);
                 $group->post('/instances/{id:[0-9]+}/certificate-hostnames/{hostnameId:[0-9]+}/remove', [$instancesController, 'removeHostname']);
+                $group->get('/email', [$emailController, 'show']);
+                $group->post('/email', [$emailController, 'save']);
+                $group->post('/email/import-seed', [$emailController, 'importSeed']);
             })->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
 
             // CSRF protects the forms under /auth. The future OAuth callback is

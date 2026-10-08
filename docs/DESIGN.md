@@ -540,7 +540,7 @@ Coherence rules (warning only):
 
 ## 9. Storage
 
-SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. `MAGUARI_GCP_CREDENTIALS` (section 8) is also for development only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, or the secret key file (section 9.3) is missing or unusable, `/admin/*` and `/auth/*` return `503` with a message naming the command to run, and `/api/client/*` returns `503` with `{"error": "unavailable"}`. The web entry point never crashes before Slim starts: if anything needed at startup fails (for example a database that cannot be opened), every surface answers `503` the same way, with a fixed message, and the details go only to the error log.
+SQLite, stored outside the web root with restrictive file permissions: `/var/lib/maguari/maguari.sqlite`, mode 0600, in a directory with mode 0700. The `MAGUARI_DATABASE` environment variable overrides the path for development and tests only. `MAGUARI_GCP_CREDENTIALS` (section 8) and `MAGUARI_SEED_FILE` (section 11.5.1) are also for development only. SQLite runs in WAL mode with a 5 second busy timeout and foreign keys on. The web app never creates the database: while it is missing or not fully migrated, or the secret key file (section 9.3) is missing or unusable, `/admin/*` and `/auth/*` return `503` with a message naming the command to run, and `/api/client/*` returns `503` with `{"error": "unavailable"}`. The web entry point never crashes before Slim starts: if anything needed at startup fails (for example a database that cannot be opened), every surface answers `503` the same way, with a fixed message, and the details go only to the error log.
 
 ### 9.1 Readings as runs
 
@@ -572,6 +572,7 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 - Events: alerts, remediation actions, commands and their results
 - Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at, failed)`, with `finished_at` NULL while running or after the run was killed and `failed` 1 for a run that hit an error, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at, subject)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. `subject` says what on the instance a result is about, for checks with more than one result per instance (a certificate's domain), and is empty otherwise (the disk size check). Every run is kept: about one row per instance per check (per certificate, for certificates) per day.
 - Hostnames for the remote certificate check (section 6.3.2): `monitoring_certificate_hostnames(id, instance_id, hostname, added_at)`, unique by instance and hostname. `instance_id` is Fleet's instance ID, with no foreign key.
+- SMTP settings (section 13.1): `notifications_smtp_settings(id, host, port, username, password_ciphertext, from_address, updated_at)`, at most one row (`id` is always 1); no row means email is not set up. `username` is empty for a server that needs no sign-in, and then `password_ciphertext` is NULL.
 - Audit log: logins, configuration changes, manual actions
 - Settings and secrets
 
@@ -583,7 +584,8 @@ This protects against leaks of the database file alone (a stray backup, a shared
 
 1. **Key file:** 32 raw bytes at `/etc/maguari/secret.key`. `MAGUARI_SECRET_KEY_FILE` overrides the path for development and tests only. The app refuses a key file that is not exactly 32 bytes or that group or others can access, and then treats itself as not set up (section 9).
 2. **Creation:** `maguari-server create-secret-key` (section 12.2.1) creates the file with mode 0600, under a `0077` umask so it is never readable by others even briefly, and its directory with mode 0700 if missing. It never overwrites an existing key, because a new key makes every stored secret unreadable and every instance would have to enroll again. Packaging will run it during installation.
-3. **Stored form:** the 24-byte random nonce followed by the ciphertext, in a `BLOB` column (for example `clients_clients.secret_ciphertext`). Each encryption uses a new nonce.
+3. **Stored form:** the 24-byte random nonce followed by the ciphertext, in a `BLOB` column (`clients_clients.secret_ciphertext`, `notifications_smtp_settings.password_ciphertext`). Each encryption uses a new nonce.
+4. **Unreadable secrets:** a stored SMTP password the key cannot decrypt (the key file was replaced) never crashes a page. The Email page says "The stored SMTP password cannot be decrypted with this server's secret key. Enter the password again and save." in place of the password's state.
 
 Password hashes (local login during setup) use Argon2id.
 
@@ -726,14 +728,15 @@ Running behind the Cloudflare proxy is not supported for now. If added later as 
 
 #### 11.5.1 Format
 
-1. Path: `/etc/maguari/seed.ini`. INI, parsed with `parse_ini_file($path, true, INI_SCANNER_TYPED)`. A fully commented example ships at `server/config/seed.ini.example`.
+1. Path: `/etc/maguari/seed.ini`. `MAGUARI_SEED_FILE` overrides it for development and tests only (`scripts/dev-env.sh` sets `server/var/seed.ini`). INI, parsed with `parse_ini_file($path, true, INI_SCANNER_TYPED)`. A fully commented example ships at `server/config/seed.ini.example`.
 2. Every value must be quoted in double quotes. With `INI_SCANNER_TYPED`, an unquoted `yes`, `no`, `true`, `false`, `on`, `off`, `none` or `null` is read as a boolean or `null` instead of text, which fails validation. The example file documents this.
 3. `[administrator]` section, required: `name` (non-empty string) and `email` (a valid email address, the alert recipient).
 4. `[access]` section, optional: `allowlist[]`, repeated for multiple addresses. Defaults to `[administratorEmail]` when omitted or empty. Every entry is lowercased and the list deduplicated, so `Jane@Example.com` and `jane@example.com` count as one entry. The administrator email is lowercased the same way.
-5. No password field. Local credentials are created only by the setup wizard (section 11.2), not seeded.
-6. **Absent versus invalid:** a missing file means nothing to seed, not an error. A present but invalid file (unparsable INI, or a missing or malformed required field) is an error.
-7. **Applying values is deferred.** Reading and validating the file works from MVP step 1 (section 15) with no database. Actually applying the seeded values, and marking seeding as done, is still deferred to a later step, although SQLite exists since MVP step 3. Until then, the setup wizard only uses the file to prefill the administrator's name and email (section 11.2).
-8. If secret fields are ever added to this file, any CLI output that prints the parsed file must mask them.
+5. No password field for the administrator. Local credentials are created only by the setup wizard (section 11.2), not seeded.
+6. `[smtp]` section, optional: `host`, `port`, `username`, `password` and `from`, all text (the port may also be left unquoted). A key left out is empty, and an empty port means 587. Access only checks that the values are text, without repeating a password that is not; Notifications validates them with the same rules as the Email page (section 13.1). A password containing a double quote, a backslash or `${` cannot be written here and is entered on the Email page instead.
+7. **Absent versus invalid:** a missing file means nothing to seed, not an error. A present but invalid file (unparsable INI, or a missing or malformed required field) is an error.
+8. **Applying values is partly deferred.** Reading and validating the file works from MVP step 1 (section 15) with no database. The setup wizard uses the file to prefill the administrator's name and email (section 11.2). Since MVP step 10, the Email page applies the `[smtp]` section with a button ("Use the SMTP settings from the seed file", `POST /admin/email/import-seed`), shown only while no SMTP settings are stored and the file has the section. Once settings are stored, the button is gone and the web app owns them. A section that breaks the rules shows their sentences and stores nothing. Applying the allowlist, and marking seeding as done, is still deferred.
+9. Secret fields are masked in any CLI output that prints the parsed file: `check-seed-config` prints `SMTP password: (set, hidden)` or `(not set)`, never the password or its length.
 
 ## 12. Packaging, distribution and updates
 
@@ -766,7 +769,7 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | Subcommand | Purpose |
 |---|---|
 | `setup --domain <domain> --email <email>` | Runs certbot, verifies HTTPS, prints the one-time setup URL (above) |
-| `check-seed-config [--path=/etc/maguari/seed.ini]` | Reads and validates the seed config file (section 11.5.1) and prints what would be seeded, without applying anything. `--path` is a testing convenience, not a production option. |
+| `check-seed-config [--path=/etc/maguari/seed.ini]` | Reads and validates the seed config file (section 11.5.1) and prints what would be seeded, without applying anything, with the SMTP password masked. `--path` is a testing convenience, not a production option; without it, `MAGUARI_SEED_FILE` (development only) or the default path is read. |
 | `migrate` | Creates the database if needed and applies pending migrations (section 3.1) |
 | `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Records `<url>` as the server's address (section 5.6). Refuses once an administrator exists. |
 | `set-base-url --base-url=<url>` | Sets or changes the server's address used in enroll commands (section 5.6): for installs set up before it was recorded, after a domain change and in development |
@@ -803,7 +806,23 @@ Hosted on GitHub Pages, signed with a GPG key that lives only on the developer m
 
 ## 13. Email
 
-SMTP on port 587 through a relay (Google Workspace SMTP relay or Gmail SMTP). Compute Engine blocks outbound port 25.
+SMTP through a relay (Google Workspace SMTP relay or Gmail SMTP), usually on port 587. Compute Engine blocks outbound port 25. Notifications owns the settings and the sending.
+
+### 13.1 SMTP settings
+
+The Email page (`/admin/email`, linked from the dashboard) shows the saved settings and a form to change them (`POST /admin/email`: `303` back on success, `422` with a sentence per field and what was typed otherwise, never the password). It also names the recipient: for now, the signed-in administrator's address. With multiple administrators, test emails go to the alert recipients instead (section 17 item 3).
+
+| Setting | Rule |
+|---|---|
+| Host | A DNS name (at least two labels of letters, digits and hyphens, the last not all digits, at most 253 bytes, lowercased), or exactly `localhost`. No IP addresses, schemes, ports or paths. |
+| Port | 1 to 65535, default 587 (an empty port means 587). Port 25 is refused: "Compute Engine blocks outbound port 25. Use port 587." |
+| Username | Optional, up to 254 bytes, no control characters. Empty means no sign-in (the Workspace relay by IP address). |
+| Password | Required with a username, up to 1,024 bytes, no control characters. Encrypted at rest (section 9.3) and never shown again: the field is always empty, leaving it empty keeps the stored password and clearing the username removes it. |
+| From address | Required, a valid email address, lowercased. |
+
+Encryption follows from host and port and is never stored (`SmtpEncryption`): port 465 uses TLS from the start; any other port must offer STARTTLS; only `localhost` (a development server) may be unencrypted, the same exception as `http://` for `--base-url` (section 5.6). Certificates are always verified. The page shows the encryption with the saved settings.
+
+The seed file's `[smtp]` section can fill the settings once (section 11.5.1).
 
 ## 14. Infrastructure
 
@@ -824,7 +843,7 @@ Implement in this order, one step at a time:
 7. Receive disk used and total every minute and store them as runs (section 9.1). Done in two sub-steps (`docs/plans/mvp-step-7.md`): 7.1 store readings as runs, 7.2 the client measures disk usage.
 8. Daily scheduled job with a "Run now" button, with the boot disk size check (section 6.3) as its first check. Done in two sub-steps (`docs/plans/mvp-step-8.md`): 8.1 the job and the disk size check, 8.2 the dashboard and "Run now".
 9. Certificate expiry: the client's certificate scanner (section 6.1.1) and the local and remote certificate checks in the daily job. In four sub-steps (`docs/plans/mvp-step-9.md`): 9.1 Monitoring's layers, 9.2 local expiry dates reach the server, 9.3 the local certificate check, 9.4 the remote certificate check.
-10. Send a test email to the administrator.
+10. Send a test email to the administrator. In two sub-steps (`docs/plans/mvp-step-10.md`): 10.1 SMTP settings (the Notifications context, the encrypted password, the Email page and the seed file's `[smtp]` section), 10.2 the test email (PHPMailer, the "Send test email" button and its error sentences).
 11. Read stored runs through an API endpoint for future charts.
 
 First steps after the MVP: the egress indicator (section 10.3) and Google sign-in.
@@ -844,6 +863,7 @@ Gaps the MVP leaves open on purpose that must be closed before 1.0.
    - Every level uses the slider rules of sections 7.3 and 10.3: soft limits warn, hard limits and coherence rules reject. Coherence rules apply to the effective values of each instance.
    - Per-user settings cover preferences only (which alerts each administrator receives, timezone and display), never thresholds, so an instance's status is the same for every administrator.
    - Until then, every threshold is a single named constant, never a literal repeated in code.
+4. **The seed config file warning** (sections 10.3 and 11.5 item 3) must exist. Since MVP step 10 the seed file can contain the SMTP password (section 11.5.1), so a file left on the server after setup exposes a secret to anyone who can read it.
 
 ## 18. Roadmap after 1.0
 

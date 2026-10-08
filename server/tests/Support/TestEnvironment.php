@@ -16,6 +16,7 @@ use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Notifications\NotificationsApi;
 use Slim\App as SlimApp;
 
 /**
@@ -39,6 +40,7 @@ final class TestEnvironment
     public readonly FakeTlsCertificateReader $tls;
     public readonly MonitoringApi $monitoring;
     public readonly ClientsApi $clients;
+    public readonly NotificationsApi $notifications;
 
     public function __construct(bool $migrate = true)
     {
@@ -63,6 +65,7 @@ final class TestEnvironment
         $this->tls = new FakeTlsCertificateReader();
         $this->monitoring = new MonitoringApi($this->database, $this->clock, $this->fleet, $this->tls);
         $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox, $this->monitoring);
+        $this->notifications = new NotificationsApi($this->database, $this->clock, $this->secretBox);
     }
 
     public function writeSeedConfig(string $contents): void
@@ -72,7 +75,7 @@ final class TestEnvironment
 
     public function app(): SlimApp
     {
-        return App::create($this->access, $this->fleet, $this->clients, $this->monitoring, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
+        return App::create($this->access, $this->fleet, $this->clients, $this->monitoring, $this->notifications, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
     }
 
     public function browser(string $ip = '192.0.2.10'): Browser

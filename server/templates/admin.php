@@ -19,7 +19,7 @@ $certificateFailures = [];
 ?>
 <h1>Maguari</h1>
 <p>Signed in as <?= $e($administrator->name) ?> (<?= $e($administrator->email) ?>).</p>
-<p><a href="/admin/projects">Projects</a></p>
+<p><a href="/admin/projects">Projects</a> · <a href="/admin/email">Email</a></p>
 <h2>Daily job</h2>
 <?= $partial('daily-job-status', ['run' => $lastRun]) ?><?php if ($dailyJob->lastScheduledRun === null): ?>
 <p>No scheduled run yet. On the server, the maguari-server-daily-job timer runs the job every day at 06:00 UTC.</p>

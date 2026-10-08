@@ -182,6 +182,21 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertStringNotContainsString('Stack trace', $stderr);
     }
 
+    public function testCheckSeedConfigReadsTheDevelopmentPathAndHidesThePassword(): void
+    {
+        $seedFile = $this->directory . '/seed.ini';
+        file_put_contents($seedFile, "[administrator]\nname = \"Jane Doe\"\nemail = \"jane@example.com\"\n\n"
+            . "[smtp]\nhost = \"smtp.gmail.com\"\nusername = \"alerts@example.com\"\npassword = \"abcd efgh ijkl mnop\"\n");
+
+        [$status, $stdout, $stderr] = $this->runCommand($this->directory . '/maguari.sqlite', ['check-seed-config'], ['MAGUARI_SEED_FILE' => $seedFile]);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertStringContainsString("Seed config file: {$seedFile}\n", $stdout);
+        $this->assertStringContainsString("SMTP host: smtp.gmail.com\n", $stdout);
+        $this->assertStringContainsString("SMTP password: (set, hidden)\n", $stdout);
+        $this->assertStringNotContainsString('abcd', $stdout . $stderr);
+    }
+
     public function testIssueSetupTokenRecordsTheBaseUrl(): void
     {
         $path = $this->directory . '/maguari.sqlite';

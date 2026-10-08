@@ -212,4 +212,105 @@ final class SeedConfigReaderTest extends TestCase
             self::assertStringContainsString('quote', strtolower($exception->getMessage()));
         }
     }
+
+    private const ADMINISTRATOR = <<<INI
+        [administrator]
+        name = "Jane Doe"
+        email = "jane@example.com"
+
+        INI;
+
+    public function testWithoutAnSmtpSectionSmtpIsNull(): void
+    {
+        $seedConfig = (new SeedConfigReader($this->writeIni(self::ADMINISTRATOR)))->read();
+
+        self::assertNotNull($seedConfig);
+        self::assertNull($seedConfig->smtp);
+    }
+
+    public function testReadsTheSmtpSectionAsText(): void
+    {
+        $path = $this->writeIni(self::ADMINISTRATOR . <<<INI
+            [smtp]
+            host = "smtp.gmail.com"
+            port = "587"
+            username = "alerts@example.com"
+            password = "abcd efgh ijkl mnop"
+            from = "alerts@example.com"
+            INI);
+
+        $smtp = (new SeedConfigReader($path))->read()?->smtp;
+
+        self::assertNotNull($smtp);
+        self::assertSame('smtp.gmail.com', $smtp->host);
+        self::assertSame('587', $smtp->port);
+        self::assertSame('alerts@example.com', $smtp->username);
+        self::assertSame('abcd efgh ijkl mnop', $smtp->password);
+        self::assertSame('alerts@example.com', $smtp->from);
+        self::assertStringNotContainsString('abcd', print_r($smtp, true));
+    }
+
+    public function testMissingSmtpKeysAreEmptyAndAnUnquotedPortIsAccepted(): void
+    {
+        $path = $this->writeIni(self::ADMINISTRATOR . <<<INI
+            [smtp]
+            host = "localhost"
+            port = 1025
+            INI);
+
+        $smtp = (new SeedConfigReader($path))->read()?->smtp;
+
+        self::assertNotNull($smtp);
+        self::assertSame('1025', $smtp->port);
+        self::assertSame('', $smtp->username);
+        self::assertSame('', $smtp->password);
+        self::assertSame('', $smtp->from);
+    }
+
+    public function testAnUnquotedPasswordIsRefusedWithoutRepeatingIt(): void
+    {
+        $path = $this->writeIni(self::ADMINISTRATOR . <<<INI
+            [smtp]
+            host = "smtp.gmail.com"
+            password = 98765432
+            INI);
+
+        try {
+            (new SeedConfigReader($path))->read();
+            self::fail('Expected InvalidSeedConfig to be thrown.');
+        } catch (InvalidSeedConfig $exception) {
+            self::assertStringContainsString('smtp.password', $exception->getMessage());
+            self::assertStringNotContainsString('98765432', $exception->getMessage());
+        }
+    }
+
+    public function testAnUnquotedSmtpValueSuggestsQuoting(): void
+    {
+        $path = $this->writeIni(self::ADMINISTRATOR . <<<INI
+            [smtp]
+            host = none
+            INI);
+
+        try {
+            (new SeedConfigReader($path))->read();
+            self::fail('Expected InvalidSeedConfig to be thrown.');
+        } catch (InvalidSeedConfig $exception) {
+            self::assertStringContainsString('smtp.host', $exception->getMessage());
+            self::assertStringContainsString('quote', strtolower($exception->getMessage()));
+        }
+    }
+
+    public function testTheEnvironmentOverridesThePath(): void
+    {
+        $previous = getenv('MAGUARI_SEED_FILE');
+
+        try {
+            putenv('MAGUARI_SEED_FILE=' . $this->tempDir . '/seed.ini');
+            self::assertSame($this->tempDir . '/seed.ini', SeedConfigReader::fromEnvironment()->path());
+            putenv('MAGUARI_SEED_FILE');
+            self::assertSame('/etc/maguari/seed.ini', SeedConfigReader::fromEnvironment()->path());
+        } finally {
+            putenv($previous === false ? 'MAGUARI_SEED_FILE' : 'MAGUARI_SEED_FILE=' . $previous);
+        }
+    }
 }
