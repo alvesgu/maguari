@@ -7,6 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= $e($title) ?> - Maguari</title>
 <link rel="stylesheet" href="/assets/maguari.css">
+<script src="/assets/maguari.js" defer></script>
 </head>
 <body>
 <main>

@@ -120,12 +120,16 @@ pre {
 
 /*
  * The (i) icon next to anything with more details (templates/info.php,
- * design section 10.3). Its text shows on hover and on keyboard focus, in the
- * normal flow below the icon: a floating box would be cut off by the tables'
- * sideways scrolling.
+ * design section 10.3). Its "i" is generated here, not text in the page, so
+ * copying a result gives just the result. Not user-select: none: Chrome then
+ * moves a selection that ends next to the icon into the following cell,
+ * which copies a stray tab.
  */
-.info-icon {
+.info {
     margin-left: 0.3rem;
+}
+
+.info-icon {
     padding: 0;
     width: 1.3em;
     height: 1.3em;
@@ -137,18 +141,26 @@ pre {
     vertical-align: text-top;
 }
 
+.info-icon::before {
+    content: "i";
+}
+
+/*
+ * The details: a popover in the browser's top layer, so a table that scrolls
+ * sideways cannot cut it off. assets/maguari.js sets its top and left next
+ * to the icon. The text can be selected and copied.
+ */
 .info-text {
-    display: none;
-    max-width: 40rem;
-    margin-top: 0.3rem;
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    max-width: min(40rem, calc(100vw - 1rem));
     padding: 0.4rem 0.6rem;
+    color: var(--text);
     background: var(--surface-raised);
     border: 1px solid var(--border);
     border-radius: 4px;
+    box-shadow: 0 0.2rem 0.8rem rgb(0 0 0 / 60%);
     white-space: pre-line;
-}
-
-.info:hover .info-text,
-.info:focus-within .info-text {
-    display: block;
+    text-align: left;
 }

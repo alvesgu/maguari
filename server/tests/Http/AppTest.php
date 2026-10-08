@@ -312,7 +312,8 @@ final class AppTest extends TestCase
         $this->assertStringContainsString('<h1>' . $title . '</h1>', $body);
         $this->assertStringContainsString('<a href="/admin">Go to the dashboard</a>', $body);
         $this->assertDoesNotMatchRegularExpression('/\son[a-z]+\s*=/i', $body, 'No inline event handlers.');
-        $this->assertDoesNotMatchRegularExpression('/<script|<style|\sstyle\s*=|javascript:/i', $body, 'No inline scripts or styles.');
+        // The one script is external (assets/maguari.js), which the policy allows.
+        $this->assertDoesNotMatchRegularExpression('/<script(?! src="\/assets\/maguari\.js" defer><\/script>)|<style|\sstyle\s*=|javascript:/i', $body, 'No inline scripts or styles.');
         $this->assertStringNotContainsString('href="#"', $body);
         $this->assertStringNotContainsString('secret-detail', $body);
         $this->assertSecurityHeaders($response);

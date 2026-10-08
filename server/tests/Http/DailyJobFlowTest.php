@@ -106,7 +106,7 @@ final class DailyJobFlowTest extends TestCase
     private static function cell(string $label, string $text): string
     {
         return '#<td>' . preg_quote($label, '#') . '<span class="info"><button type="button" class="info-icon" aria-label="Details" '
-            . 'aria-describedby="(info-[0-9a-f]{12})">i</button><span class="info-text" id="\\1" role="tooltip">'
+            . 'aria-describedby="(info-[0-9a-f]{12})" popovertarget="\\1"></button><span class="info-text" id="\\1" popover role="tooltip">'
             . preg_quote(htmlspecialchars($text, ENT_QUOTES), '#') . '</span></span></td>#';
     }
 
