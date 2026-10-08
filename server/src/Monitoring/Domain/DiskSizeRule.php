@@ -23,9 +23,6 @@ final class DiskSizeRule
      */
     public const MAX_UNACCOUNTED_PERCENT = 10;
 
-    /** Readings older than this are not used. */
-    public const MAX_READING_AGE_SECONDS = 86_400;
-
     private const BYTES_PER_GIB = 1 << 30;
 
     /**
@@ -49,14 +46,14 @@ final class DiskSizeRule
 
         $recent = array_filter(
             $filesystemTotals,
-            static fn (?MetricRun $run): bool => $run !== null && $at - $run->endAt <= self::MAX_READING_AGE_SECONDS,
+            static fn (?MetricRun $run): bool => $run !== null && $run->isRecent($at),
         );
 
         // Without /, the sum would miss most of the disk and fail falsely.
         if (!isset($recent['/'])) {
             return $result(CheckOutcome::NotChecked, $recent === []
-                ? 'No disk readings in the last 24 hours.'
-                : 'No reading for / in the last 24 hours, so the boot disk cannot be compared.');
+                ? sprintf('No disk readings in the last %s.', MetricRun::recentWindow())
+                : sprintf('No reading for / in the last %s, so the boot disk cannot be compared.', MetricRun::recentWindow()));
         }
 
         $filesystemBytes = array_sum(array_map(static fn (MetricRun $run): int|float => $run->value, $recent));

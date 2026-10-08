@@ -106,9 +106,61 @@ final class DailyJobTest extends TestCase
         $stored = $this->rows('monitoring_check_results');
         $this->assertCount(3, $stored);
         $this->assertSame(
-            ['id' => 2, 'job_run_id' => 1, 'instance_id' => $grown->id, 'check_name' => 'disk_size', 'outcome' => 'fail', 'detail' => $results[1]->detail, 'checked_at' => $at],
+            ['id' => 2, 'job_run_id' => 1, 'instance_id' => $grown->id, 'check_name' => 'disk_size', 'outcome' => 'fail', 'detail' => $results[1]->detail, 'checked_at' => $at, 'subject' => ''],
             $stored[1],
         );
+    }
+
+    /**
+     * @param array<string, int> $expiries by domain
+     */
+    private function recordCertificates(int $instanceId, array $expiries): void
+    {
+        $readings = [];
+
+        foreach ($expiries as $domain => $expiresAt) {
+            $readings[] = ['metric' => 'certificate_expires_at:' . $domain, 'value' => $expiresAt];
+        }
+
+        $monitoring = $this->environment->monitoring;
+        $monitoring->recordReadings($instanceId, $this->environment->clock->now(), $monitoring->parseReadings($readings));
+    }
+
+    public function testChecksEachRecentlyReportedCertificate(): void
+    {
+        $web = $this->pick('web');
+        $plain = $this->pick('plain');
+        $day = 86_400;
+        $now = $this->environment->clock->now();
+        // Removed from the instance more than a day ago: it no longer counts.
+        $this->recordCertificates($web->id, ['removed.example.com' => $now + 3 * $day]);
+        $this->environment->clock->advance(3600);
+        // Renewed: only the current run of a domain counts.
+        $this->recordCertificates($web->id, ['www.example.com' => $now + 5 * $day, 'example.com' => $now + 60 * $day]);
+        $this->environment->clock->advance(3600);
+        $this->recordCertificates($web->id, ['www.example.com' => $now + 70 * $day, 'example.com' => $now + 60 * $day]);
+        $this->environment->clock->advance(23 * 3600);
+        $this->queueListing(['plain' => 10, 'web' => 10]);
+        $at = $this->environment->clock->now();
+
+        $results = $this->environment->monitoring->runDailyJob(DailyJobTrigger::Manual);
+
+        // plain: disk size only, and no certificate result.
+        // web: disk size, then its certificates in domain order.
+        $this->assertSame(
+            [[$plain->id, 'disk_size', ''], [$web->id, 'disk_size', ''], [$web->id, 'local_certificate', 'example.com'], [$web->id, 'local_certificate', 'www.example.com']],
+            array_map(static fn (CheckResult $result): array => [$result->instanceId, $result->checkName, $result->subject], $results),
+        );
+        $this->assertSame([CheckOutcome::Pass, CheckOutcome::Pass], [$results[2]->outcome, $results[3]->outcome]);
+        $this->assertSame(
+            ['instance_id' => $web->id, 'check_name' => 'local_certificate', 'outcome' => 'pass', 'checked_at' => $at, 'subject' => 'www.example.com'],
+            array_intersect_key($this->rows('monitoring_check_results')[3], array_flip(['instance_id', 'check_name', 'subject', 'outcome', 'checked_at'])),
+        );
+
+        $summary = $this->environment->monitoring->dailyJobSummary([$web->id, $plain->id]);
+        $this->assertSame([$web->id], array_keys($summary->certificateResults));
+        $this->assertSame(['example.com', 'www.example.com'], array_map(static fn (CheckResult $result): string => $result->subject, $summary->certificateResults[$web->id]));
+        $this->assertSame([$plain->id, $web->id], array_keys($summary->diskSizeResults));
     }
 
     public function testRunsWithNoInstancesWithoutCallingTheApi(): void

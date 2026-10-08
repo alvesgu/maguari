@@ -378,7 +378,7 @@ Certificate expiry is checked both locally and remotely.
 
 A scheduled daily job runs slow or daily-by-nature checks, with a "Run now" button in the dashboard:
 
-- Certificate expiry (local and remote), from MVP step 9. Both fail when fewer than 14 days remain. That is a fixed constant for now; when Let's Encrypt's 45-day certificates arrive (renewed with about 15 days left), it becomes a setting (section 17 item 3).
+- Certificate expiry (local and remote), from MVP step 9 (section 6.3.2). Both fail when fewer than 14 days remain. That is a fixed constant for now; when Let's Encrypt's 45-day certificates arrive (renewed with about 15 days left), it becomes a setting (section 17 item 3).
 - Compute Engine disk size compared with the filesystem size reported by the client (detects a grown disk whose filesystem was never extended)
 
 The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd timer (section 10.1) and the button run the same code; only the recorded trigger differs (`scheduled` or `manual`). It checks every picked instance and asks Fleet for the instances and their disks, so it never reads another context's tables.
@@ -388,7 +388,9 @@ The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd time
 3. **Failures.** Any error the job can catch, during the checks or while storing the results, marks the run finished and failed, without results, and the caller logs it (`The daily job failed: <class>: <message>`): the CLI on stderr, which systemd sends to the journal, and "Run now" in PHP's error log. So the 15 minute rule in item 1 only covers runs that were killed (or whose failure could not be recorded, for example when the database itself fails).
 4. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Results are shown, not acted on: no incident, alert or notification yet.
 5. **"Run now"** is a form on the dashboard posting to `POST /admin/daily-job` (session and CSRF, like every `/admin` form). It runs the job inside the request, with the trigger `manual`, then redirects (`303`) to `/admin`. A run already in progress or a failed run also redirects; the dashboard says what happened, and a failure's details go only to PHP's error log. **Known limit:** nginx's usual FastCGI timeout (`fastcgi_read_timeout`, 60 seconds) bounds the request, and each project costs one listing of up to 10 pages. With many projects the administrator could see a `504` while the run still finishes in php-fpm. If that happens, the fix is queued runs: the button records a request and a timer that runs every minute picks it up.
-6. **The dashboard** (`/admin`, read from SQLite only) has a "Daily job" section above the instances: the last run (never run, running since, did not finish, failed or finished with its duration), a note when no scheduled run exists yet, a warning when the timer's latest run started more than 25 hours ago (manual runs do not count) and the "Run now" button. The instances table has a "Disk size" column with each instance's result from the **last successful run**, its sentence in a tooltip; failures are also listed below the table. When the last run did not succeed, the page says which run the results come from.
+6. **The dashboard** (`/admin`, read from SQLite only) has a "Daily job" section above the instances: the last run (never run, running since, did not finish, failed or finished with its duration), a note when no scheduled run exists yet, a warning when the timer's latest run started more than 25 hours ago (manual runs do not count) and the "Run now" button. The instances table has a "Disk size" column with each instance's result from the **last successful run**, its sentence in a tooltip; failures are also listed below the table. A "Certificates" column shows the worst of the instance's certificate results from the same run (a failure over not checked over a pass), as "Pass (3)" with the number checked when all pass, "Fail" or "Not checked", and is empty for an instance without certificates; its tooltip lists each certificate with its sentence, and failed certificates are listed below the table. When the last run did not succeed, the page says which run the results come from.
+
+Readings older than a day are not used by any daily check: a check uses only runs that ended in the last 24 hours (`MetricRun::RECENT_FOR_SECONDS`), so a filesystem or certificate that is no longer reported drops out after a day.
 
 #### 6.3.1 Disk size check
 
@@ -405,6 +407,20 @@ With the boot disk's size `D` (section 8) and the sum `F` of the current `disk_t
 | The listing failed, the instance was missing from it or no boot disk size was reported | Not checked, with Fleet's fixed sentence |
 
 A filesystem is always somewhat smaller than its disk (partition table, the EFI partition, ext4's own space): about 4% on a 10 GiB Ubuntu disk. Growing that disk by 1 GiB leaves about 13% unaccounted for, so even the smallest growth of the smallest Ubuntu disk fails. A boot disk with a partition the client does not report (for example swap) can fail falsely; the sentence shows both sizes, so the cause is visible.
+
+#### 6.3.2 Certificate expiry checks
+
+One rule (`CertificateExpiryRule`) judges every certificate's expiry date, with whole days left rounded down and dates in UTC:
+
+| Situation | Result |
+|---|---|
+| At least 14 days left | Pass: "Valid until 2026-12-07 (60 days)." |
+| Fewer than 14 days left | Fail: "Expires on 2026-10-22, in 13 days." ("in 1 day", "in less than a day") |
+| Past its last valid second | Fail: "Expired on 2026-09-30." |
+
+Why 14 days: certbot renews 90-day certificates when 30 days remain and tries twice a day, so 14 days left means about two weeks of failed renewals. The number is `CertificateExpiryRule::MIN_DAYS_LEFT` until it becomes a setting (section 17 item 3).
+
+**Local check** (`local_certificate`): one result per certificate the instance reported in the last 24 hours, from the current `certificate_expires_at` run of each domain (section 6.1.1). The result's subject is the domain. A failure adds "certbot renews well before expiry, so renewal is failing on this instance." An instance that reports no certificates gets no result at all, not "Not checked", because most instances have none. Known gap: a broken scanner on an instance that has certificates looks the same as no certificates; the remote check covers the certificates actually served. A stale scan errs towards failing, because the old date stays until the next scan.
 
 ## 7. Remediation and safeguards
 
@@ -536,7 +552,7 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 
 - Projects and instances
 - Events: alerts, remediation actions, commands and their results
-- Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at, failed)`, with `finished_at` NULL while running or after the run was killed and `failed` 1 for a run that hit an error, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. Every run is kept: about one row per instance per check per day.
+- Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at, failed)`, with `finished_at` NULL while running or after the run was killed and `failed` 1 for a run that hit an error, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at, subject)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. `subject` says what on the instance a result is about, for checks with more than one result per instance (a certificate's domain), and is empty otherwise (the disk size check). Every run is kept: about one row per instance per check (per certificate, for certificates) per day.
 - Audit log: logins, configuration changes, manual actions
 - Settings and secrets
 
@@ -729,7 +745,7 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Records `<url>` as the server's address (section 5.6). Refuses once an administrator exists. |
 | `set-base-url --base-url=<url>` | Sets or changes the server's address used in enroll commands (section 5.6): for installs set up before it was recorded, after a domain change and in development |
 | `create-secret-key` | Creates the secret key file if it does not exist, and never overwrites it (section 9.3) |
-| `run-daily-job [--scheduled]` | Runs the daily job (section 6.3) and prints one line per instance and check plus a summary. The run is recorded as `manual` (for example when started over SSH) unless `--scheduled` is given, which only the systemd service passes. Exit code 0 whenever the job ran, whatever the checks found; 1 with one line on stderr when it could not run or failed (already running, database missing or not migrated, an error during the job). |
+| `run-daily-job [--scheduled]` | Runs the daily job (section 6.3) and prints one line per instance and check (and per certificate) plus a summary. The run is recorded as `manual` (for example when started over SSH) unless `--scheduled` is given, which only the systemd service passes. Exit code 0 whenever the job ran, whatever the checks found; 1 with one line on stderr when it could not run or failed (already running, database missing or not migrated, an error during the job). |
 
 `--base-url` follows one rule everywhere, shared with the client's `--server` (`shared/src/ServerUrl.php`): `https://`, or `http://` only when the host is exactly `localhost` (case-insensitive); no user, password, path, query or fragment.
 

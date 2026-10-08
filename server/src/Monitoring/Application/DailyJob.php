@@ -7,6 +7,7 @@ namespace Maguari\Server\Monitoring\Application;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CheckResult;
 use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
@@ -36,6 +37,7 @@ final class DailyJob
 
     private readonly DailyJobRepository $runs;
     private readonly DiskSizeRule $diskSizeRule;
+    private readonly CertificateExpiryRule $certificateRule;
 
     public function __construct(
         private readonly Database $database,
@@ -45,10 +47,12 @@ final class DailyJob
     ) {
         $this->runs = new DailyJobRepository($database);
         $this->diskSizeRule = new DiskSizeRule();
+        $this->certificateRule = new CertificateExpiryRule();
     }
 
     /**
-     * @return CheckResult[] in the order of FleetApi::pickedInstances()
+     * @return CheckResult[] by instance, in the order of FleetApi::pickedInstances():
+     *         the disk size result, then one per certificate in domain order
      * @throws DailyJobAlreadyRunning
      * @throws DailyJobFailed after marking the run failed, without results
      */
@@ -83,12 +87,17 @@ final class DailyJob
         $lastSucceeded = $this->runs->latest($runningSince, succeeded: true);
         $lastScheduled = $this->runs->latest($runningSince, trigger: DailyJobTrigger::Scheduled);
 
+        $results = fn (string $checkName): array => $lastSucceeded === null
+            ? []
+            : $this->runs->results($lastSucceeded->id, $checkName, $instanceIds);
+
         return new DailyJobSummary(
             $this->runs->latest($runningSince),
             $lastSucceeded,
             $lastScheduled,
             $lastScheduled !== null && $now - $lastScheduled->startedAt > self::OVERDUE_AFTER_SECONDS,
-            $lastSucceeded === null ? [] : $this->runs->results($lastSucceeded->id, DiskSizeRule::CHECK_NAME, $instanceIds),
+            array_map(static fn (array $list): CheckResult => $list[0], $results(DiskSizeRule::CHECK_NAME)),
+            $results(CertificateExpiryRule::LOCAL_CHECK_NAME),
         );
     }
 
@@ -112,6 +121,11 @@ final class DailyJob
                 $this->filesystemTotals($instance->id),
                 $at,
             );
+            array_push($results, ...$this->certificateRule->checkLocal(
+                $instance->id,
+                $this->metricRuns->currentOfKind($instance->id, Metric::CERTIFICATE_EXPIRES_AT),
+                $at,
+            ));
         }
 
         $this->database->transaction(function () use ($runId, $results): void {

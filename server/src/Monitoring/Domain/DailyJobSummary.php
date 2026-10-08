@@ -15,6 +15,8 @@ final class DailyJobSummary
      * @param ?DailyJobRun $lastScheduledRun the timer's latest run
      * @param bool $overdue the timer's latest run started more than 25 hours ago
      * @param array<int, CheckResult> $diskSizeResults by instance ID, from $lastSucceededRun
+     * @param array<int, list<CheckResult>> $certificateResults by instance ID, in domain
+     *        order, from $lastSucceededRun; instances without certificates are left out
      */
     public function __construct(
         public readonly ?DailyJobRun $lastRun,
@@ -22,6 +24,7 @@ final class DailyJobSummary
         public readonly ?DailyJobRun $lastScheduledRun,
         public readonly bool $overdue,
         public readonly array $diskSizeResults,
+        public readonly array $certificateResults,
     ) {
     }
 }

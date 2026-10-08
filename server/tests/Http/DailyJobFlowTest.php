@@ -123,13 +123,48 @@ final class DailyJobFlowTest extends TestCase
         $requests = count($this->environment->http->requests);
         $body = (string) $browser->get('/admin')->getBody();
         $this->assertStringContainsString('Last run: ' . $this->utc($this->environment->clock->now()) . ' (manual), took 0 seconds.', $body);
-        $this->assertStringContainsString('<td title="The boot disk is 15.0 GiB and its filesystems total 14.5 GiB.">Pass</td></tr>', $body);
+        $this->assertStringContainsString('<td title="The boot disk is 15.0 GiB and its filesystems total 14.5 GiB.">Pass</td>' . "\n" . '<td></td></tr>', $body);
         $failure = 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB. Rebooting usually extends them (cloud-init); otherwise run growpart and resize2fs.';
-        $this->assertStringContainsString('<td title="' . $failure . '">Fail</td></tr>', $body);
+        $this->assertStringContainsString('<td title="' . $failure . '">Fail</td>' . "\n" . '<td></td></tr>', $body);
         $this->assertStringContainsString("<h3>Disk size failures</h3>\n<ul>\n<li>my-project/grown: {$failure}</li>", $body);
         $this->assertStringNotContainsString('my-project/fine:', $body);
         // The dashboard reads only SQLite.
         $this->assertCount($requests, $this->environment->http->requests);
+    }
+
+    public function testTheCertificatesColumnShowsTheWorstResult(): void
+    {
+        $web = $this->pick('web');
+        $mixed = $this->pick('mixed');
+        $now = $this->environment->clock->now();
+        $day = 86_400;
+        $monitoring = $this->environment->monitoring;
+        $monitoring->recordReadings($web, $now, $monitoring->parseReadings([
+            ['metric' => 'certificate_expires_at:example.com', 'value' => $now + 60 * $day],
+            ['metric' => 'certificate_expires_at:www.example.com', 'value' => $now + 30 * $day],
+        ]));
+        $monitoring->recordReadings($mixed, $now, $monitoring->parseReadings([
+            ['metric' => 'certificate_expires_at:good.example', 'value' => $now + 60 * $day],
+            ['metric' => 'certificate_expires_at:stale.example', 'value' => $now + 8 * $day + 3600],
+        ]));
+        $browser = $this->signedInBrowser();
+        $this->queueListing(['mixed' => 10, 'web' => 10]);
+
+        $this->runNow($browser);
+        $body = (string) $browser->get('/admin')->getBody();
+
+        $date = static fn (int $days): string => gmdate('Y-m-d', $now + $days * $day);
+        $this->assertStringContainsString(
+            '<td title="example.com: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'www.example.com: Valid until ' . $date(30) . ' (30 days).">Pass (2)</td></tr>',
+            $body,
+        );
+        $stale = 'Expires on ' . gmdate('Y-m-d', $now + 8 * $day + 3600) . ', in 8 days. certbot renews well before expiry, so renewal is failing on this instance.';
+        $this->assertStringContainsString(
+            '<td title="good.example: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'stale.example: ' . $stale . '">Fail</td></tr>',
+            $body,
+        );
+        $this->assertStringContainsString("<h3>Certificate failures</h3>\n<ul>\n<li>my-project/mixed: stale.example: {$stale}</li>\n</ul>", $body);
+        $this->assertStringContainsString('a certificate fails with fewer than 14 days left.', $body);
     }
 
     public function testRunNowNeedsASignedInAdministrator(): void
@@ -217,7 +252,7 @@ final class DailyJobFlowTest extends TestCase
 
         $this->assertStringContainsString('(manual), failed.', $body);
         $this->assertStringContainsString('The results below are from the last successful run, at ' . $this->utc($succeededAt) . '.', $body);
-        $this->assertStringContainsString('">Pass</td></tr>', $body);
+        $this->assertStringContainsString('">Pass</td>' . "\n" . '<td></td></tr>', $body);
     }
 
     public function testInstancesPickedAfterTheLastRunHaveNoResult(): void
@@ -225,7 +260,7 @@ final class DailyJobFlowTest extends TestCase
         $this->environment->monitoring->runDailyJob(DailyJobTrigger::Scheduled);
         $this->pick('web');
 
-        $this->assertStringContainsString("<td></td>\n<td></td></tr>", $this->dashboard());
+        $this->assertStringContainsString("<td></td>\n<td></td>\n<td></td></tr>", $this->dashboard());
     }
 
     public function testOverdueWhenNoScheduledRunInTwentyFiveHours(): void

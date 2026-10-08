@@ -52,7 +52,8 @@ final class MonitoringApi
      * Runs the daily checks on every picked instance and stores the results
      * (design section 6.3). Calls the Compute Engine API, so it takes seconds.
      *
-     * @return CheckResult[] in the order of FleetApi::pickedInstances()
+     * @return CheckResult[] by instance, in the order of FleetApi::pickedInstances():
+     *         the disk size result, then one per certificate in domain order
      * @throws DailyJobAlreadyRunning
      * @throws DailyJobFailed after marking the run failed. The caller logs it.
      */
@@ -63,7 +64,7 @@ final class MonitoringApi
 
     /**
      * The daily job's latest runs and the given instances' latest disk size
-     * results, for the dashboard. Reads only SQLite.
+     * and certificate results, for the dashboard. Reads only SQLite.
      *
      * @param int[] $instanceIds
      */

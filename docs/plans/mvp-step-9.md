@@ -188,9 +188,11 @@ exec systemctl start --no-block maguari-certificate-scanner.service
 
 - **Why 14 days:** certbot renews 90-day certificates when 30 days remain and tries twice a day, so 14 days left means about two weeks of failed renewals, which is a real problem and not a passing glitch. With 45-day certificates certbot renews at about a third of the lifetime (15 days), so 14 days would fail after about one day of failed renewals. It is a constant in the rule for now. *Confirmed:* when 45-day certificates arrive, it becomes a setting (design section 6.3).
 - Days are whole days rounded down. Dates are UTC, like every timestamp.
+- *Refined in 9.3:* the rule's `judge()` gives the sentences without any mention of certbot, so 9.4 can use it for any CA. The local check adds "certbot renews well before expiry, so renewal is failing on this instance." to its failures, instead of "certbot normally renews 30 days before expiry", which will be wrong for 45-day certificates. Less than a day left reads "in less than a day", and one day "in 1 day".
 
 **D8. Which local certificates are checked.** For each picked instance, every `certificate_expires_at:*` current run that ended in the last 24 hours, the same window as the disk size check. A certificate removed from the instance stops being reported and drops out after a day. An instance that reports none gets no local result at all, not "Not checked": most instances may have no certificate, and a permanent "Not checked" on each would hide the ones that matter.
 
+- *Refined in 9.3:* the 24 hours are one constant, `MetricRun::RECENT_FOR_SECONDS` with `MetricRun::isRecent()`, used by both the disk size check and this one (it was `DiskSizeRule::MAX_READING_AGE_SECONDS`), and the disk size sentences take their "24 hours" from it (design section 17 item 3: one named constant per threshold).
 - **Known gap:** a broken scanner on an instance that does have certificates looks the same as no certificates. The remote check covers the certificates that are actually served. A stale scan errs towards failing: after a renewal, the old date stays until the next scan.
 
 **D9. One result per certificate.** A `subject` column on `monitoring_check_results` (migration `0004_monitoring_check_results_subject.sql`, `TEXT NOT NULL DEFAULT ''`), holding the domain for certificate checks and `''` for the disk size check. Check names: `local_certificate` and `remote_certificate`. One row per certificate keeps the history per certificate, which incidents will need later.
@@ -201,7 +203,7 @@ exec systemctl start --no-block maguari-certificate-scanner.service
 
 - A **"Certificates"** column after "Disk size": the worst outcome among the instance's local and remote results (fail over not checked over pass), shown as "Pass (3)", "Fail" or "Not checked". The tooltip lists every certificate with its sentence. Empty when the instance has none. Failed certificates are also listed below the table, like disk size failures.
 - `DailyJobSummary` gains the certificate results by instance, from the same last successful run.
-- `run-daily-job` prints one line per certificate after each instance's disk size line.
+- `run-daily-job` prints one line per certificate after each instance's disk size line, for example "my-project/us-east1-b/web: Certificate example.com: Pass. Valid until 2026-12-07 (60 days)." *Known gap in 9.3:* the CLI's tests run the real command, which cannot reach a fake Compute Engine, so they cover only runs without instances; the per-check lines are not exercised by a test (the disk size line was not either).
 
 ### The remote check (9.4)
 
@@ -312,6 +314,9 @@ server/
   src/Monitoring/
     Domain/CertificateExpiryRule.php        (D7)
     Domain/CheckResult.php                  subject (D9)
+    Domain/CheckOutcome.php                 worst() (D10)
+    Domain/MetricRun.php                    the 24 hour window, shared by both checks
+    Domain/DiskSizeRule.php                 uses it
     Domain/DailyJobSummary.php              certificate results (D10)
     Application/DailyJob.php                runs the check (D8)
     Infrastructure/MetricRunRepository.php  current runs of one kind

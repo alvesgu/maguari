@@ -8,6 +8,7 @@
  * @var \Closure $partial
  */
 use Maguari\Server\Clients\ClientsApi;
+use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\DailyJobState;
 use Maguari\Shared\Protocol;
@@ -15,6 +16,7 @@ use Maguari\Shared\Protocol;
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 $lastRun = $dailyJob->lastRun;
 $failures = [];
+$certificateFailures = [];
 ?>
 <h1>Maguari</h1>
 <p>Signed in as <?= $e($administrator->name) ?> (<?= $e($administrator->email) ?>).</p>
@@ -43,27 +45,46 @@ endif; ?></p>
 <p>No instances yet. Open a project and press Enroll next to an instance.</p>
 <?php else: ?>
 <table>
-<thead><tr><th>Project</th><th>Instance</th><th>Zone</th><th>Enrollment</th><th>Heartbeat</th><th>Last heartbeat</th><th>Client version</th><th>Disk size</th></tr></thead>
+<thead><tr><th>Project</th><th>Instance</th><th>Zone</th><th>Enrollment</th><th>Heartbeat</th><th>Last heartbeat</th><th>Client version</th><th>Disk size</th><th>Certificates</th></tr></thead>
 <tbody>
 <?php foreach ($instances as $instance): ?>
 <?php $heartbeat = $heartbeats[$instance->id] ?? null; ?>
 <?php $diskSize = $dailyJob->diskSizeResults[$instance->id] ?? null; ?>
 <?php if ($diskSize?->outcome === CheckOutcome::Fail) { $failures[] = [$instance, $diskSize]; } ?>
+<?php
+$certificates = $dailyJob->certificateResults[$instance->id] ?? [];
+$worst = CheckOutcome::worst(array_map(static fn ($certificate) => $certificate->outcome, $certificates));
+
+foreach ($certificates as $certificate) {
+    if ($certificate->outcome === CheckOutcome::Fail) {
+        $certificateFailures[] = [$instance, $certificate];
+    }
+}
+?>
 <tr><td><a href="/admin/projects/<?= $instance->projectId ?>"><?= $e($instance->gcpProjectId) ?></a></td><td><?= $e($instance->name) ?></td><td><?= $e($instance->zone) ?></td>
 <?= $partial('heartbeat', ['enrollment' => $enrollmentStates[$instance->id], 'heartbeat' => $heartbeat]) ?>
 <td><?= $e($heartbeat?->clientVersion ?? '') ?></td>
-<td<?php if ($diskSize !== null): ?> title="<?= $e($diskSize->detail) ?>"<?php endif; ?>><?= $e($diskSize?->outcome->label() ?? '') ?></td></tr>
+<td<?php if ($diskSize !== null): ?> title="<?= $e($diskSize->detail) ?>"<?php endif; ?>><?= $e($diskSize?->outcome->label() ?? '') ?></td>
+<td<?php if ($certificates !== []): ?> title="<?= $e(implode("\n", array_map(static fn ($certificate) => $certificate->subject . ': ' . $certificate->detail, $certificates))) ?>"<?php endif; ?>><?= $e($worst === CheckOutcome::Pass ? sprintf('Pass (%d)', count($certificates)) : ($worst?->label() ?? '')) ?></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>
 <?php /* TEMPORARY (MVP): a fixed limit until Monitoring's heartbeat-age check (ClientsApi::LATE_AFTER_SECONDS). */ ?>
 <p>Heartbeats are expected every <?= Protocol::HEARTBEAT_INTERVAL_SECONDS ?> seconds. A heartbeat older than <?= ClientsApi::LATE_AFTER_SECONDS ?> seconds is late. Reload the page to update.</p>
-<p>Disk size compares each instance's boot disk with the filesystems its client reports on it. Hover over a result for details.</p>
+<p>Disk size compares each instance's boot disk with the filesystems its client reports on it. Certificates shows the worst result among the Let's Encrypt certificates each client reports, with the number checked when all pass; a certificate fails with fewer than <?= CertificateExpiryRule::MIN_DAYS_LEFT ?> days left. Hover over a result for details.</p>
 <?php if ($failures !== []): ?>
 <h3>Disk size failures</h3>
 <ul>
 <?php foreach ($failures as [$instance, $diskSize]): ?>
 <li><?= $e($instance->gcpProjectId . '/' . $instance->name) ?>: <?= $e($diskSize->detail) ?></li>
+<?php endforeach; ?>
+</ul>
+<?php endif; ?>
+<?php if ($certificateFailures !== []): ?>
+<h3>Certificate failures</h3>
+<ul>
+<?php foreach ($certificateFailures as [$instance, $certificate]): ?>
+<li><?= $e($instance->gcpProjectId . '/' . $instance->name . ': ' . $certificate->subject) ?>: <?= $e($certificate->detail) ?></li>
 <?php endforeach; ?>
 </ul>
 <?php endif; ?>

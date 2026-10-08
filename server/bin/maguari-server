@@ -17,8 +17,10 @@ use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\SystemClock;
+use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
+use Maguari\Server\Monitoring\Domain\DiskSizeRule;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\MonitoringApi;
@@ -266,7 +268,12 @@ function runDailyJobCommand(array $args): int
     foreach ($results as $result) {
         $counts[$result->outcome->value]++;
         $name = $names[$result->instanceId] ?? "instance {$result->instanceId}";
-        echo "{$name}: Disk size: {$result->outcome->label()}. {$result->detail}\n";
+        $check = match ($result->checkName) {
+            DiskSizeRule::CHECK_NAME => 'Disk size',
+            CertificateExpiryRule::LOCAL_CHECK_NAME => "Certificate {$result->subject}",
+            default => $result->checkName,
+        };
+        echo "{$name}: {$check}: {$result->outcome->label()}. {$result->detail}\n";
     }
 
     if ($results === []) {
