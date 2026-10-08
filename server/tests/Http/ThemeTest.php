@@ -50,4 +50,23 @@ final class ThemeTest extends TestCase
             $this->assertDoesNotMatchRegularExpression('/<style|\sstyle\s*=/i', (string) file_get_contents($template), basename($template));
         }
     }
+
+    /**
+     * A title attribute shows only on mouse hover, so details go through the
+     * (i) icon of templates/info.php instead (design section 10.3).
+     */
+    public function testNoTemplateUsesTitleTooltips(): void
+    {
+        foreach (glob(dirname(__DIR__, 2) . '/templates/*.php') ?: [] as $template) {
+            $this->assertDoesNotMatchRegularExpression('/\stitle\s*=/i', (string) file_get_contents($template), basename($template));
+        }
+    }
+
+    public function testDetailsShowOnHoverAndOnKeyboardFocus(): void
+    {
+        $css = (string) file_get_contents(dirname(__DIR__, 2) . '/public/assets/maguari.css');
+
+        $this->assertMatchesRegularExpression('/\.info:hover \.info-text,\n\.info:focus-within \.info-text \{\s*display: block;/', $css);
+        $this->assertStringContainsString('<button type="button" class="info-icon"', (string) file_get_contents(dirname(__DIR__, 2) . '/templates/info.php'));
+    }
 }

@@ -162,6 +162,7 @@ server/src/Notifications/    Generic context
 server/src/Access/           Generic context
 server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption, HTTP client)
 server/src/Http/             Slim wiring: routes, route groups, middleware, thin controllers
+server/src/Cli/              What bin/maguari-server prints, as small pure functions tested directly
 server/templates/            Plain PHP templates for the web app (no template engine)
 server/public/               Web root: index.php and static assets (assets/maguari.css)
 ```
@@ -170,7 +171,7 @@ server/public/               Web root: index.php and static assets (assets/magua
 2. Each context keeps its database migrations inside its own folder, as numbered `.sql` files in `server/src/<Context>/Migrations/`. A runner in `Kernel/Database/` finds them by scanning those folders (so Kernel never names a context), applies pending ones and records them in `kernel_migrations`, the one table without a context prefix. Migrations run from the CLI (`maguari-server migrate`), never on a web request.
 3. Table names are prefixed with the context name (for example `fleet_instances`, `monitoring_metric_runs`), so ownership is visible in SQLite.
 4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. The content area is up to 96rem wide so the dashboard table fits on wide screens, paragraphs keep a readable line length (72 characters) and table cells never wrap: project IDs, zones and timestamps stay on one line, and a table wider than the window scrolls sideways. This styling is temporary and kept minimal until the redesign before 1.0 (section 17). It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. nginx will serve `/assets/` directly (packaging).
-5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more.
+5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more. `Cli/` is its counterpart for the command line: `bin/maguari-server` calls the contexts' public interfaces, and `Cli/` only turns their results into lines (for example `DailyJobReport`), so the output is tested without running the command.
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
 7. Monitoring, a core context, is split into layers (MVP step 9). Remediation's structure is decided when it gets code. Supporting and generic contexts (Fleet, Clients, Access and Notifications) stay flat. Monitoring's layers:
    - `MonitoringApi.php` (the public interface) and `Exception/` (the exceptions it throws) at the context's root.
@@ -388,7 +389,7 @@ The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd time
 3. **Failures.** Any error the job can catch, during the checks or while storing the results, marks the run finished and failed, without results, and the caller logs it (`The daily job failed: <class>: <message>`): the CLI on stderr, which systemd sends to the journal, and "Run now" in PHP's error log. So the 15 minute rule in item 1 only covers runs that were killed (or whose failure could not be recorded, for example when the database itself fails).
 4. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Results are shown, not acted on: no incident, alert or notification yet.
 5. **"Run now"** is a form on the dashboard posting to `POST /admin/daily-job` (session and CSRF, like every `/admin` form). It runs the job inside the request, with the trigger `manual`, then redirects (`303`) to `/admin`. A run already in progress or a failed run also redirects; the dashboard says what happened, and a failure's details go only to PHP's error log. **Known limit:** nginx's usual FastCGI timeout (`fastcgi_read_timeout`, 60 seconds) bounds the request, and each project costs one listing of up to 10 pages. With many projects the administrator could see a `504` while the run still finishes in php-fpm. If that happens, the fix is queued runs: the button records a request and a timer that runs every minute picks it up.
-6. **The dashboard** (`/admin`, read from SQLite only) has a "Daily job" section above the instances: the last run (never run, running since, did not finish, failed or finished with its duration), a note when no scheduled run exists yet, a warning when the timer's latest run started more than 25 hours ago (manual runs do not count) and the "Run now" button. The instances table has a "Disk size" column with each instance's result from the **last successful run**, its sentence in a tooltip; failures are also listed below the table. A "Certificates" column shows the worst of the instance's certificate results from the same run (a failure over not checked over a pass), as "Pass (3)" with the number checked when all pass, "Fail" or "Not checked", and is empty for an instance without certificates; its tooltip lists each certificate with its sentence, and failed certificates are listed below the table. When the last run did not succeed, the page says which run the results come from.
+6. **The dashboard** (`/admin`, read from SQLite only) has a "Daily job" section above the instances: the last run (never run, running since, did not finish, failed or finished with its duration), a note when no scheduled run exists yet, a warning when the timer's latest run started more than 25 hours ago (manual runs do not count) and the "Run now" button. The instances table has a "Disk size" column with each instance's result from the **last successful run**, its sentence behind an (i) icon (section 10.3); failures are also listed below the table. A "Certificates" column shows the worst of the instance's certificate results from the same run (a failure over not checked over a pass), as "Pass (3)" with the number checked when all pass, "Fail" or "Not checked", and is empty for an instance without certificates; its (i) icon lists each certificate with its sentence, and failed certificates are listed below the table. When the last run did not succeed, the page says which run the results come from.
 
 Readings older than a day are not used by any daily check: a check uses only runs that ended in the last 24 hours (`MetricRun::RECENT_FOR_SECONDS`), so a filesystem or certificate that is no longer reported drops out after a day.
 
@@ -622,8 +623,15 @@ Settings sliders (section 7.3):
 1. Each slider shows its current value in a number input next to it. Advanced administrators can type values directly.
 2. Each row has a reset-to-default button.
 3. A reset-all-to-defaults button resets every slider.
-4. Each slider has an (i) icon with a tooltip explaining the setting with examples.
+4. Each slider has an (i) icon with a tooltip explaining the setting with examples (the details convention below).
 5. Out-of-soft-range values warn. Hard limit or coherence violations are rejected. No separate advanced screen.
+
+Details and tooltips (every page):
+
+1. Anything with more details than fit on the page (a check result's sentence, later a slider's explanation) shows a visible (i) icon next to it, never only a `title` attribute, which works only with a mouse.
+2. The icon is a button (`templates/info.php`), so the keyboard reaches it with Tab and screen readers announce the details through `aria-describedby`. The details show on mouse hover and on keyboard focus.
+3. CSS alone shows them (the Content-Security-Policy allows no inline scripts or styles). They open in the normal flow below the icon, because a floating box would be cut off by a table that scrolls sideways. Line breaks in the details are kept.
+4. Known limit: without a script, Escape does not close them; moving the mouse away or tabbing on does. This is acceptable until the redesign before 1.0 (section 17).
 
 Seed config file warning (section 11.5):
 

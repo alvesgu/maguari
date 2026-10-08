@@ -100,6 +100,16 @@ final class DailyJobFlowTest extends TestCase
         return (string) $this->signedInBrowser()->get('/admin')->getBody();
     }
 
+    /**
+     * A result cell: its label, then the (i) icon with $text.
+     */
+    private static function cell(string $label, string $text): string
+    {
+        return '#<td>' . preg_quote($label, '#') . '<span class="info"><button type="button" class="info-icon" aria-label="Details" '
+            . 'aria-describedby="(info-[0-9a-f]{12})">i</button><span class="info-text" id="\\1" role="tooltip">'
+            . preg_quote(htmlspecialchars($text, ENT_QUOTES), '#') . '</span></span></td>#';
+    }
+
     private function utc(int $at): string
     {
         return gmdate('Y-m-d H:i', $at) . ' UTC';
@@ -123,9 +133,10 @@ final class DailyJobFlowTest extends TestCase
         $requests = count($this->environment->http->requests);
         $body = (string) $browser->get('/admin')->getBody();
         $this->assertStringContainsString('Last run: ' . $this->utc($this->environment->clock->now()) . ' (manual), took 0 seconds.', $body);
-        $this->assertStringContainsString('<td title="The boot disk is 15.0 GiB and its filesystems total 14.5 GiB.">Pass</td>' . "\n" . '<td></td></tr>', $body);
+        $this->assertMatchesRegularExpression(self::cell('Pass', 'The boot disk is 15.0 GiB and its filesystems total 14.5 GiB.'), $body);
         $failure = 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB. Rebooting usually extends them (cloud-init); otherwise run growpart and resize2fs.';
-        $this->assertStringContainsString('<td title="' . $failure . '">Fail</td>' . "\n" . '<td></td></tr>', $body);
+        $this->assertMatchesRegularExpression(self::cell('Fail', $failure), $body);
+        $this->assertStringContainsString("</span></span></td>\n<td></td></tr>", $body);
         $this->assertStringContainsString("<h3>Disk size failures</h3>\n<ul>\n<li>my-project/grown: {$failure}</li>", $body);
         $this->assertStringNotContainsString('my-project/fine:', $body);
         // The dashboard reads only SQLite.
@@ -154,13 +165,13 @@ final class DailyJobFlowTest extends TestCase
         $body = (string) $browser->get('/admin')->getBody();
 
         $date = static fn (int $days): string => gmdate('Y-m-d', $now + $days * $day);
-        $this->assertStringContainsString(
-            '<td title="example.com: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'www.example.com: Valid until ' . $date(30) . ' (30 days).">Pass (2)</td></tr>',
+        $this->assertMatchesRegularExpression(
+            self::cell('Pass (2)', 'example.com: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'www.example.com: Valid until ' . $date(30) . ' (30 days).'),
             $body,
         );
         $stale = 'Expires on ' . gmdate('Y-m-d', $now + 8 * $day + 3600) . ', in 8 days. certbot renews well before expiry, so renewal is failing on this instance.';
-        $this->assertStringContainsString(
-            '<td title="good.example: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'stale.example: ' . $stale . '">Fail</td></tr>',
+        $this->assertMatchesRegularExpression(
+            self::cell('Fail', 'good.example: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'stale.example: ' . $stale),
             $body,
         );
         $this->assertStringContainsString("<h3>Certificate failures</h3>\n<ul>\n<li>my-project/mixed: stale.example: {$stale}</li>\n</ul>", $body);
@@ -252,7 +263,7 @@ final class DailyJobFlowTest extends TestCase
 
         $this->assertStringContainsString('(manual), failed.', $body);
         $this->assertStringContainsString('The results below are from the last successful run, at ' . $this->utc($succeededAt) . '.', $body);
-        $this->assertStringContainsString('">Pass</td>' . "\n" . '<td></td></tr>', $body);
+        $this->assertStringContainsString('<td>Pass<span class="info">', $body);
     }
 
     public function testInstancesPickedAfterTheLastRunHaveNoResult(): void

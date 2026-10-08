@@ -9,6 +9,7 @@ use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Access\Exception\InvalidSeedConfig;
 use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Access\SeedConfigReader;
+use Maguari\Server\Cli\DailyJobReport;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Gcp\AccessTokenSourceFactory;
 use Maguari\Server\Kernel\Database\Database;
@@ -17,10 +18,7 @@ use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\SystemClock;
-use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
-use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
-use Maguari\Server\Monitoring\Domain\DiskSizeRule;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\MonitoringApi;
@@ -263,29 +261,9 @@ function runDailyJobCommand(array $args): int
         $names[$instance->id] = "{$instance->gcpProjectId}/{$instance->zone}/{$instance->name}";
     }
 
-    $counts = array_fill_keys(array_map(static fn (CheckOutcome $outcome): string => $outcome->value, CheckOutcome::cases()), 0);
-
-    foreach ($results as $result) {
-        $counts[$result->outcome->value]++;
-        $name = $names[$result->instanceId] ?? "instance {$result->instanceId}";
-        $check = match ($result->checkName) {
-            DiskSizeRule::CHECK_NAME => 'Disk size',
-            CertificateExpiryRule::LOCAL_CHECK_NAME => "Certificate {$result->subject}",
-            default => $result->checkName,
-        };
-        echo "{$name}: {$check}: {$result->outcome->label()}. {$result->detail}\n";
+    foreach (DailyJobReport::lines($results, $names) as $line) {
+        echo $line . "\n";
     }
-
-    if ($results === []) {
-        echo "No instances to check.\n";
-    }
-
-    printf(
-        "Daily job finished: %d passed, %d failed, %d not checked.\n",
-        $counts[CheckOutcome::Pass->value],
-        $counts[CheckOutcome::Fail->value],
-        $counts[CheckOutcome::NotChecked->value],
-    );
 
     return 0;
 }
