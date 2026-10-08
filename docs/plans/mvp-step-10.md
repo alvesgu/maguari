@@ -72,7 +72,7 @@ PHPMailer only *suggests* mbstring, which is not a server dependency (see `Acces
 | Host | A DNS name (letters, digits and hyphens in dot-separated labels, at most 253 bytes, lowercased), or exactly `localhost`. No IP addresses, schemes or ports. |
 | Port | 1 to 65535, default 587 (an empty port means 587). Port 465 uses implicit TLS (D5). Port 25 is refused: "Compute Engine blocks outbound port 25. Use port 587." |
 | Username | Optional, up to 254 bytes, no control characters. Empty means no authentication (Google Workspace SMTP relay by IP address). |
-| Password | Required when a username is set, up to 1,024 bytes, no control characters. Never shown again after saving. |
+| Password | Required when a username is set, up to 1,024 bytes, no control characters. Never shown again after saving. An empty password keeps the stored one only while the username is unchanged (review of 10.1): a new username needs its password, "Enter the password again: the username changed." |
 | From address | Required, a valid email address (`FILTER_VALIDATE_EMAIL`), lowercased. Gmail only sends from the account's own address or a verified alias. |
 
 Each refusal has its own sentence, shown next to its field (`422`), like the setup wizard.
@@ -97,7 +97,7 @@ No row means email is not set up. A typed single row instead of a key-value tabl
 
 **D4. The SMTP password is encrypted** with `Kernel\Secrets\SecretBox`, exactly as `clients_clients.secret_ciphertext` (design 9.3): a new 24-byte nonce for each save, nonce plus ciphertext in `password_ciphertext`. `NotificationsApi` receives the `SecretBox` in its constructor, like `ClientsApi`.
 
-1. The password field on the page is always empty (`autocomplete="new-password"`). Leaving it empty keeps the stored password; typing one replaces it. Clearing the username clears the password too. The page says "A password is stored" when there is one.
+1. The password field on the page is always empty (`autocomplete="new-password"`). Leaving it empty keeps the stored password while the username stays the same; typing one replaces it. Clearing the username clears the password too. The page says "Stored (encrypted)" when there is one.
 2. The plaintext exists only in memory while saving and while sending. It is never logged, never in an exception message and never rendered. Method parameters that carry it are marked `#[\SensitiveParameter]`, as in `SecretBox`.
 3. A stored password the key cannot decrypt (the key file was replaced) is not a crash: the page says "The stored SMTP password cannot be decrypted with this server's secret key. Enter the password again and save." Sending refuses with the same sentence.
 
@@ -169,8 +169,8 @@ With host `smtp.gmail.com`, port 587, from `alerts@example.com` and recipient `j
 |---|---|
 | Not set up | "Email is not set up yet. Fill in the SMTP settings and save them first." |
 | Stored password unreadable | "The stored SMTP password cannot be decrypted with this server's secret key. Enter the password again and save." |
-| Connect (DNS, refused, timeout) | "Could not connect to smtp.gmail.com on port 587. Check the host and port, and that this server can reach them." |
-| STARTTLS not offered, TLS handshake failed or certificate not verified | "smtp.gmail.com did not set up an encrypted connection, so the password was not sent. Check the port (587 uses STARTTLS, 465 uses TLS from the start) and that the host name matches the server's certificate." |
+| Connect (DNS, refused, timeout, a refused greeting) | "Could not connect to smtp.gmail.com on port 587, or it did not answer. Check the host and port, and that this server can reach them." On port 465: "... on port 465 with TLS, or it did not answer. Check the host and port, that this server can reach them and that the host name matches the server's certificate." |
+| STARTTLS not offered, TLS handshake failed or certificate not verified | "smtp.gmail.com did not set up an encrypted connection, so no password or message was sent. Check the port (587 uses STARTTLS, 465 uses TLS from the start) and that the host name matches the server's certificate." |
 | AUTH refused | "smtp.gmail.com did not accept the username and password (reply 535). For Gmail, use an app password, not the account password." |
 | MAIL FROM refused with 530 (authentication required) | "smtp.gmail.com requires a username and password." |
 | MAIL FROM refused otherwise | "smtp.gmail.com refused the sender address alerts@example.com (reply 553). Use an address this account is allowed to send from." |
@@ -180,7 +180,8 @@ With host `smtp.gmail.com`, port 587, from `alerts@example.com` and recipient `j
 | Success | "Sent a test email to jane@example.com through smtp.gmail.com at 14:03 UTC. If it does not arrive within a few minutes, check the spam folder." |
 
 - "(reply 535)" is the SMTP reply code, added only when there is one (a timeout has none). The Gmail hint is added only for authentication failures.
-- Every failure also writes one line to PHP's error log, for the administrator: `The test email failed at <stage>: <reply code> <first line of the server's reply>` (or the exception's class and message for "anything else"). No transcript, no password, no username.
+- Every failure also writes one line to PHP's error log, for the administrator: `The test email failed at <stage>: <first line of the server's reply>` (the socket error for a failed connection, the exception's class and message for "anything else"). For AUTH only the reply code, because some servers repeat the username in their text. No transcript, no password.
+- *Found in 10.2:* PHPMailer sends `QUIT` inside its own connect step after a refused greeting, so a refused greeting is a connect failure without a reply code. And `quoted_printable_encode()` encodes a bare `\n` as `=0A`, so the body is converted to CRLF line breaks first.
 - Success means the server accepted the message, not that it arrived. The success sentence says so.
 
 ### Code layout
@@ -189,19 +190,21 @@ With host `smtp.gmail.com`, port 587, from `alerts@example.com` and recipient `j
 
 ```
 server/src/Notifications/
-  NotificationsApi.php          smtpSettings(), saveSmtpSettings(), importSeedSmtp(), sendTestEmail()
+  NotificationsApi.php          smtpSettings(), saveSmtpSettings(), importSmtpSettings(), sendTestEmail()
   Exception/                    InvalidSmtpSettings (sentences by field), EmailNotSetUp, EmailNotSent (one sentence)
   SmtpSettingsInput.php         what the form or the seed file gave, before validation
   SmtpSettingsSummary.php       the stored values as the page shows them, without the password
   SmtpEncryption.php            D5: implicit TLS, STARTTLS or none, from host and port
   SmtpSettingsRules.php         D2's validation, used by the form and the seed import
   SmtpSettingsRepository.php    SQL only; NotificationsApi encrypts with SecretBox
-  Mailer.php                    interface: send(SmtpSettings, TestEmail); throws SendFailure
+  Mailer.php                    interface: send(SmtpSettings, Email, local hostname); throws SendFailure
   SmtpMailer.php                the PHPMailer adapter (D5, D7 timeouts)
   StageRecordingSmtp.php        D8's subclass of PHPMailer\PHPMailer\SMTP
   SendFailure.php               stage and reply code
   SendFailureSentence.php       D8's table
-  TestEmail.php                 recipient, subject, body
+  Email.php                     recipient, subject, body
+  SmtpSettings.php              the settings with the decrypted password, in memory for one send
+  SmtpStage.php                 connect, STARTTLS, AUTH, MAIL FROM, RCPT TO, DATA
   Migrations/0001_notifications_smtp_settings.sql
 ```
 
@@ -230,7 +233,7 @@ Plus `Http/Controller/EmailController.php` (thin), `templates/email.php`, routes
 
 - **This plan's answers:** section 15, step 10 names the sub-steps and links this plan.
 - **10.1:** section 9.2 (`notifications_smtp_settings`); section 9.3 (the SMTP password's column); section 9 (`MAGUARI_SEED_FILE` among the development variables); section 11.5.1 (the `[smtp]` section, its import button and masking); section 12.2.1 (`check-seed-config` prints the masked section); section 13 (the settings, the port default, 465 and the 25 refusal, encryption with the `localhost` exception, the Email page and its recipient); section 17 (the seed file warning).
-- **10.2:** section 13 (PHPMailer and why, the test email, timeouts, the error sentences, no debug transcript); README licence note for PHPMailer.
+- **10.2:** section 13.2 (PHPMailer and why, the test email, timeouts, the error sentences, no debug transcript); section 13.1 (the password needs entering again when the username changes); README licence note for PHPMailer.
 
 ## Verification
 
@@ -321,5 +324,5 @@ In the Email page, with host `localhost`, port `1025`, no username and from `mag
 
 ## Status
 
-- **10.1:** implemented.
-- **10.2:** not started; waits for review of 10.1.
+- **10.1:** implemented and reviewed. One change after review: an empty password keeps the stored one only while the username is unchanged.
+- **10.2:** implemented, waiting for review.

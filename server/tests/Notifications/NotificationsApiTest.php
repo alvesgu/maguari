@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace Maguari\Server\Tests\Notifications;
 
 use Maguari\Server\Kernel\Secrets\SecretBox;
+use Maguari\Server\Notifications\Exception\EmailNotSent;
+use Maguari\Server\Notifications\Exception\EmailNotSetUp;
 use Maguari\Server\Notifications\Exception\InvalidSmtpSettings;
 use Maguari\Server\Notifications\NotificationsApi;
+use Maguari\Server\Notifications\SendFailure;
+use Maguari\Server\Notifications\SmtpEncryption;
 use Maguari\Server\Notifications\SmtpSettingsInput;
+use Maguari\Server\Notifications\SmtpStage;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
 
@@ -82,6 +87,22 @@ final class NotificationsApiTest extends TestCase
         $this->assertSame('smtp-relay.gmail.com', $this->environment->notifications->smtpSettings()?->host);
     }
 
+    public function testANewUsernameWithoutAPasswordIsRefusedAndChangesNothing(): void
+    {
+        $this->environment->notifications->saveSmtpSettings(self::input());
+        $stored = $this->storedCiphertext();
+
+        try {
+            $this->environment->notifications->saveSmtpSettings(self::input(username: 'other@example.com', password: ''));
+            $this->fail('Expected InvalidSmtpSettings.');
+        } catch (InvalidSmtpSettings $invalid) {
+            $this->assertSame(['password' => 'Enter the password again: the username changed.'], $invalid->errors);
+        }
+
+        $this->assertSame($stored, $this->storedCiphertext());
+        $this->assertSame('alerts@example.com', $this->environment->notifications->smtpSettings()?->username);
+    }
+
     public function testANewPasswordReplacesTheStoredOne(): void
     {
         $this->environment->notifications->saveSmtpSettings(self::input());
@@ -145,5 +166,75 @@ final class NotificationsApiTest extends TestCase
     public function testThePasswordStaysOutOfDumps(): void
     {
         $this->assertStringNotContainsString(self::PASSWORD, print_r(self::input(), true));
+    }
+
+    public function testSendsTheTestEmailWithTheSavedSettings(): void
+    {
+        $this->environment->notifications->saveSmtpSettings(self::input());
+        $sentence = $this->environment->notifications->sendTestEmail('jane@example.com', 'Zoë Doe', 'https://maguari.example.com');
+        $at = $this->environment->clock->now();
+
+        $this->assertSame(sprintf(
+            'Sent a test email to jane@example.com through smtp.gmail.com at %s UTC. If it does not arrive within a few minutes, check the spam folder.',
+            gmdate('H:i', $at),
+        ), $sentence);
+        $this->assertCount(1, $this->environment->mailer->sent);
+        ['settings' => $settings, 'email' => $email, 'localHostname' => $hostname] = $this->environment->mailer->sent[0];
+        $this->assertSame(SmtpEncryption::StartTls, $settings->encryption);
+        $this->assertSame(self::PASSWORD, $settings->password);
+        $this->assertSame('jane@example.com', $email->recipient);
+        $this->assertSame('Maguari test email', $email->subject);
+        $this->assertSame(sprintf(
+            "This is a test email from Maguari at https://maguari.example.com, sent at %s UTC by Zoë Doe.\n\nAlerts will be sent the same way.\n",
+            gmdate('Y-m-d H:i', $at),
+        ), $email->body);
+        $this->assertSame('maguari.example.com', $hostname);
+    }
+
+    public function testWithoutABaseUrlTheBodyLeavesItOutAndEhloUsesTheMachinesName(): void
+    {
+        $this->environment->notifications->saveSmtpSettings(self::input());
+        $this->environment->notifications->sendTestEmail('jane@example.com', 'Jane Doe', null);
+        ['email' => $email, 'localHostname' => $hostname] = $this->environment->mailer->sent[0];
+
+        $this->assertStringStartsWith('This is a test email from Maguari, sent at ', $email->body);
+        $this->assertSame(gethostname(), $hostname);
+    }
+
+    public function testRefusesWhenNotSetUp(): void
+    {
+        $this->expectException(EmailNotSetUp::class);
+        $this->expectExceptionMessage('Email is not set up yet. Fill in the SMTP settings and save them first.');
+
+        $this->environment->notifications->sendTestEmail('jane@example.com', 'Jane Doe', null);
+    }
+
+    public function testAnUnreadablePasswordIsNotSent(): void
+    {
+        (new NotificationsApi($this->environment->database, $this->environment->clock, new SecretBox(random_bytes(32))))->saveSmtpSettings(self::input());
+
+        try {
+            $this->environment->notifications->sendTestEmail('jane@example.com', 'Jane Doe', null);
+            $this->fail('Expected EmailNotSent.');
+        } catch (EmailNotSent $notSent) {
+            $this->assertSame(NotificationsApi::PASSWORD_UNREADABLE, $notSent->getMessage());
+        }
+
+        $this->assertSame([], $this->environment->mailer->sent);
+    }
+
+    public function testAFailureGivesItsSentenceAndALogLine(): void
+    {
+        $this->environment->notifications->saveSmtpSettings(self::input());
+        $this->environment->mailer->failure = new SendFailure(SmtpStage::Authenticate, 535, 'AUTH: reply 535');
+
+        try {
+            $this->environment->notifications->sendTestEmail('jane@example.com', 'Jane Doe', null);
+            $this->fail('Expected EmailNotSent.');
+        } catch (EmailNotSent $notSent) {
+            $this->assertSame('smtp.gmail.com did not accept the username and password (reply 535). For Gmail, use an app password, not the account password.', $notSent->getMessage());
+            $this->assertSame('The test email failed at AUTH: reply 535', $notSent->logLine);
+            $this->assertStringNotContainsString(self::PASSWORD, $notSent->getMessage() . $notSent->logLine);
+        }
     }
 }

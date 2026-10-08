@@ -6,6 +6,8 @@ namespace Maguari\Server\Tests\Http;
 
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Notifications\NotificationsApi;
+use Maguari\Server\Notifications\SendFailure;
+use Maguari\Server\Notifications\SmtpStage;
 use Maguari\Server\Notifications\SmtpSettingsInput;
 use Maguari\Server\Tests\Support\Browser;
 use Maguari\Server\Tests\Support\TestEnvironment;
@@ -97,7 +99,7 @@ final class EmailPageFlowTest extends TestCase
         $this->assertStringContainsString('<tr><th>Host</th><td>smtp.gmail.com</td></tr>', $body);
         $this->assertStringContainsString('<tr><th>Encryption</th><td>STARTTLS</td></tr>', $body);
         $this->assertStringContainsString('<tr><th>Password</th><td>Stored (encrypted)</td></tr>', $body);
-        $this->assertStringContainsString('Password (leave empty to keep the stored one)', $body);
+        $this->assertStringContainsString('Password (leave empty to keep the stored one, unless you change the username)', $body);
         $this->assertStringContainsString('<input id="password" name="password" type="password" maxlength="1024" autocomplete="new-password">', $body);
         $this->assertStringNotContainsString(self::PASSWORD, $body);
     }
@@ -157,7 +159,12 @@ final class EmailPageFlowTest extends TestCase
 
     public function testNoStateChangingGet(): void
     {
-        $this->assertSame(405, $this->signedInBrowser()->get('/admin/email/import-seed')->getStatusCode());
+        $browser = $this->signedInBrowser();
+        $this->save($browser, []);
+
+        $this->assertSame(405, $browser->get('/admin/email/import-seed')->getStatusCode());
+        $this->assertSame(405, $browser->get('/admin/email/test')->getStatusCode());
+        $this->assertSame([], $this->environment->mailer->sent);
     }
 
     public function testImportsTheSeedFileOnce(): void
@@ -215,5 +222,69 @@ final class EmailPageFlowTest extends TestCase
         $this->assertStringNotContainsString('import-seed', (string) $browser->get('/admin/email')->getBody());
         $this->assertSame(303, $this->importSeed($browser)->getStatusCode());
         $this->assertNull($this->environment->notifications->smtpSettings());
+    }
+
+    private function sendTest(Browser $browser): ResponseInterface
+    {
+        return $browser->post('/admin/email/test', Browser::csrfFields($browser->get('/admin/email')));
+    }
+
+    public function testOffersTheTestEmailOnlyOnceSettingsAreSaved(): void
+    {
+        $browser = $this->signedInBrowser();
+
+        $this->assertStringContainsString('<p>Save the settings first, then send a test email.</p>', (string) $browser->get('/admin/email')->getBody());
+        $this->save($browser, []);
+        $body = (string) $browser->get('/admin/email')->getBody();
+        $this->assertStringContainsString('<form method="post" action="/admin/email/test">', $body);
+        $this->assertStringContainsString('<button type="submit">Send test email</button> Sends a test email to jane@example.com with the saved settings', $body);
+    }
+
+    public function testSendsTheTestEmailToTheSignedInAdministrator(): void
+    {
+        $browser = $this->signedInBrowser();
+        $this->save($browser, []);
+        $response = $this->sendTest($browser);
+        $body = (string) $response->getBody();
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertStringContainsString('<p>Sent a test email to jane@example.com through smtp.gmail.com at ', $body);
+        $this->assertCount(1, $this->environment->mailer->sent);
+        $this->assertSame('jane@example.com', $this->environment->mailer->sent[0]['email']->recipient);
+        $this->assertStringContainsString('sent at ', $this->environment->mailer->sent[0]['email']->body);
+        $this->assertStringNotContainsString(self::PASSWORD, $body);
+    }
+
+    public function testTheTestEmailNeedsSavedSettings(): void
+    {
+        $response = $this->sendTest($this->signedInBrowser());
+
+        $this->assertSame(409, $response->getStatusCode());
+        $this->assertStringContainsString('<p><strong>Not sent:</strong> Email is not set up yet. Fill in the SMTP settings and save them first.</p>', (string) $response->getBody());
+        $this->assertSame([], $this->environment->mailer->sent);
+    }
+
+    public function testAFailedTestEmailShowsItsSentence(): void
+    {
+        $browser = $this->signedInBrowser();
+        $this->save($browser, []);
+        $this->environment->mailer->failure = new SendFailure(SmtpStage::Recipient, 550, 'RCPT TO: 550 5.1.1 No such user');
+        $response = $this->sendTest($browser);
+        $body = (string) $response->getBody();
+
+        $this->assertSame(502, $response->getStatusCode());
+        $this->assertStringContainsString('<p><strong>Not sent:</strong> smtp.gmail.com refused the recipient address jane@example.com (reply 550).</p>', $body);
+        $this->assertStringNotContainsString('No such user', $body);
+    }
+
+    public function testTheTestEmailNeedsTheCsrfTokenAndASession(): void
+    {
+        $browser = $this->signedInBrowser();
+        $this->save($browser, []);
+        $stranger = $this->environment->browser('192.0.2.20');
+
+        $this->assertSame(400, $browser->post('/admin/email/test', [])->getStatusCode());
+        $this->assertSame('/auth/login', $stranger->post('/admin/email/test', Browser::csrfFields($stranger->get('/auth/login')))->getHeaderLine('Location'));
+        $this->assertSame([], $this->environment->mailer->sent);
     }
 }

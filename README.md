@@ -27,4 +27,4 @@ Maguari is not an official Google product.
 
 ## License
 
-MIT
+MIT. The server uses [PHPMailer](https://github.com/PHPMailer/PHPMailer) to send email, unmodified, under the LGPL 2.1; its licence ships with it in `server/vendor/phpmailer/phpmailer/LICENSE`.

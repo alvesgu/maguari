@@ -175,7 +175,7 @@ final class App
             $adminController = new AdminController($fleet, $clients, $monitoring, $view, $logErrors);
             $projectsController = new ProjectsController($fleet, $clients, $access, $view);
             $instancesController = new InstancesController($fleet, $monitoring, $view);
-            $emailController = new EmailController($access, $notifications, $view);
+            $emailController = new EmailController($access, $notifications, $view, $logErrors);
             $enrollController = new EnrollController($clients);
             $heartbeatController = new HeartbeatController($clients);
             $signature = new ClientSignatureMiddleware($clients, $responseFactory);
@@ -196,6 +196,7 @@ final class App
                 $group->get('/email', [$emailController, 'show']);
                 $group->post('/email', [$emailController, 'save']);
                 $group->post('/email/import-seed', [$emailController, 'importSeed']);
+                $group->post('/email/test', [$emailController, 'sendTest']);
             })->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
 
             // CSRF protects the forms under /auth. The future OAuth callback is

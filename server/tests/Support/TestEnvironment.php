@@ -40,6 +40,7 @@ final class TestEnvironment
     public readonly FakeTlsCertificateReader $tls;
     public readonly MonitoringApi $monitoring;
     public readonly ClientsApi $clients;
+    public readonly FakeMailer $mailer;
     public readonly NotificationsApi $notifications;
 
     public function __construct(bool $migrate = true)
@@ -65,7 +66,8 @@ final class TestEnvironment
         $this->tls = new FakeTlsCertificateReader();
         $this->monitoring = new MonitoringApi($this->database, $this->clock, $this->fleet, $this->tls);
         $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox, $this->monitoring);
-        $this->notifications = new NotificationsApi($this->database, $this->clock, $this->secretBox);
+        $this->mailer = new FakeMailer();
+        $this->notifications = new NotificationsApi($this->database, $this->clock, $this->secretBox, $this->mailer);
     }
 
     public function writeSeedConfig(string $contents): void

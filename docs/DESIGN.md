@@ -817,12 +817,38 @@ The Email page (`/admin/email`, linked from the dashboard) shows the saved setti
 | Host | A DNS name (at least two labels of letters, digits and hyphens, the last not all digits, at most 253 bytes, lowercased), or exactly `localhost`. No IP addresses, schemes, ports or paths. |
 | Port | 1 to 65535, default 587 (an empty port means 587). Port 25 is refused: "Compute Engine blocks outbound port 25. Use port 587." |
 | Username | Optional, up to 254 bytes, no control characters. Empty means no sign-in (the Workspace relay by IP address). |
-| Password | Required with a username, up to 1,024 bytes, no control characters. Encrypted at rest (section 9.3) and never shown again: the field is always empty, leaving it empty keeps the stored password and clearing the username removes it. |
+| Password | Required with a username, up to 1,024 bytes, no control characters. Encrypted at rest (section 9.3) and never shown again: the field is always empty. Leaving it empty keeps the stored password only while the username stays the same ("Enter the password again: the username changed."), and clearing the username removes it. |
 | From address | Required, a valid email address, lowercased. |
 
 Encryption follows from host and port and is never stored (`SmtpEncryption`): port 465 uses TLS from the start; any other port must offer STARTTLS; only `localhost` (a development server) may be unencrypted, the same exception as `http://` for `--base-url` (section 5.6). Certificates are always verified. The page shows the encryption with the saved settings.
 
 The seed file's `[smtp]` section can fill the settings once (section 11.5.1).
+
+### 13.2 Sending and the test email
+
+Sending uses **PHPMailer** (`phpmailer/phpmailer` 7.x): it supports PHP 8.1 on its current major version, adds no other packages (only `ext-ctype`, `ext-filter` and `ext-hash`, part of PHP on Ubuntu) and does STARTTLS through `ext-openssl`, which the server already requires. Symfony Mailer was set aside because its current versions need PHP 8.2 or 8.4. PHPMailer is LGPL 2.1, used unmodified; its licence ships in `vendor/`. Notifications wraps it in `SmtpMailer`, behind a `Mailer` interface so tests use a fake.
+
+1. **The test email:** "Send test email" on the Email page (`POST /admin/email/test`, session and CSRF) sends with the **saved** settings, inside the request, to the recipient named on the page. The page itself is the answer, with the outcome: `200` when sent, `409` when email is not set up, `502` when sending failed. It is a plain-text email from "Maguari" `<from address>` with the subject `Maguari test email`, naming the configured base URL, the time and the administrator. Headers stay ASCII (mbstring is not a dependency); the body is UTF-8, quoted-printable.
+2. **Hostname:** EHLO and `Message-ID` use the base URL's host (section 5.6), or the machine's name without one, never the request's `Host` or `SERVER_NAME`.
+3. **Timeouts:** 10 seconds for connecting and for each reply (`SmtpMailer::TIMEOUT_SECONDS`); PHPMailer's own default is 300.
+4. **No transcript:** PHPMailer's debug output stays off, because it includes the AUTH exchange (the password in base64).
+5. **Error sentences:** failures are told apart by stage and reply code, never by PHPMailer's or the server's text. `StageRecordingSmtp`, a subclass of PHPMailer's `SMTP` that overrides only its public methods, records the stage that failed and the reply at that moment (PHPMailer sends `QUIT` after a refused recipient, which would overwrite it). With host `smtp.gmail.com`:
+
+| Stage | Sentence |
+|---|---|
+| Not set up | "Email is not set up yet. Fill in the SMTP settings and save them first." |
+| Stored password unreadable | The sentence of section 9.3 item 4; nothing is sent |
+| Connect (DNS, refused, timeout, a refused greeting) | "Could not connect to smtp.gmail.com on port 587, or it did not answer. Check the host and port, and that this server can reach them." On port 465 it says "with TLS" and adds the certificate's host name. |
+| STARTTLS refused, handshake failed or certificate not verified | "smtp.gmail.com did not set up an encrypted connection, so no password or message was sent. Check the port (587 uses STARTTLS, 465 uses TLS from the start) and that the host name matches the server's certificate." |
+| AUTH | "smtp.gmail.com did not accept the username and password (reply 535). For Gmail, use an app password, not the account password." |
+| MAIL FROM with 530 | "smtp.gmail.com requires a username and password." |
+| MAIL FROM | "smtp.gmail.com refused the sender address alerts@example.com (reply 553). Use an address this account is allowed to send from." |
+| RCPT TO | "smtp.gmail.com refused the recipient address jane@example.com (reply 550)." |
+| DATA | "smtp.gmail.com refused the message (reply 554)." |
+| Anything else | "The test email could not be sent. The details are in the server's error log." |
+| Sent | "Sent a test email to jane@example.com through smtp.gmail.com at 14:03 UTC. If it does not arrive within a few minutes, check the spam folder." |
+
+"(reply 535)" is the server's 4xx or 5xx reply code, shown only when there is one. Every failure also writes one line to PHP's error log, `The test email failed at <stage>: <first line of the reply>`; for AUTH only the code, because the server's text may repeat the username. The password is never in a sentence or a log line. A refused greeting has no code: PHPMailer sends `QUIT` inside its connect step. Success means the server accepted the message, not that it arrived.
 
 ## 14. Infrastructure
 
@@ -843,7 +869,7 @@ Implement in this order, one step at a time:
 7. Receive disk used and total every minute and store them as runs (section 9.1). Done in two sub-steps (`docs/plans/mvp-step-7.md`): 7.1 store readings as runs, 7.2 the client measures disk usage.
 8. Daily scheduled job with a "Run now" button, with the boot disk size check (section 6.3) as its first check. Done in two sub-steps (`docs/plans/mvp-step-8.md`): 8.1 the job and the disk size check, 8.2 the dashboard and "Run now".
 9. Certificate expiry: the client's certificate scanner (section 6.1.1) and the local and remote certificate checks in the daily job. In four sub-steps (`docs/plans/mvp-step-9.md`): 9.1 Monitoring's layers, 9.2 local expiry dates reach the server, 9.3 the local certificate check, 9.4 the remote certificate check.
-10. Send a test email to the administrator. In two sub-steps (`docs/plans/mvp-step-10.md`): 10.1 SMTP settings (the Notifications context, the encrypted password, the Email page and the seed file's `[smtp]` section), 10.2 the test email (PHPMailer, the "Send test email" button and its error sentences).
+10. Send a test email to the administrator. In two sub-steps (`docs/plans/mvp-step-10.md`): 10.1 SMTP settings (the Notifications context, the encrypted password, the Email page and the seed file's `[smtp]` section), 10.2 the test email (PHPMailer, the "Send test email" button and its error sentences, section 13.2).
 11. Read stored runs through an API endpoint for future charts.
 
 First steps after the MVP: the egress indicator (section 10.3) and Google sign-in.

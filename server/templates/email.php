@@ -8,9 +8,12 @@
  * @var ?string $seedHost the seed file's SMTP host, when it has an [smtp] section and nothing is stored
  * @var ?string $seedProblem why the seed file could not be read
  * @var string[] $seedErrors why the seed file's SMTP settings were not used
+ * @var ?string $testOutcome the test email's sentence, after pressing the button
+ * @var bool $testSent
  */
 use Maguari\Server\Notifications\NotificationsApi;
 use Maguari\Server\Notifications\SmtpEncryption;
+use Maguari\Server\Notifications\SmtpMailer;
 use Maguari\Server\Notifications\SmtpSettingsRules;
 
 $error = static fn (string $field): string => isset($errors[$field]) ? '<p>' . $e($errors[$field]) . '</p>' : '';
@@ -53,6 +56,18 @@ $error = static fn (string $field): string => isset($errors[$field]) ? '<p>' . $
 </tbody>
 </table>
 <?php endif; ?>
+<h2>Test email</h2>
+<?php if ($testOutcome !== null): ?>
+<p><?= $testSent ? '' : '<strong>Not sent:</strong> ' ?><?= $e($testOutcome) ?></p>
+<?php endif; ?>
+<?php if ($settings === null): ?>
+<p>Save the settings first, then send a test email.</p>
+<?php else: ?>
+<form method="post" action="/admin/email/test">
+<?= $csrf ?>
+<p><button type="submit">Send test email</button> Sends a test email to <?= $e($recipient) ?> with the saved settings, not with unsaved changes below. Maguari waits at most <?= SmtpMailer::TIMEOUT_SECONDS ?> seconds for each answer from the server.</p>
+</form>
+<?php endif; ?>
 <h2><?= $settings === null ? 'Set up' : 'Change' ?></h2>
 <p>Port <?= SmtpEncryption::IMPLICIT_TLS_PORT ?> uses TLS from the start; every other port must offer STARTTLS. Only localhost, for a development server, may be unencrypted.</p>
 <form method="post" action="/admin/email">
@@ -66,7 +81,7 @@ $error = static fn (string $field): string => isset($errors[$field]) ? '<p>' . $
 <p><label for="username">Username (empty for a server that needs no sign-in)</label><br>
 <input id="username" name="username" type="text" value="<?= $e($form['username']) ?>" maxlength="<?= SmtpSettingsRules::USERNAME_MAX_BYTES ?>" autocomplete="off" spellcheck="false"></p>
 <?= $error('username') ?>
-<p><label for="password">Password<?= $settings?->hasPassword ? ' (leave empty to keep the stored one)' : '' ?></label><br>
+<p><label for="password">Password<?= $settings?->hasPassword ? ' (leave empty to keep the stored one, unless you change the username)' : '' ?></label><br>
 <input id="password" name="password" type="password" maxlength="<?= SmtpSettingsRules::PASSWORD_MAX_BYTES ?>" autocomplete="new-password"></p>
 <?= $error('password') ?>
 <p><label for="from_address">From address</label><br>

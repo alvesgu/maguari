@@ -9,6 +9,8 @@ use Maguari\Server\Access\Administrator;
 use Maguari\Server\Access\Exception\InvalidSeedConfig;
 use Maguari\Server\Access\SeedSmtp;
 use Maguari\Server\Http\View;
+use Maguari\Server\Notifications\Exception\EmailNotSent;
+use Maguari\Server\Notifications\Exception\EmailNotSetUp;
 use Maguari\Server\Notifications\Exception\InvalidSmtpSettings;
 use Maguari\Server\Notifications\NotificationsApi;
 use Maguari\Server\Notifications\SmtpSettingsInput;
@@ -18,9 +20,10 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
- * The Email page (design section 13): the SMTP settings, and the seed file's
+ * The Email page (design section 13): the SMTP settings, the seed file's
  * [smtp] section applied with a button while none are stored (design section
- * 11.5.1). The stored password is never sent to the browser.
+ * 11.5.1) and the test email. The stored password is never sent to the
+ * browser.
  */
 final class EmailController
 {
@@ -28,6 +31,7 @@ final class EmailController
         private readonly AccessApi $access,
         private readonly NotificationsApi $notifications,
         private readonly View $view,
+        private readonly bool $logErrors = true,
     ) {
     }
 
@@ -57,6 +61,33 @@ final class EmailController
         }
 
         return self::backToPage($response);
+    }
+
+    /**
+     * Sends the test email to the signed-in administrator with the saved
+     * settings, inside the request. The page itself is the answer, with the
+     * outcome: 200 when sent, 409 when email is not set up, 502 when sending
+     * failed (the details go to the error log only).
+     */
+    public function sendTest(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface
+    {
+        $administrator = $request->getAttribute(Administrator::class);
+        assert($administrator instanceof Administrator);
+        $form = self::formFrom($this->notifications->smtpSettings());
+
+        try {
+            $sentence = $this->notifications->sendTestEmail($administrator->email, $administrator->name, $this->access->baseUrl());
+        } catch (EmailNotSetUp $notSetUp) {
+            return $this->page($request, $response, $form, [], [], 409, $notSetUp->getMessage(), false);
+        } catch (EmailNotSent $notSent) {
+            if ($this->logErrors) {
+                error_log($notSent->logLine);
+            }
+
+            return $this->page($request, $response, $form, [], [], 502, $notSent->getMessage(), false);
+        }
+
+        return $this->page($request, $response, $form, [], [], 200, $sentence, true);
     }
 
     /**
@@ -113,6 +144,7 @@ final class EmailController
      * @param array{host: string, port: string, username: string, from_address: string} $form
      * @param array<string, string> $errors the form's sentences, by field
      * @param string[] $seedErrors why the seed file's settings were not used
+     * @param string|null $testOutcome the test email's sentence, after sending
      */
     private function page(
         ServerRequestInterface $request,
@@ -121,6 +153,8 @@ final class EmailController
         array $errors,
         array $seedErrors,
         int $status = 200,
+        ?string $testOutcome = null,
+        bool $testSent = false,
     ): ResponseInterface {
         $settings = $this->notifications->smtpSettings();
         $seedProblem = null;
@@ -146,6 +180,8 @@ final class EmailController
             'seedHost' => $seedHost,
             'seedProblem' => $seedProblem,
             'seedErrors' => $seedErrors,
+            'testOutcome' => $testOutcome,
+            'testSent' => $testSent,
         ], $status);
     }
 }

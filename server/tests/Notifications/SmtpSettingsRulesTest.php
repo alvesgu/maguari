@@ -26,10 +26,10 @@ final class SmtpSettingsRulesTest extends TestCase
     /**
      * @return array<string, string>
      */
-    private static function errors(SmtpSettingsInput $input, bool $passwordStored = false): array
+    private static function errors(SmtpSettingsInput $input, ?string $storedPasswordUsername = null): array
     {
         try {
-            SmtpSettingsRules::check($input, $passwordStored);
+            SmtpSettingsRules::check($input, $storedPasswordUsername);
         } catch (InvalidSmtpSettings $invalid) {
             return $invalid->errors;
         }
@@ -39,19 +39,19 @@ final class SmtpSettingsRulesTest extends TestCase
 
     public function testNormalizesValidSettings(): void
     {
-        $valid = SmtpSettingsRules::check(self::input(' SMTP.Gmail.com ', ' 587 ', ' alerts@example.com ', 'p', ' Alerts@Example.com '), false);
+        $valid = SmtpSettingsRules::check(self::input(' SMTP.Gmail.com ', ' 587 ', ' alerts@example.com ', 'p', ' Alerts@Example.com '), null);
 
         $this->assertSame(['host' => 'smtp.gmail.com', 'port' => 587, 'username' => 'alerts@example.com', 'fromAddress' => 'alerts@example.com'], $valid);
     }
 
     public function testAnEmptyPortIsTheDefault(): void
     {
-        $this->assertSame(587, SmtpSettingsRules::check(self::input(port: ''), false)['port']);
+        $this->assertSame(587, SmtpSettingsRules::check(self::input(port: ''), null)['port']);
     }
 
     public function testAcceptsLocalhostAndNoUsername(): void
     {
-        $valid = SmtpSettingsRules::check(self::input('localhost', '1025', '', ''), false);
+        $valid = SmtpSettingsRules::check(self::input('localhost', '1025', '', ''), null);
 
         $this->assertSame('localhost', $valid['host']);
         $this->assertSame('', $valid['username']);
@@ -133,7 +133,17 @@ final class SmtpSettingsRulesTest extends TestCase
     public function testAUsernameNeedsAPasswordUnlessOneIsStored(): void
     {
         $this->assertSame(['password' => 'Enter the password for this username.'], self::errors(self::input(password: '')));
-        $this->assertSame([], self::errors(self::input(password: ''), true));
+        $this->assertSame([], self::errors(self::input(password: ''), 'alerts@example.com'));
+        $this->assertSame([], self::errors(self::input(username: ' alerts@example.com ', password: ''), 'alerts@example.com'));
+    }
+
+    public function testANewUsernameNeedsItsPassword(): void
+    {
+        $this->assertSame(
+            ['password' => 'Enter the password again: the username changed.'],
+            self::errors(self::input(username: 'other@example.com', password: ''), 'alerts@example.com'),
+        );
+        $this->assertSame([], self::errors(self::input(username: 'other@example.com', password: 'new one'), 'alerts@example.com'));
     }
 
     public function testRejectsLongOrControlCharacterPasswords(): void

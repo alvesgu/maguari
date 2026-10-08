@@ -22,13 +22,16 @@ final class SmtpSettingsRules
     private const EMAIL_MAX_BYTES = 254;
 
     /**
-     * Normalizes and checks everything but the password's presence, which the
-     * caller decides with what is stored. An empty port means the default.
+     * Normalizes and checks the input. An empty port means the default. An
+     * empty password keeps the stored one only for the username it was
+     * stored with: a new username needs its password.
      *
+     * @param string|null $storedPasswordUsername the username of the stored
+     *                                            password, null when none is stored
      * @return array{host: string, port: int, username: string, fromAddress: string}
      * @throws InvalidSmtpSettings
      */
-    public static function check(SmtpSettingsInput $input, bool $passwordStored): array
+    public static function check(SmtpSettingsInput $input, ?string $storedPasswordUsername): array
     {
         $errors = [];
         $host = strtolower(trim($input->host));
@@ -63,8 +66,10 @@ final class SmtpSettingsRules
         if ($username !== '') {
             if (strlen($input->password) > self::PASSWORD_MAX_BYTES || self::hasControlCharacters($input->password)) {
                 $errors['password'] = 'Enter a password of up to 1,024 characters, without line breaks.';
-            } elseif ($input->password === '' && !$passwordStored) {
+            } elseif ($input->password === '' && $storedPasswordUsername === null) {
                 $errors['password'] = 'Enter the password for this username.';
+            } elseif ($input->password === '' && $storedPasswordUsername !== $username) {
+                $errors['password'] = 'Enter the password again: the username changed.';
             }
         }
 
