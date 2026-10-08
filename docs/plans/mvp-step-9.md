@@ -233,11 +233,15 @@ monitoring_certificate_hostnames(
 
 Instance names on the dashboard and on the project page link to it. Adding a hostname does not check it immediately: the next run (or "Run now") does. An instance that is not picked is a `404`.
 
+*Refined in 9.4:* the page does not say what changed after a successful add or remove: there is no flash message mechanism, and the updated list shows it. A refused hostname renders the page again with its sentence and the typed value (`422`), like adding a project. Removing a hostname that is already gone just redirects back. At the limit of 10 the form is replaced by a sentence. Fleet gained `FleetApi::pickedInstance(int)` for the page's lookup.
+
 **D13. Suggestions from local certificates.** Below the form, the page lists the instance's local certificate domains (D5) that are valid hostnames and not configured yet, each with an "Add" button (the same form, prefilled). One click covers the usual case, a site served from the instance that holds its certificate. Wildcards are not suggested. Nothing is added automatically.
 
 *Alternative:* check every local certificate's domain remotely without configuration. Simpler for administrators, but a certificate for a name served elsewhere (or a mail server on another port) would fail falsely, with no way to turn it off.
 
 **D14. Reading the served certificate.** A `TlsCertificateReader` interface in `Kernel/Tls/` (generic, like `Kernel/HttpClient/`) and `StreamTlsCertificateReader` on `stream_socket_client('ssl://host:443')` with SNI and `capture_peer_cert`, using the system's CA store:
+
+*Refined in 9.4:* the reader connects over `tcp://` with the timeout and then runs the TLS handshake non-blocking against a deadline, because PHP's connect timeout does not bound the handshake (a server that accepts and never answers would otherwise hang the job). The timeout is passed per call, like Fleet's HTTP requests, so the 5 seconds are Monitoring's constant (`ServedCertificates::TIMEOUT_SECONDS`), not the wiring's. Name resolution is not bounded by it. The two-connection policy lives in `Monitoring/Application/ServedCertificates`; the reader only connects once, verified or not. Sentences leave out the hostname, which the page and the CLI already show next to them: "Could not connect on port 443." and "The served certificate is not trusted or does not match the hostname." The tests run the reader against a local server (`tests/fixtures/tls-server.php`) with a CA and certificates made at test time (`tests/Support/TestCertificateAuthority.php`), and the job's tests use a fake reader.
 
 1. **Verified connection** (peer and name verified). If it succeeds, the result is the certificate's expiry, and D7 decides.
 2. If the handshake fails, a **second connection without verification**, only to read the certificate:
@@ -250,7 +254,7 @@ Instance names on the dashboard and on the project page link to it. Adding a hos
 - **Known limit, worse than in step 8:** with all hostnames reachable, each costs well under a second. Each unreachable one costs up to 10 seconds (two attempts). "Run now" runs inside the request with nginx's 60 second limit (design 6.3 item 5), so a handful of dead hostnames can produce a `504` while the run still finishes. Queued runs remain the fix; this plan does not add them (Question 6).
 - Tests use a fake reader. The stream reader itself is tested against a local TLS server the test starts (`stream_socket_server('ssl://127.0.0.1:0')` in a child PHP process) with a CA and certificates generated at test time with `openssl_*`, so no key is ever committed. The reader takes an optional CA file, for tests only.
 
-**D15. The "not reloaded" hint.** The design's reason for the remote check. When a remote result fails on expiry and the same instance reports a local certificate whose domain equals the hostname and that expires later, the sentence adds: "The instance has a renewed certificate (valid until 2026-12-01). Reload the web server." Matching is by exact domain; a hostname covered only by a wildcard or a later SAN gets no hint, which costs nothing but the hint.
+**D15. The "not reloaded" hint.** The design's reason for the remote check. When a remote result fails on expiry and the same instance reports a local certificate whose domain equals the hostname and that expires later, the sentence adds: "The instance has a renewed certificate (valid until 2026-12-01). Reload the web server." (*As built:* "The instance has a renewed certificate, valid until 2026-12-01: reload the web server.", and only a local certificate reported in the last 24 hours counts.) Matching is by exact domain; a hostname covered only by a wildcard or a later SAN gets no hint, which costs nothing but the hint.
 
 **D16. The job's order.** For each picked instance: disk size, then local certificates (from runs, instant), then remote certificates. All Compute Engine and TLS calls happen before the one transaction that writes the results (design 6.3 item 2). A failure of one hostname is a result, never a job failure.
 
@@ -334,18 +338,29 @@ docs/DESIGN.md
 server/
   src/Kernel/Tls/TlsCertificateReader.php, StreamTlsCertificateReader.php, ...   (D14)
   src/Monitoring/
-    MonitoringApi.php                       hostnames: list, add, remove; instance results
-    Domain/Hostname.php                     validation (D11)
-    Domain/RemoteCertificateRule.php        or an extension of CertificateExpiryRule (D14, D15)
-    Application/DailyJob.php                remote checks (D16)
+    MonitoringApi.php                       hostnames: list, add, remove, suggestions; takes the reader
+    Exception/InvalidCertificateHostname.php
+    Domain/CertificateHostname.php          validation, port and limit (D11)
+    Domain/CertificateExpiryRule.php        checkRemote() with the reload hint (D14, D15)
+    Domain/ServedCertificate.php
+    Application/ServedCertificates.php      the two connections (D14)
+    Application/CertificateHostnames.php    add, remove, suggestions (D11, D13)
+    Application/DailyJob.php                remote checks (D16); local and remote results in the summary
     Infrastructure/CertificateHostnameRepository.php
     Migrations/0005_monitoring_certificate_hostnames.sql
-  src/Http/App.php                          routes, reader wiring
+  src/Fleet/FleetApi.php, InstanceRepository.php    pickedInstance()
+  src/Cli/DailyJobReport.php                "on the instance" and "served for" lines
+  src/Http/App.php, bin/maguari-server      routes, reader wiring
   src/Http/Controller/InstancesController.php   (D12)
+  src/Http/Controller/ProjectsController.php    picked instances' IDs for links
   templates/instance.php                    (D12, D13)
-  templates/admin.php, templates/project.php    links to the instance page
-  tests/...                                 hostname rules, reader against a local TLS server,
-                                            rule, job, instance page flows
+  templates/admin.php, templates/project.php    links to the instance page; served results labelled
+  tests/Kernel/Tls/StreamTlsCertificateReaderTest.php, tests/fixtures/tls-server.php
+  tests/Support/TestCertificateAuthority.php, FakeTlsCertificateReader.php, TestEnvironment.php
+  tests/Monitoring/Domain/CertificateHostnameTest.php, CertificateExpiryRuleTest.php
+  tests/Monitoring/Application/RemoteCertificatesTest.php
+  tests/Http/InstancePageFlowTest.php, AdminDashboardTest.php, DailyJobFlowTest.php
+  tests/Cli/DailyJobReportTest.php
 docs/DESIGN.md
 ```
 

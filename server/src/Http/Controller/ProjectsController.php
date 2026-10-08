@@ -146,10 +146,10 @@ final class ProjectsController
     }
 
     /**
-     * The project's picked instances' enrollment states and heartbeat
+     * The project's picked instances' IDs, enrollment states and heartbeat
      * statuses, keyed by "zone/name" to match the live list.
      *
-     * @return array{enrollmentStates: array<string, EnrollmentState>, heartbeats: array<string, HeartbeatStatus>}
+     * @return array{instanceIds: array<string, int>, enrollmentStates: array<string, EnrollmentState>, heartbeats: array<string, HeartbeatStatus>}
      */
     private function statuses(Project $project): array
     {
@@ -157,10 +157,11 @@ final class ProjectsController
         $ids = array_map(static fn ($instance): int => $instance->id, $picked);
         $states = $this->clients->enrollmentStates($ids);
         $heartbeats = $this->clients->heartbeatStatuses($ids);
-        $statuses = ['enrollmentStates' => [], 'heartbeats' => []];
+        $statuses = ['instanceIds' => [], 'enrollmentStates' => [], 'heartbeats' => []];
 
         foreach ($picked as $instance) {
             $key = $instance->zone . '/' . $instance->name;
+            $statuses['instanceIds'][$key] = $instance->id;
             $statuses['enrollmentStates'][$key] = $states[$instance->id];
 
             if (isset($heartbeats[$instance->id])) {

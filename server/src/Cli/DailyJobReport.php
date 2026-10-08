@@ -50,7 +50,8 @@ final class DailyJobReport
     {
         return match ($result->checkName) {
             DiskSizeRule::CHECK_NAME => 'Disk size',
-            CertificateExpiryRule::LOCAL_CHECK_NAME => "Certificate {$result->subject}",
+            CertificateExpiryRule::LOCAL_CHECK_NAME => "Certificate {$result->subject} on the instance",
+            CertificateExpiryRule::REMOTE_CHECK_NAME => "Certificate served for {$result->subject}",
             default => trim("{$result->checkName} {$result->subject}"),
         };
     }

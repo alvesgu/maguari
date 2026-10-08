@@ -14,6 +14,7 @@ use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Domain\DiskSizeRule;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
+use Maguari\Server\Monitoring\Infrastructure\CertificateHostnameRepository;
 use Maguari\Server\Monitoring\Infrastructure\DailyJobRepository;
 use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
 use Maguari\Shared\Metric;
@@ -44,6 +45,8 @@ final class DailyJob
         private readonly Clock $clock,
         private readonly FleetApi $fleet,
         private readonly MetricRunRepository $metricRuns,
+        private readonly CertificateHostnameRepository $hostnames,
+        private readonly ServedCertificates $servedCertificates,
     ) {
         $this->runs = new DailyJobRepository($database);
         $this->diskSizeRule = new DiskSizeRule();
@@ -52,7 +55,8 @@ final class DailyJob
 
     /**
      * @return CheckResult[] by instance, in the order of FleetApi::pickedInstances():
-     *         the disk size result, then one per certificate in domain order
+     *         the disk size result, one per local certificate in domain order,
+     *         then one per hostname in hostname order
      * @throws DailyJobAlreadyRunning
      * @throws DailyJobFailed after marking the run failed, without results
      */
@@ -91,13 +95,20 @@ final class DailyJob
             ? []
             : $this->runs->results($lastSucceeded->id, $checkName, $instanceIds);
 
+        // Local results first, then remote, per instance.
+        $certificates = $results(CertificateExpiryRule::LOCAL_CHECK_NAME);
+
+        foreach ($results(CertificateExpiryRule::REMOTE_CHECK_NAME) as $instanceId => $remote) {
+            $certificates[$instanceId] = [...($certificates[$instanceId] ?? []), ...$remote];
+        }
+
         return new DailyJobSummary(
             $this->runs->latest($runningSince),
             $lastSucceeded,
             $lastScheduled,
             $lastScheduled !== null && $now - $lastScheduled->startedAt > self::OVERDUE_AFTER_SECONDS,
             array_map(static fn (array $list): CheckResult => $list[0], $results(DiskSizeRule::CHECK_NAME)),
-            $results(CertificateExpiryRule::LOCAL_CHECK_NAME),
+            $certificates,
         );
     }
 
@@ -121,11 +132,19 @@ final class DailyJob
                 $this->filesystemTotals($instance->id),
                 $at,
             );
-            array_push($results, ...$this->certificateRule->checkLocal(
-                $instance->id,
-                $this->metricRuns->currentOfKind($instance->id, Metric::CERTIFICATE_EXPIRES_AT),
-                $at,
-            ));
+            $localCertificates = $this->metricRuns->currentOfKind($instance->id, Metric::CERTIFICATE_EXPIRES_AT);
+            array_push($results, ...$this->certificateRule->checkLocal($instance->id, $localCertificates, $at));
+
+            // One or two TLS connections each, still outside any transaction.
+            foreach ($this->hostnames->forInstance($instance->id) as $hostname) {
+                $results[] = $this->certificateRule->checkRemote(
+                    $instance->id,
+                    $hostname->hostname,
+                    $this->servedCertificates->read($hostname->hostname),
+                    $localCertificates[$hostname->hostname] ?? null,
+                    $at,
+                );
+            }
         }
 
         $this->database->transaction(function () use ($runId, $results): void {

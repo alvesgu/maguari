@@ -166,15 +166,15 @@ final class DailyJobFlowTest extends TestCase
 
         $date = static fn (int $days): string => gmdate('Y-m-d', $now + $days * $day);
         $this->assertMatchesRegularExpression(
-            self::cell('Pass (2)', 'example.com: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'www.example.com: Valid until ' . $date(30) . ' (30 days).'),
+            self::cell('Pass (2)', 'example.com, on the instance: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'www.example.com, on the instance: Valid until ' . $date(30) . ' (30 days).'),
             $body,
         );
         $stale = 'Expires on ' . gmdate('Y-m-d', $now + 8 * $day + 3600) . ', in 8 days. certbot renews well before expiry, so renewal is failing on this instance.';
         $this->assertMatchesRegularExpression(
-            self::cell('Fail', 'good.example: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'stale.example: ' . $stale),
+            self::cell('Fail', 'good.example, on the instance: Valid until ' . $date(60) . ' (60 days).' . "\n" . 'stale.example, on the instance: ' . $stale),
             $body,
         );
-        $this->assertStringContainsString("<h3>Certificate failures</h3>\n<ul>\n<li>my-project/mixed: stale.example: {$stale}</li>\n</ul>", $body);
+        $this->assertStringContainsString("<h3>Certificate failures</h3>\n<ul>\n<li>my-project/mixed: stale.example, on the instance: {$stale}</li>\n</ul>", $body);
         $this->assertStringContainsString('a certificate fails with fewer than 14 days left.', $body);
     }
 

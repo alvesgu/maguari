@@ -18,6 +18,7 @@ use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\SystemClock;
+use Maguari\Server\Kernel\Tls\StreamTlsCertificateReader;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
@@ -244,7 +245,7 @@ function runDailyJobCommand(array $args): int
     $clock = new SystemClock();
     $http = new StreamHttpClient();
     $fleet = new FleetApi($database, $clock, AccessTokenSourceFactory::fromEnvironment($http, $clock), $http);
-    $monitoring = new MonitoringApi($database, $clock, $fleet);
+    $monitoring = new MonitoringApi($database, $clock, $fleet, new StreamTlsCertificateReader());
 
     try {
         $results = $monitoring->runDailyJob($trigger);

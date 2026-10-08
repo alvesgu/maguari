@@ -17,15 +17,17 @@ final class DailyJobReportTest extends TestCase
     {
         $this->assertSame([
             'p/us-east1-b/web: Disk size: Pass. The boot disk is 10.0 GiB and its filesystems total 9.6 GiB.',
-            'p/us-east1-b/web: Certificate example.com: Pass. Valid until 2026-12-07 (60 days).',
-            'p/us-east1-b/web: Certificate www.example.com: Fail. Expires on 2026-10-12, in 4 days.',
+            'p/us-east1-b/web: Certificate example.com on the instance: Pass. Valid until 2026-12-07 (60 days).',
+            'p/us-east1-b/web: Certificate www.example.com on the instance: Fail. Expires on 2026-10-12, in 4 days.',
+            'p/us-east1-b/web: Certificate served for www.example.com: Not checked. Could not connect on port 443.',
             'p/us-east1-b/db: Disk size: Not checked. No disk readings in the last 24 hours.',
             'instance 9: Disk size: Pass. Fine.',
-            'Daily job finished: 3 passed, 1 failed, 1 not checked.',
+            'Daily job finished: 3 passed, 1 failed, 2 not checked.',
         ], DailyJobReport::lines([
             new CheckResult(1, 'disk_size', CheckOutcome::Pass, 'The boot disk is 10.0 GiB and its filesystems total 9.6 GiB.', self::AT),
             new CheckResult(1, 'local_certificate', CheckOutcome::Pass, 'Valid until 2026-12-07 (60 days).', self::AT, 'example.com'),
             new CheckResult(1, 'local_certificate', CheckOutcome::Fail, 'Expires on 2026-10-12, in 4 days.', self::AT, 'www.example.com'),
+            new CheckResult(1, 'remote_certificate', CheckOutcome::NotChecked, 'Could not connect on port 443.', self::AT, 'www.example.com'),
             new CheckResult(2, 'disk_size', CheckOutcome::NotChecked, 'No disk readings in the last 24 hours.', self::AT),
             // An instance removed while the job ran has no name.
             new CheckResult(9, 'disk_size', CheckOutcome::Pass, 'Fine.', self::AT),

@@ -8,6 +8,7 @@ use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\CheckResult;
 use Maguari\Server\Monitoring\Domain\MetricRun;
+use Maguari\Server\Monitoring\Domain\ServedCertificate;
 use PHPUnit\Framework\TestCase;
 
 final class CertificateExpiryRuleTest extends TestCase
@@ -61,6 +62,48 @@ final class CertificateExpiryRuleTest extends TestCase
                 'old.example.com',
             ),
         ], $results);
+    }
+
+    /**
+     * @return array<string, array{?ServedCertificate, ?MetricRun, CheckOutcome, string}>
+     */
+    public static function served(): array
+    {
+        $renewed = new MetricRun(1, self::AT + 80 * self::DAY, self::AT - 600, self::AT);
+        $reload = ' The instance has a renewed certificate, valid until 2026-12-27: reload the web server.';
+
+        return [
+            'trusted and valid' => [new ServedCertificate(self::AT + 60 * self::DAY, true), null, CheckOutcome::Pass, 'Valid until 2026-12-07 (60 days).'],
+            'trusted and expiring' => [new ServedCertificate(self::AT + 4 * self::DAY, true), null, CheckOutcome::Fail, 'Expires on 2026-10-12, in 4 days.'],
+            'expiring while the instance has a renewed one' => [
+                new ServedCertificate(self::AT + 4 * self::DAY, true), $renewed, CheckOutcome::Fail, 'Expires on 2026-10-12, in 4 days.' . $reload,
+            ],
+            'expired while the instance has a renewed one' => [
+                new ServedCertificate(self::AT - 8 * self::DAY, false), $renewed, CheckOutcome::Fail, 'Expired on 2026-09-30.' . $reload,
+            ],
+            'the same date on the instance' => [
+                new ServedCertificate(self::AT + 4 * self::DAY, true), new MetricRun(1, self::AT + 4 * self::DAY, self::AT - 600, self::AT), CheckOutcome::Fail, 'Expires on 2026-10-12, in 4 days.',
+            ],
+            'a renewed one no longer reported' => [
+                new ServedCertificate(self::AT + 4 * self::DAY, true),
+                new MetricRun(1, self::AT + 80 * self::DAY, self::AT - 9000, self::AT - MetricRun::RECENT_FOR_SECONDS - 1),
+                CheckOutcome::Fail,
+                'Expires on 2026-10-12, in 4 days.',
+            ],
+            'not trusted' => [new ServedCertificate(self::AT + 60 * self::DAY, false), $renewed, CheckOutcome::Fail, 'The served certificate is not trusted or does not match the hostname.'],
+            'no connection' => [null, $renewed, CheckOutcome::NotChecked, 'Could not connect on port 443.'],
+        ];
+    }
+
+    /**
+     * @dataProvider served
+     */
+    public function testJudgesTheServedCertificate(?ServedCertificate $served, ?MetricRun $local, CheckOutcome $outcome, string $detail): void
+    {
+        $this->assertEquals(
+            new CheckResult(7, 'remote_certificate', $outcome, $detail, self::AT, 'www.example.com'),
+            (new CertificateExpiryRule())->checkRemote(7, 'www.example.com', $served, $local, self::AT),
+        );
     }
 
     public function testNoCertificatesGiveNoResults(): void

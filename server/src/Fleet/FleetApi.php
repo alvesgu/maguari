@@ -108,6 +108,14 @@ final class FleetApi
     }
 
     /**
+     * One picked instance, from SQLite only; null when no instance has that ID.
+     */
+    public function pickedInstance(int $instanceId): ?Instance
+    {
+        return $this->instances->find($instanceId);
+    }
+
+    /**
      * @param int|null $projectId one project's instances, or null for every project's
      * @return Instance[] sorted by name, then zone (by GCP project ID first for every project)
      */

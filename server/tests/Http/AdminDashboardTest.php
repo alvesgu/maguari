@@ -68,7 +68,7 @@ final class AdminDashboardTest extends TestCase
     {
         $waiting = $this->pick('alpha-project', 'web');
         $enrolled = $this->pick('alpha-project', 'db');
-        $this->pick('beta-project', 'app');
+        $app = $this->pick('beta-project', 'app');
         $this->environment->clients->issueEnrollmentToken($waiting);
         $client = $this->environment->enrollClient($enrolled);
         $this->environment->clients->recordHeartbeat($client->clientId, json_encode([
@@ -83,13 +83,13 @@ final class AdminDashboardTest extends TestCase
         $body = (string) $response->getBody();
         $heartbeatAt = gmdate('Y-m-d H:i:s', $this->environment->clock->now() - 45);
         $this->assertStringContainsString(
-            '<tr><td><a href="/admin/projects/1">alpha-project</a></td><td>db</td><td>us-east1-b</td>' . "\n"
+            '<tr><td><a href="/admin/projects/1">alpha-project</a></td><td><a href="/admin/instances/' . $enrolled . '">db</a></td><td>us-east1-b</td>' . "\n"
                 . '<td>Enrolled</td>' . "\n" . '<td>On time</td>' . "\n" . '<td>' . $heartbeatAt . ' UTC (45 s ago)</td>' . "\n"
                 . '<td>0.1.0</td>' . "\n" . '<td></td>' . "\n" . '<td></td></tr>',
             $body,
         );
-        $this->assertStringContainsString('<td>web</td><td>us-east1-b</td>' . "\n" . '<td>Waiting for enrollment</td>', $body);
-        $this->assertStringContainsString('<td>beta-project</a></td><td>app</td><td>us-east1-b</td>' . "\n" . '<td>Not enrolled</td>', str_replace('<a href="/admin/projects/2">', '', $body));
+        $this->assertStringContainsString('<td><a href="/admin/instances/' . $waiting . '">web</a></td><td>us-east1-b</td>' . "\n" . '<td>Waiting for enrollment</td>', $body);
+        $this->assertStringContainsString('<td>beta-project</a></td><td><a href="/admin/instances/' . $app . '">app</a></td><td>us-east1-b</td>' . "\n" . '<td>Not enrolled</td>', str_replace('<a href="/admin/projects/2">', '', $body));
         $this->assertLessThan(strpos($body, '>beta-project<'), strpos($body, '>alpha-project<'));
         // Only SQLite: no Compute Engine call, so the dashboard works while Google Cloud's API does not.
         $this->assertCount($requests, $this->environment->http->requests);

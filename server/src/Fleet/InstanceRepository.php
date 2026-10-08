@@ -33,6 +33,15 @@ final class InstanceRepository
         return self::instance($statement->fetch());
     }
 
+    public function find(int $instanceId): ?Instance
+    {
+        $statement = $this->database->pdo()->prepare(self::SELECT . ' WHERE i.id = ?');
+        $statement->execute([$instanceId]);
+        $row = $statement->fetch();
+
+        return $row === false ? null : self::instance($row);
+    }
+
     /**
      * @return Instance[] sorted by name, then zone
      */

@@ -7,7 +7,11 @@ namespace Maguari\Server\Monitoring;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Kernel\Tls\TlsCertificateReader;
+use Maguari\Server\Monitoring\Application\CertificateHostnames;
 use Maguari\Server\Monitoring\Application\DailyJob;
+use Maguari\Server\Monitoring\Application\ServedCertificates;
+use Maguari\Server\Monitoring\Domain\CertificateHostname;
 use Maguari\Server\Monitoring\Domain\CheckResult;
 use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
@@ -16,7 +20,9 @@ use Maguari\Server\Monitoring\Domain\RunDecision;
 use Maguari\Server\Monitoring\Domain\RunRule;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
+use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
+use Maguari\Server\Monitoring\Infrastructure\CertificateHostnameRepository;
 use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
 use Maguari\Shared\Protocol;
 
@@ -37,15 +43,22 @@ final class MonitoringApi
     private readonly MetricRunRepository $runs;
     private readonly RunRule $runRule;
     private readonly DailyJob $dailyJob;
+    private readonly CertificateHostnames $certificateHostnames;
 
+    /**
+     * @param TlsCertificateReader $tls reads the certificates hostnames serve
+     */
     public function __construct(
         private readonly Database $database,
         Clock $clock,
         FleetApi $fleet,
+        TlsCertificateReader $tls,
     ) {
         $this->runs = new MetricRunRepository($database);
         $this->runRule = new RunRule(self::EXPECTED_INTERVAL_SECONDS);
-        $this->dailyJob = new DailyJob($database, $clock, $fleet, $this->runs);
+        $hostnames = new CertificateHostnameRepository($database);
+        $this->dailyJob = new DailyJob($database, $clock, $fleet, $this->runs, $hostnames, new ServedCertificates($tls));
+        $this->certificateHostnames = new CertificateHostnames($database, $clock, $hostnames, $this->runs);
     }
 
     /**
@@ -71,6 +84,46 @@ final class MonitoringApi
     public function dailyJobSummary(array $instanceIds): DailyJobSummary
     {
         return $this->dailyJob->summary($instanceIds);
+    }
+
+    /**
+     * The hostnames whose served certificate the daily job checks for this
+     * instance (design section 6.2).
+     *
+     * @return list<CertificateHostname> in hostname order
+     */
+    public function certificateHostnames(int $instanceId): array
+    {
+        return $this->certificateHostnames->forInstance($instanceId);
+    }
+
+    /**
+     * The next daily job checks it; adding it connects to nothing.
+     *
+     * @throws InvalidCertificateHostname with a sentence for the administrator
+     */
+    public function addCertificateHostname(int $instanceId, string $hostname): CertificateHostname
+    {
+        return $this->certificateHostnames->add($instanceId, $hostname);
+    }
+
+    /**
+     * @return bool whether it existed for that instance
+     */
+    public function removeCertificateHostname(int $instanceId, int $hostnameId): bool
+    {
+        return $this->certificateHostnames->remove($instanceId, $hostnameId);
+    }
+
+    /**
+     * Domains of the instance's recently reported certificates that could be
+     * added as hostnames and are not yet. Reads only SQLite.
+     *
+     * @return list<string>
+     */
+    public function certificateHostnameSuggestions(int $instanceId): array
+    {
+        return $this->certificateHostnames->suggestions($instanceId);
     }
 
     /**

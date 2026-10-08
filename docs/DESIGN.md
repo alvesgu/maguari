@@ -160,7 +160,7 @@ server/src/Fleet/            Supporting context
 server/src/Clients/          Supporting context
 server/src/Notifications/    Generic context
 server/src/Access/           Generic context
-server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption, HTTP client)
+server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption, HTTP client, TLS certificate reader)
 server/src/Http/             Slim wiring: routes, route groups, middleware, thin controllers
 server/src/Cli/              What bin/maguari-server prints, as small pure functions tested directly
 server/templates/            Plain PHP templates for the web app (no template engine)
@@ -370,7 +370,7 @@ On every heartbeat, the client reads `/proc/self/mounts` and measures each mount
 
 - Heartbeat age per instance
 - HTTP checks of public web apps
-- Remote TLS certificate expiry (checks the certificate actually served, catching a renewed certificate that was never reloaded)
+- Remote TLS certificate expiry (checks the certificate actually served, catching a renewed certificate that was never reloaded; section 6.3.2)
 - Instance status from the Compute Engine API
 
 Certificate expiry is checked both locally and remotely.
@@ -388,8 +388,8 @@ The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd time
 2. The Compute Engine calls happen outside any transaction. Then all results are written and the run is marked finished in one transaction.
 3. **Failures.** Any error the job can catch, during the checks or while storing the results, marks the run finished and failed, without results, and the caller logs it (`The daily job failed: <class>: <message>`): the CLI on stderr, which systemd sends to the journal, and "Run now" in PHP's error log. So the 15 minute rule in item 1 only covers runs that were killed (or whose failure could not be recorded, for example when the database itself fails).
 4. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Results are shown, not acted on: no incident, alert or notification yet.
-5. **"Run now"** is a form on the dashboard posting to `POST /admin/daily-job` (session and CSRF, like every `/admin` form). It runs the job inside the request, with the trigger `manual`, then redirects (`303`) to `/admin`. A run already in progress or a failed run also redirects; the dashboard says what happened, and a failure's details go only to PHP's error log. **Known limit:** nginx's usual FastCGI timeout (`fastcgi_read_timeout`, 60 seconds) bounds the request, and each project costs one listing of up to 10 pages. With many projects the administrator could see a `504` while the run still finishes in php-fpm. If that happens, the fix is queued runs: the button records a request and a timer that runs every minute picks it up.
-6. **The dashboard** (`/admin`, read from SQLite only) has a "Daily job" section above the instances: the last run (never run, running since, did not finish, failed or finished with its duration), a note when no scheduled run exists yet, a warning when the timer's latest run started more than 25 hours ago (manual runs do not count) and the "Run now" button. The instances table has a "Disk size" column with each instance's result from the **last successful run**, its sentence behind an (i) icon (section 10.3); failures are also listed below the table. A "Certificates" column shows the worst of the instance's certificate results from the same run (a failure over not checked over a pass), as "Pass (3)" with the number checked when all pass, "Fail" or "Not checked", and is empty for an instance without certificates; its (i) icon lists each certificate with its sentence, and failed certificates are listed below the table. When the last run did not succeed, the page says which run the results come from.
+5. **"Run now"** is a form on the dashboard posting to `POST /admin/daily-job` (session and CSRF, like every `/admin` form). It runs the job inside the request, with the trigger `manual`, then redirects (`303`) to `/admin`. A run already in progress or a failed run also redirects; the dashboard says what happened, and a failure's details go only to PHP's error log. **Known limit:** nginx's usual FastCGI timeout (`fastcgi_read_timeout`, 60 seconds) bounds the request, and each project costs one listing of up to 10 pages. With many projects the administrator could see a `504` while the run still finishes in php-fpm. The remote certificate check adds to this: a reachable hostname costs well under a second, but an unreachable one up to 10 seconds (two connections of at most 5 seconds each, plus name resolution, which the timeout does not bound), so a handful of unreachable hostnames can also lead to a `504`. If that happens, the fix is queued runs: the button records a request and a timer that runs every minute picks it up.
+6. **The dashboard** (`/admin`, read from SQLite only) has a "Daily job" section above the instances: the last run (never run, running since, did not finish, failed or finished with its duration), a note when no scheduled run exists yet, a warning when the timer's latest run started more than 25 hours ago (manual runs do not count) and the "Run now" button. The instances table has a "Disk size" column with each instance's result from the **last successful run**, its sentence behind an (i) icon (section 10.3); failures are also listed below the table. A "Certificates" column shows the worst of the instance's certificate results, local and served, from the same run (a failure over not checked over a pass), as "Pass (3)" with the number checked when all pass, "Fail" or "Not checked", and is empty for an instance without certificates; its (i) icon lists each certificate with its sentence, and failed certificates are listed below the table. When the last run did not succeed, the page says which run the results come from.
 
 Readings older than a day are not used by any daily check: a check uses only runs that ended in the last 24 hours (`MetricRun::RECENT_FOR_SECONDS`), so a filesystem or certificate that is no longer reported drops out after a day.
 
@@ -421,7 +421,24 @@ One rule (`CertificateExpiryRule`) judges every certificate's expiry date, with 
 
 Why 14 days: certbot renews 90-day certificates when 30 days remain and tries twice a day, so 14 days left means about two weeks of failed renewals. The number is `CertificateExpiryRule::MIN_DAYS_LEFT` until it becomes a setting (section 17 item 3).
 
+The local and remote checks run for each picked instance after its disk size check, local certificates first, then the instance's hostnames in hostname order.
+
 **Local check** (`local_certificate`): one result per certificate the instance reported in the last 24 hours, from the current `certificate_expires_at` run of each domain (section 6.1.1). The result's subject is the domain. A failure adds "certbot renews well before expiry, so renewal is failing on this instance." An instance that reports no certificates gets no result at all, not "Not checked", because most instances have none. Known gap: a broken scanner on an instance that has certificates looks the same as no certificates; the remote check covers the certificates actually served. A stale scan errs towards failing, because the old date stays until the next scan.
+
+**Remote check** (`remote_certificate`): one result per hostname an administrator set for the instance (below), with the hostname as the subject. The server connects as visitors do, through public DNS on port 443 with SNI, not to the instance's IP, so a load balancer in front of the instance is what gets checked. A hostname served by several instances is set on one of them.
+
+1. A verified connection (trusted chain, matching name), through `Kernel/Tls/StreamTlsCertificateReader` with the system's CA store. If it works, the rule above judges the certificate's date.
+2. If it fails, a second connection without verification, only to read the certificate: an expired one is judged by its date ("Expired on ..."); any other is Fail, "The served certificate is not trusted or does not match the hostname."
+3. If neither connects: Not checked, "Could not connect on port 443." Reachability belongs to the HTTP checks.
+4. Each connection takes at most 5 seconds for connecting and the handshake together (`ServedCertificates::TIMEOUT_SECONDS`): the handshake runs non-blocking against a deadline, because PHP's connect timeout does not bound it. Name resolution is not bounded by it. Connections run one after another, outside any transaction (item 2 of section 6.3).
+5. **The reload hint:** when the served certificate fails on its date and the instance reported, in the last 24 hours, a certificate for exactly the same domain that expires later, the sentence adds "The instance has a renewed certificate, valid until 2026-12-27: reload the web server." A hostname covered only by a wildcard or a later name of the local certificate gets no hint.
+
+**Hostnames** are check configuration, so Monitoring owns them (`monitoring_certificate_hostnames`, section 9.2). Rules:
+
+- Trimmed and lowercased; labels of letters, digits and hyphens (not at either end), at most 63 bytes each and 253 in all; at least two labels (so `localhost` is refused); the last label not all digits (no IP addresses); no wildcards, schemes, ports or paths. Internationalized names are entered in their `xn--` form. Each refusal has its own sentence.
+- At most 10 per instance, which bounds the job's time; the limit and duplicates are checked in the same transaction as the insert.
+- Port 443 only.
+- Only administrators add them, and pages show only Maguari's own sentences, never what the other side sent. Names that resolve to private addresses are accepted: monitoring internal sites is legitimate, and the handshake reveals nothing but a date.
 
 ## 7. Remediation and safeguards
 
@@ -519,7 +536,7 @@ Coherence rules (warning only):
    - Picked instances are stored in `fleet_instances`, unique by project, zone and name. Picking again keeps the row and refreshes the stored GCP instance ID, so an instance recreated under the same name keeps its row.
    - The project's page shows each listed instance's enrollment state (not enrolled or waiting for enrollment).
 3. **Enroll each instance:** follow the commands shown for that instance (section 5.6).
-4. **Configure checks and safeguards** per instance.
+4. **Configure checks and safeguards** per instance, on the instance's page (`/admin/instances/{id}`, linked from the dashboard and, for picked instances, from the project page). Since MVP step 9 it shows the instance's certificate results from the last successful daily job (each local and served certificate, with its sentence behind an (i) icon) and the hostnames checked remotely (section 6.3.2): each with a "Remove" button (`POST /admin/instances/{id}/certificate-hostnames/{hostnameId}/remove`) and a form to add one (`POST /admin/instances/{id}/certificate-hostnames`). A refused hostname shows the page again with its sentence and what was typed (`422`); success redirects (`303`) back to the page. Below the form, the domains of the instance's recently reported certificates that are valid hostnames and not yet checked are offered with an "Add" button each; nothing is added automatically. Adding a hostname connects to nothing: the next run (or "Run now") checks it. The page reads only SQLite, and an instance that is not picked is a `404`.
 
 ## 9. Storage
 
@@ -554,6 +571,7 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 - Projects and instances
 - Events: alerts, remediation actions, commands and their results
 - Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at, failed)`, with `finished_at` NULL while running or after the run was killed and `failed` 1 for a run that hit an error, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at, subject)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. `subject` says what on the instance a result is about, for checks with more than one result per instance (a certificate's domain), and is empty otherwise (the disk size check). Every run is kept: about one row per instance per check (per certificate, for certificates) per day.
+- Hostnames for the remote certificate check (section 6.3.2): `monitoring_certificate_hostnames(id, instance_id, hostname, added_at)`, unique by instance and hostname. `instance_id` is Fleet's instance ID, with no foreign key.
 - Audit log: logins, configuration changes, manual actions
 - Settings and secrets
 

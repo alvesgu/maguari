@@ -5,13 +5,15 @@ declare(strict_types=1);
 namespace Maguari\Server\Monitoring\Domain;
 
 /**
- * Judges a certificate's expiry date (design section 6.3): one rule for the
- * certificates the instance reports and, later, the ones it serves. No
+ * Judges a certificate's expiry date (design section 6.3.2): one rule for the
+ * certificates the instance reports and the ones its hostnames serve. No
  * database or network access.
  */
 final class CertificateExpiryRule
 {
     public const LOCAL_CHECK_NAME = 'local_certificate';
+
+    public const REMOTE_CHECK_NAME = 'remote_certificate';
 
     /**
      * Fewer whole days left than this fails. certbot renews 90-day
@@ -52,6 +54,43 @@ final class CertificateExpiryRule
         }
 
         return $results;
+    }
+
+    /**
+     * The result for one hostname's served certificate. A connection that
+     * failed is "Not checked": reachability belongs to the HTTP checks. When
+     * the served certificate fails on its date and the instance reports a
+     * certificate for the same domain that expires later, the sentence says
+     * the renewed certificate was never loaded, the case the remote check
+     * exists for (design section 6.2).
+     *
+     * @param ?ServedCertificate $served null when no connection or handshake worked
+     * @param ?MetricRun $local the instance's current certificate_expires_at
+     *        run for the same domain, if any
+     */
+    public function checkRemote(int $instanceId, string $hostname, ?ServedCertificate $served, ?MetricRun $local, int $at): CheckResult
+    {
+        $result = static fn (CheckOutcome $outcome, string $detail): CheckResult
+            => new CheckResult($instanceId, self::REMOTE_CHECK_NAME, $outcome, $detail, $at, $hostname);
+
+        if ($served === null) {
+            return $result(CheckOutcome::NotChecked, sprintf('Could not connect on port %d.', CertificateHostname::PORT));
+        }
+
+        if (!$served->trusted && $served->expiresAt >= $at) {
+            return $result(CheckOutcome::Fail, 'The served certificate is not trusted or does not match the hostname.');
+        }
+
+        [$outcome, $detail] = $this->judge($served->expiresAt, $at);
+
+        if ($outcome === CheckOutcome::Fail && $local !== null && $local->isRecent($at) && (int) $local->value > $served->expiresAt) {
+            $detail .= sprintf(
+                ' The instance has a renewed certificate, valid until %s: reload the web server.',
+                gmdate('Y-m-d', (int) $local->value),
+            );
+        }
+
+        return $result($outcome, $detail);
     }
 
     /**

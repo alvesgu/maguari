@@ -12,6 +12,7 @@ use Maguari\Server\Http\Controller\AdminController;
 use Maguari\Server\Http\Controller\EnrollController;
 use Maguari\Server\Http\Controller\HeartbeatController;
 use Maguari\Server\Http\Controller\LoginController;
+use Maguari\Server\Http\Controller\InstancesController;
 use Maguari\Server\Http\Controller\ProjectsController;
 use Maguari\Server\Http\Controller\SetupController;
 use Maguari\Server\Http\Middleware\ClientSignatureMiddleware;
@@ -28,6 +29,7 @@ use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\Secrets\SecretKeyUnavailable;
 use Maguari\Server\Kernel\SystemClock;
+use Maguari\Server\Kernel\Tls\StreamTlsCertificateReader;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Shared\ErrorCode;
 use Psr\Http\Message\ResponseInterface;
@@ -89,7 +91,7 @@ final class App
         }
 
         $fleet = new FleetApi($database, $clock, $tokens, $http);
-        $monitoring = new MonitoringApi($database, $clock, $fleet);
+        $monitoring = new MonitoringApi($database, $clock, $fleet, new StreamTlsCertificateReader());
 
         return self::create(
             new AccessApi($database, $clock),
@@ -165,13 +167,14 @@ final class App
             $view = new View();
             $adminController = new AdminController($fleet, $clients, $monitoring, $view, $logErrors);
             $projectsController = new ProjectsController($fleet, $clients, $access, $view);
+            $instancesController = new InstancesController($fleet, $monitoring, $view);
             $enrollController = new EnrollController($clients);
             $heartbeatController = new HeartbeatController($clients);
             $signature = new ClientSignatureMiddleware($clients, $responseFactory);
             $setupController = new SetupController($access, $view);
             $loginController = new LoginController($access, $view);
 
-            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController): void {
+            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController): void {
                 $group->get('', [$adminController, 'show']);
                 $group->post('/logout', [$adminController, 'logout']);
                 $group->post('/daily-job', [$adminController, 'runDailyJob']);
@@ -179,6 +182,9 @@ final class App
                 $group->post('/projects', [$projectsController, 'add']);
                 $group->get('/projects/{id:[0-9]+}', [$projectsController, 'instances']);
                 $group->post('/projects/{id:[0-9]+}/instances', [$projectsController, 'enroll']);
+                $group->get('/instances/{id:[0-9]+}', [$instancesController, 'show']);
+                $group->post('/instances/{id:[0-9]+}/certificate-hostnames', [$instancesController, 'addHostname']);
+                $group->post('/instances/{id:[0-9]+}/certificate-hostnames/{hostnameId:[0-9]+}/remove', [$instancesController, 'removeHostname']);
             })->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
 
             // CSRF protects the forms under /auth. The future OAuth callback is
