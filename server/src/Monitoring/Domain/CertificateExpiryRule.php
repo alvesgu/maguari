@@ -19,7 +19,7 @@ final class CertificateExpiryRule
      * Fewer whole days left than this fails. certbot renews 90-day
      * certificates with 30 days left and tries twice a day, so this means
      * about two weeks of failed renewals. It becomes a setting when 45-day
-     * certificates arrive (design section 17 item 3).
+     * certificates arrive (design section 18 item 3).
      */
     public const MIN_DAYS_LEFT = 14;
 

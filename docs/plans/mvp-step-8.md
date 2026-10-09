@@ -70,7 +70,7 @@ All interpretations and decisions were approved as proposed, with these answers:
 
 **D2. Only the boot disk is compared.** The client reports mount points and sizes but not which disk each filesystem lives on, so a filesystem on an attached disk cannot be matched to its disk. The boot disk can: on Compute Engine Ubuntu images, `/`, `/boot` (24.04 images) and `/boot/efi` live on it. A grown boot disk is also the common case (small instances that run out of space).
 
-*Required before 1.0* (design section 17): the client reports each filesystem's Compute Engine device name (likely from the `google-<deviceName>` links in `/dev/disk/by-id/`), which matches `deviceName` in D1 and covers attached disks. That is a client change and a new wire field, so not now.
+*Required before 1.0* (design section 18): the client reports each filesystem's Compute Engine device name (likely from the `google-<deviceName>` links in `/dev/disk/by-id/`), which matches `deviceName` in D1 and covers attached disks. That is a client change and a new wire field, so not now.
 
 **D3. The rule.** For each picked instance, with the boot disk's size `D` (bytes, from D1) and the sum `F` of the current `disk_total_bytes` runs for `/`, `/boot` and `/boot/efi` (whichever exist):
 
@@ -348,7 +348,7 @@ Manual check after 8.2: start the app (`php -S localhost:8080 -t public` in `ser
 
 1. **Certificates:** a new step 9 right after this one; the later steps are renumbered.
 2. **Split:** 8.1 and 8.2, with a review between.
-3. **D2 and D3:** boot disk only, with the 10% rule. Attached disks are required before 1.0 (design section 17).
+3. **D2 and D3:** boot disk only, with the 10% rule. Attached disks are required before 1.0 (design section 18).
 4. **D7:** 06:00 UTC, unit files in `server/systemd/`.
 5. **D9:** "Run now" runs inside the request; nginx's usual 60 second limit is noted, with queued runs as the fix.
 6. **I4:** Monitoring stays flat.

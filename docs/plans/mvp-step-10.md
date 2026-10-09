@@ -134,7 +134,7 @@ Why a button and not automatic: design 11.5.1 item 7 still defers applying seed 
 *Alternative A:* prefill only host, port, username and from address from the seed file and have the administrator type the password. Simpler, but then the password never comes from the seed file.
 *Alternative B:* apply `[smtp]` automatically on the first view of the Email page. Saves a click, but a page view writing settings is a state-changing GET (forbidden, design 11.3).
 
-**Known gap, unchanged by this step:** the seed file now can hold the SMTP password, and the warning while it exists (design 10.3, 11.5 item 3) is not built yet. It is added to design section 17 (required before 1.0).
+**Known gap, unchanged by this step:** the seed file now can hold the SMTP password, and the warning while it exists (design 10.3, 11.5 item 3) is not built yet. It is added to design section 18 (required before 1.0).
 
 ### Triggering the test email
 
@@ -232,7 +232,7 @@ Plus `Http/Controller/EmailController.php` (thin), `templates/email.php`, routes
 ## Changes to `docs/DESIGN.md`
 
 - **This plan's answers:** section 15, step 10 names the sub-steps and links this plan.
-- **10.1:** section 9.2 (`notifications_smtp_settings`); section 9.3 (the SMTP password's column); section 9 (`MAGUARI_SEED_FILE` among the development variables); section 11.5.1 (the `[smtp]` section, its import button and masking); section 12.2.1 (`check-seed-config` prints the masked section); section 13 (the settings, the port default, 465 and the 25 refusal, encryption with the `localhost` exception, the Email page and its recipient); section 17 (the seed file warning).
+- **10.1:** section 9.2 (`notifications_smtp_settings`); section 9.3 (the SMTP password's column); section 9 (`MAGUARI_SEED_FILE` among the development variables); section 11.5.1 (the `[smtp]` section, its import button and masking); section 12.2.1 (`check-seed-config` prints the masked section); section 13 (the settings, the port default, 465 and the 25 refusal, encryption with the `localhost` exception, the Email page and its recipient); section 18 (the seed file warning).
 - **10.2:** section 13.2 (PHPMailer and why, the test email, timeouts, the error sentences, no debug transcript); section 13.1 (the password needs entering again when the username changes); README licence note for PHPMailer.
 
 ## Verification
@@ -319,7 +319,7 @@ In the Email page, with host `localhost`, port `1025`, no username and from `mag
 1. **Library and port:** PHPMailer 7.1 as proposed. The port is a setting with default 587; port 465 uses implicit TLS, every other port requires STARTTLS, and 25 is refused (D2, D5).
 2. **Encryption:** STARTTLS (or implicit TLS on 465) is required, except for `localhost` (D5).
 3. **Seed file:** applied with a button (D6), and `MAGUARI_SEED_FILE` added for development and tests only (D6 item 5).
-4. **Seed file warning:** added to design section 17, noting that the seed file can now contain the SMTP password.
+4. **Seed file warning:** added to design section 18, noting that the seed file can now contain the SMTP password.
 5. **Split:** 10.1 and 10.2. The test email goes to the signed-in administrator for now, the Email page shows the recipient, and with multiple administrators it goes to the alert recipients (I1).
 
 ## Status

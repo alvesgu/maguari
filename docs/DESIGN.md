@@ -170,7 +170,7 @@ server/public/               Web root: index.php and static assets (assets/magua
 1. PHP namespace root: `Maguari\Server\` mapped to `server/src/` (PSR-4).
 2. Each context keeps its database migrations inside its own folder, as numbered `.sql` files in `server/src/<Context>/Migrations/`. A runner in `Kernel/Database/` finds them by scanning those folders (so Kernel never names a context), applies pending ones and records them in `kernel_migrations`, the one table without a context prefix. Migrations run from the CLI (`maguari-server migrate`), never on a web request.
 3. Table names are prefixed with the context name (for example `fleet_instances`, `monitoring_metric_runs`), so ownership is visible in SQLite.
-4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. The content area is up to 96rem wide so the dashboard table fits on wide screens, paragraphs keep a readable line length (72 characters) and table cells never wrap: project IDs, zones and timestamps stay on one line, and a table wider than the window scrolls sideways. This styling is temporary and kept minimal until the redesign before 1.0 (section 17). It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. The one script, `public/assets/maguari.js`, is external for the same reason: templates never use `<script>` without `src` or event handler attributes. Every page loads both from the layout. nginx will serve `/assets/` directly (packaging).
+4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. The content area is up to 96rem wide so the dashboard table fits on wide screens, paragraphs keep a readable line length (72 characters) and table cells never wrap: project IDs, zones and timestamps stay on one line, and a table wider than the window scrolls sideways. This styling is temporary and kept minimal until the redesign before 1.0 (section 18). It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. The one script, `public/assets/maguari.js`, is external for the same reason: templates never use `<script>` without `src` or event handler attributes. Every page loads both from the layout. nginx will serve `/assets/` directly (packaging).
 5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more. `Cli/` is its counterpart for the command line: `bin/maguari-server` calls the contexts' public interfaces, and `Cli/` only turns their results into lines (for example `DailyJobReport`), so the output is tested without running the command.
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
 7. Monitoring, a core context, is split into layers (MVP step 9). Remediation's structure is decided when it gets code. Supporting and generic contexts (Fleet, Clients, Access and Notifications) stay flat. Monitoring's layers:
@@ -379,7 +379,7 @@ Certificate expiry is checked both locally and remotely.
 
 A scheduled daily job runs slow or daily-by-nature checks, with a "Run now" button in the dashboard:
 
-- Certificate expiry (local and remote), from MVP step 9 (section 6.3.2). Both fail when fewer than 14 days remain. That is a fixed constant for now; when Let's Encrypt's 45-day certificates arrive (renewed with about 15 days left), it becomes a setting (section 17 item 3).
+- Certificate expiry (local and remote), from MVP step 9 (section 6.3.2). Both fail when fewer than 14 days remain. That is a fixed constant for now; when Let's Encrypt's 45-day certificates arrive (renewed with about 15 days left), it becomes a setting (section 18 item 3).
 - Compute Engine disk size compared with the filesystem size reported by the client (detects a grown disk whose filesystem was never extended)
 
 The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd timer (section 10.1) and the button run the same code; only the recorded trigger differs (`scheduled` or `manual`). It checks every picked instance and asks Fleet for the instances and their disks, so it never reads another context's tables.
@@ -395,7 +395,7 @@ Readings older than a day are not used by any daily check: a check uses only run
 
 #### 6.3.1 Disk size check
 
-Only the **boot disk** is compared for now, because the client does not report which disk each filesystem lives on. On Compute Engine Ubuntu images, `/`, `/boot` (24.04 images) and `/boot/efi` live on the boot disk. Covering attached disks is required before 1.0 (section 17).
+Only the **boot disk** is compared for now, because the client does not report which disk each filesystem lives on. On Compute Engine Ubuntu images, `/`, `/boot` (24.04 images) and `/boot/efi` live on the boot disk. Covering attached disks is required before 1.0 (section 18).
 
 With the boot disk's size `D` (section 8) and the sum `F` of the current `disk_total_bytes` runs of `/`, `/boot` and `/boot/efi` that ended in the last 24 hours:
 
@@ -419,7 +419,7 @@ One rule (`CertificateExpiryRule`) judges every certificate's expiry date, with 
 | Fewer than 14 days left | Fail: "Expires on 2026-10-22, in 13 days." ("in 1 day", "in less than a day") |
 | Past its last valid second | Fail: "Expired on 2026-09-30." |
 
-Why 14 days: certbot renews 90-day certificates when 30 days remain and tries twice a day, so 14 days left means about two weeks of failed renewals. The number is `CertificateExpiryRule::MIN_DAYS_LEFT` until it becomes a setting (section 17 item 3).
+Why 14 days: certbot renews 90-day certificates when 30 days remain and tries twice a day, so 14 days left means about two weeks of failed renewals. The number is `CertificateExpiryRule::MIN_DAYS_LEFT` until it becomes a setting (section 18 item 3).
 
 The local and remote checks run for each picked instance after its disk size check, local certificates first, then the instance's hostnames in hostname order.
 
@@ -847,7 +847,7 @@ SMTP through a relay (Google Workspace SMTP relay or Gmail SMTP), usually on por
 
 ### 13.1 SMTP settings
 
-The Email page (`/admin/email`, linked from the dashboard) shows the saved settings and a form to change them (`POST /admin/email`: `303` back on success, `422` with a sentence per field and what was typed otherwise, never the password). It also names the recipient: for now, the signed-in administrator's address. With multiple administrators, test emails go to the alert recipients instead (section 17 item 3).
+The Email page (`/admin/email`, linked from the dashboard) shows the saved settings and a form to change them (`POST /admin/email`: `303` back on success, `422` with a sentence per field and what was typed otherwise, never the password). It also names the recipient: for now, the signed-in administrator's address. With multiple administrators, test emails go to the alert recipients instead (section 18 item 3).
 
 | Setting | Rule |
 |---|---|
@@ -909,13 +909,29 @@ Implement in this order, one step at a time:
 10. Send a test email to the administrator. In two sub-steps (`docs/plans/mvp-step-10.md`): 10.1 SMTP settings (the Notifications context, the encrypted password, the Email page and the seed file's `[smtp]` section), 10.2 the test email (PHPMailer, the "Send test email" button and its error sentences, section 13.2).
 11. Read stored runs through an API endpoint for future charts (`docs/plans/mvp-step-11.md`): `GET /admin/api/instances/{id}/runs` (section 9.1), the `/admin/api/*` surface (section 10.2) and the rule for drawing runs as steps (section 10.1).
 
-First steps after the MVP: the egress indicator (section 10.3) and Google sign-in.
+After the MVP, work follows the road to 1.0 (section 17).
 
 ## 16. Open questions
 
-None at the moment. New questions go here as they come up.
+1. Which phase of the road to 1.0 (section 17) brings Google sign-in? It was planned as one of the first steps after the MVP but is not yet placed in a phase.
 
-## 17. Required before 1.0
+## 17. Road to 1.0
+
+After the MVP, work continues in these phases, in this order. Each phase is planned in steps, one at a time, like the MVP.
+
+1. **Incidents and alerts:** incidents (section 7.4), notifications (section 10.4) and alert emails. Monitoring's real heartbeat-age check (section 6.2), based on each instance's interval, replaces the temporary 90-second judgment in Clients (section 5.2).
+2. **More checks:** HTTP checks of public web apps from the server (section 6.2), plus service state, local HTTP and database checks on the client (section 6.1).
+3. **Remediation:** the escalation ladder (section 7.1) and its safeguards (section 7.2).
+4. **Packaging and deployment:** the `.deb` packages, tested locally in Ubuntu containers running systemd; the APT repository (section 12.3); then the real installation at `maguari.mancilla.com.br`. The egress indicator (section 10.3) comes with this phase, because it only means something on the real server.
+5. **Required before 1.0:** the items of section 18, except the layout redesign, which belongs to phase 7.
+6. **The client updater** (section 12.5).
+7. **Release:** the layout redesign (section 18 item 2), GitHub Actions (section 12.4), the installation guide and the 1.0 tag.
+
+Deployment is deliberately postponed to phase 4 so development continues locally until the features that need a real server are in place.
+
+**Safety rule for phase 3:** remediation that resets instances is tested only on a disposable test instance created for that purpose, never on instance-sig, which hosts a real site.
+
+## 18. Required before 1.0
 
 Gaps the MVP leaves open on purpose that must be closed before 1.0.
 
@@ -928,7 +944,7 @@ Gaps the MVP leaves open on purpose that must be closed before 1.0.
    - Until then, every threshold is a single named constant, never a literal repeated in code.
 4. **The seed config file warning** (sections 10.3 and 11.5 item 3) must exist. Since MVP step 10 the seed file can contain the SMTP password (section 11.5.1), so a file left on the server after setup exposes a secret to anyone who can read it.
 
-## 18. Roadmap after 1.0
+## 19. Roadmap after 1.0
 
 1. Uninstall support.
 2. Full application reset (which would also allow reading the seed config file again).
