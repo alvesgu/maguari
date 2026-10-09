@@ -16,6 +16,7 @@ use Maguari\Server\Http\Controller\HeartbeatController;
 use Maguari\Server\Http\Controller\LoginController;
 use Maguari\Server\Http\Controller\InstancesController;
 use Maguari\Server\Http\Controller\ProjectsController;
+use Maguari\Server\Http\Controller\RunsController;
 use Maguari\Server\Http\Controller\SetupController;
 use Maguari\Server\Http\Middleware\ClientSignatureMiddleware;
 use Maguari\Server\Http\Middleware\CsrfMiddleware;
@@ -151,7 +152,11 @@ final class App
         $clientApiErrors = new ErrorHandler($app->getCallableResolver(), $responseFactory);
         $clientApiErrors->forceContentType('application/json');
         $clientApiErrors->registerErrorRenderer('application/json', new ClientApiErrorRenderer());
-        $errors = new SurfaceErrorHandler($htmlErrors, $clientApiErrors);
+        // The web app's scripts get JSON too.
+        $adminApiErrors = new ErrorHandler($app->getCallableResolver(), $responseFactory);
+        $adminApiErrors->forceContentType('application/json');
+        $adminApiErrors->registerErrorRenderer('application/json', new AdminApiErrorRenderer());
+        $errors = new SurfaceErrorHandler($htmlErrors, $clientApiErrors, $adminApiErrors);
         $errorMiddleware->setDefaultErrorHandler($errors);
         // 404 and 405 are routine (scanners, typos), not errors worth logging.
         $errorMiddleware->setErrorHandler(
@@ -161,6 +166,8 @@ final class App
         $app->add(new SecurityHeadersMiddleware());
 
         if ($access === null || $fleet === null || $clients === null || $monitoring === null || $notifications === null) {
+            // Registered first, so it wins over the plain-text /admin route.
+            $app->any('/admin/api[/{rest:.*}]', fn ($request, ResponseInterface $response): ResponseInterface => AdminApiResponse::error($response, AdminApiError::Unavailable));
             $app->any('/{surface:admin|auth}[/{rest:.*}]', function ($request, ResponseInterface $response) use ($notReadyMessage): ResponseInterface {
                 $response->getBody()->write($notReadyMessage);
 
@@ -175,6 +182,7 @@ final class App
             $adminController = new AdminController($fleet, $clients, $monitoring, $view, $logErrors);
             $projectsController = new ProjectsController($fleet, $clients, $access, $view);
             $instancesController = new InstancesController($fleet, $monitoring, $view);
+            $runsController = new RunsController($fleet, $monitoring);
             $emailController = new EmailController($access, $notifications, $view, $logErrors);
             $enrollController = new EnrollController($clients);
             $heartbeatController = new HeartbeatController($clients);
@@ -182,7 +190,7 @@ final class App
             $setupController = new SetupController($access, $view);
             $loginController = new LoginController($access, $view);
 
-            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController, $emailController): void {
+            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController, $emailController, $runsController): void {
                 $group->get('', [$adminController, 'show']);
                 $group->post('/logout', [$adminController, 'logout']);
                 $group->post('/daily-job', [$adminController, 'runDailyJob']);
@@ -197,6 +205,12 @@ final class App
                 $group->post('/email', [$emailController, 'save']);
                 $group->post('/email/import-seed', [$emailController, 'importSeed']);
                 $group->post('/email/test', [$emailController, 'sendTest']);
+                // JSON for the web app's scripts, with the same session, CSRF
+                // and administrator checks (design section 10.2). Errors are
+                // JSON and a missing session is 401, not a redirect.
+                $group->group('/api', function (RouteCollectorProxy $api) use ($runsController): void {
+                    $api->get('/instances/{id:[0-9]+}/runs', [$runsController, 'show']);
+                });
             })->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
 
             // CSRF protects the forms under /auth. The future OAuth callback is

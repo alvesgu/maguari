@@ -53,6 +53,63 @@ final class MonitoringApiTest extends TestCase
         );
     }
 
+    public function testRunsReadsOneMetricWithTheGapRule(): void
+    {
+        $this->record(7, self::AT, ['disk_used_bytes:/' => 100, 'disk_total_bytes:/' => 1_000_000]);
+        $this->record(7, self::AT + 60, ['disk_used_bytes:/' => 100, 'disk_total_bytes:/' => 1_000_000]);
+        // An outage: more than 90 seconds later, the same value starts a new run.
+        $this->record(7, self::AT + 151, ['disk_used_bytes:/' => 100, 'disk_total_bytes:/' => 1_000_000]);
+
+        $series = $this->monitoring->runs(7, ['metric' => ['disk_total_bytes:/'], 'from' => [(string) self::AT], 'to' => [(string) (self::AT + 3600)]]);
+
+        $this->assertSame('disk_total_bytes:/', $series->query->metric);
+        $this->assertSame(90, $series->maxGapSeconds);
+        $this->assertFalse($series->truncated);
+        $this->assertSame(
+            [[self::AT, self::AT + 60, 1_000_000], [self::AT + 151, self::AT + 151, 1_000_000]],
+            array_map(static fn ($run): array => [$run->startAt, $run->endAt, $run->value], $series->runs),
+        );
+    }
+
+    public function testRunsDefaultsToTheLast24HoursEndingNow(): void
+    {
+        $series = $this->monitoring->runs(7, ['metric' => ['disk_used_bytes:/']]);
+
+        $this->assertSame($this->environment->clock->now(), $series->query->to);
+        $this->assertSame($this->environment->clock->now() - 86_400, $series->query->from);
+    }
+
+    public function testRunsKeepsTheNewest5000(): void
+    {
+        $pdo = $this->environment->database->pdo();
+        $insert = $pdo->prepare('INSERT INTO monitoring_metric_runs (instance_id, metric, value, start_at, end_at) VALUES (7, ?, ?, ?, ?)');
+        $pdo->beginTransaction();
+
+        for ($i = 0; $i <= MonitoringApi::MAX_RUNS; $i++) {
+            $insert->execute(['disk_used_bytes:/', $i, self::AT + 2 * $i, self::AT + 2 * $i]);
+        }
+
+        // Exactly the limit is not truncated.
+        for ($i = 0; $i < MonitoringApi::MAX_RUNS; $i++) {
+            $insert->execute(['disk_used_bytes:/boot', $i, self::AT + 2 * $i, self::AT + 2 * $i]);
+        }
+
+        $pdo->commit();
+        $range = ['from' => [(string) self::AT], 'to' => [(string) (self::AT + 86_400)]];
+
+        $series = $this->monitoring->runs(7, ['metric' => ['disk_used_bytes:/']] + $range);
+        $this->assertSame(5_000, MonitoringApi::MAX_RUNS);
+        $this->assertTrue($series->truncated);
+        $this->assertCount(MonitoringApi::MAX_RUNS, $series->runs);
+        $this->assertSame(1, $series->runs[0]->value);
+        $this->assertSame(MonitoringApi::MAX_RUNS, $series->runs[MonitoringApi::MAX_RUNS - 1]->value);
+
+        $series = $this->monitoring->runs(7, ['metric' => ['disk_used_bytes:/boot']] + $range);
+        $this->assertFalse($series->truncated);
+        $this->assertCount(MonitoringApi::MAX_RUNS, $series->runs);
+        $this->assertSame(0, $series->runs[0]->value);
+    }
+
     public function testTheExpectedIntervalIsTheHeartbeatInterval(): void
     {
         $this->assertSame(60, MonitoringApi::EXPECTED_INTERVAL_SECONDS);

@@ -20,7 +20,7 @@ Relevant design sections: 2.1, 3.1, 9.1, 10.1, 10.2, 11.3, 14, 15.
 
 No. One endpoint, one repository query and small changes to the `/admin` wiring. One commit that passes both test suites.
 
-## Interpretations (to confirm)
+## Interpretations (confirmed)
 
 **I1. Only the endpoint.** No chart, no uPlot, no changes to the instance page. The endpoint is checked by its tests and by opening it in a signed-in browser (Verification).
 
@@ -30,7 +30,9 @@ No. One endpoint, one repository query and small changes to the `/admin` wiring.
 
 **I4. Runs are returned as stored.** The server does not resample, average or turn runs into chart points. Runs are the source of truth and are smaller than points.
 
-## Decisions (proposed)
+## Decisions (confirmed)
+
+All decisions were approved, with the answers recorded in "Answers" at the end of this plan.
 
 ### The address
 
@@ -170,7 +172,7 @@ These codes are the server's own (`Http/AdminApiError`), not `shared/src/ErrorCo
 
 `SurfaceErrorHandler` gets the third surface, so `/admin/api/*` errors are JSON whatever the `Accept` header says, the same rule as `/api/client/`.
 
-**D8. One new header on every response (proposed):** `X-Content-Type-Options: nosniff`, so a browser never treats a JSON body as anything but JSON. It belongs in the list of design 11.3. It is harmless on HTML pages and assets, whose types are already correct.
+**D8. One new header on every response:** `X-Content-Type-Options: nosniff`, so a browser never treats a JSON body as anything but JSON. It belongs in the list of design 11.3. It is harmless on HTML pages and assets, whose types are already correct.
 
 ### Code layout
 
@@ -273,14 +275,21 @@ Then, signed in, open in the browser (with the instance's ID in place of 1). Fir
 5. Stop the client for more than 90 seconds and start it again: the `disk_total_bytes:/` response then has two runs with the same value and a gap of more than `max_gap_seconds` between them.
 6. In a private window (not signed in), the first address is `401 {"error": "unauthorized"}`.
 
-## Questions
+## Answers
 
-1. **Address:** `/admin/api/instances/{id}/runs` in an inner group (D1), or `/admin/instances/{id}/runs` (alternative A)?
-2. **Format:** runs as `[start_at, end_at, value]` arrays with `columns` (D5), or objects with named fields (larger but plainer)?
-3. **Limits:** 31 days, 5,000 runs and truncation that keeps the newest runs, with no cursor (D5)?
-4. **Drawing rule:** record D6 in design section 10.1 now, so the charts step implements an agreed rule?
-5. **Header:** add `X-Content-Type-Options: nosniff` to every response (D8)?
+1. **Address:** `/admin/api/instances/{id}/runs` in an inner group (D1).
+2. **Format:** compact `[start_at, end_at, value]` arrays with `columns` (D5).
+3. **Limits:** 31 days and 5,000 runs, keeping the newest, with no cursor (D5).
+4. **Drawing rule:** recorded in design section 10.1 now (D6).
+5. **Header:** `X-Content-Type-Options: nosniff` on every response and in design section 11.3 (D8).
+6. **Added:** a test proving a `GET` to the endpoint passes the CSRF check without a token, and `max_gap_seconds` computed by the same rule as the run boundaries, never as a literal: `RunRule::maxGapSeconds()`, which `RunRule::decide()` itself uses.
+
+## Found while implementing
+
+- PHP's query parsing keeps only the last value of a repeated name, so "given twice" could not be detected from `getQueryParams()`. `Http/QueryParameters` reads every value of each name from the raw query string, and `RunQuery::parse()` receives them as lists. `metric[]=...` is then simply an unknown name, so it is refused as a missing `metric`.
+- The kinds Maguari stores are now one list, `Readings::STORED_KINDS`, used by both the heartbeat and `RunQuery`.
+- The JSON body and headers are shared by both JSON surfaces (`Http/JsonResponse`).
 
 ## Status
 
-Proposed, waiting for approval.
+Implemented, waiting for review.

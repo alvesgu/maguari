@@ -24,6 +24,17 @@ final class RunRule
     }
 
     /**
+     * The longest gap after a run's end that still continues it: 1.5 times
+     * the expected interval, rounded down (gaps are whole seconds, so this is
+     * the same as gap * 2 <= interval * 3). Charts use it to tell an outage
+     * from the step between two runs (design section 10.1).
+     */
+    public function maxGapSeconds(): int
+    {
+        return intdiv(3 * $this->expectedIntervalSeconds, 2);
+    }
+
+    /**
      * @param ?MetricRun $current the run with the latest start_at (then the highest ID)
      * @param int $at the server's receive time of the reading
      */
@@ -41,8 +52,7 @@ final class RunRule
         // Compared with the value that started the run, not the latest
         // reading, so a slow drift cannot stay inside the deadband forever.
         $withinDeadband = abs($reading->value - $current->value) <= $reading->deadband;
-        // gap <= 1.5 * interval, in integers.
-        $withinGap = 2 * ($at - $current->endAt) <= 3 * $this->expectedIntervalSeconds;
+        $withinGap = $at - $current->endAt <= $this->maxGapSeconds();
 
         return $withinDeadband && $withinGap ? RunDecision::Extend : RunDecision::Insert;
     }

@@ -561,8 +561,31 @@ monitoring_metric_runs(id, instance_id, metric, value, start_at, end_at)
 
 Implications:
 
-- Charts must use step rendering, not linear interpolation.
+- Charts must use step rendering, not linear interpolation (section 10.1).
 - Averages are time-weighted.
+
+**Reading runs back** (MVP step 11): `GET /admin/api/instances/{id}/runs` (section 10.2) returns one metric's runs for a time range, for charts.
+
+1. Parameters: `metric` (required), a full metric name such as `disk_used_bytes:/`, URL-encoded, whose kind is one Maguari stores (`Readings::STORED_KINDS`) and which is at most 1,100 bytes; `from` and `to` (optional), Unix seconds in UTC, digits only (no sign or leading zeros, at most 11 digits). `to` defaults to now and `from` to 24 hours before `to`; `from` must be before `to` and the range is at most 31 days (`RunQuery`). A parameter given twice is refused and unknown parameters are ignored. A refusal is `400` with a sentence.
+2. Returned are the runs that overlap the range (`start_at <= to` and `end_at >= from`, both inclusive), in `start_at` order with ties by `id`, not clipped to the range. Runs never overlap (item 4), so only the last run that starts at or before `from` can reach into the range from before it: the query stays on the `(instance_id, metric, start_at)` index and never reads history outside the range.
+3. At most 5,000 runs (`MonitoringApi::MAX_RUNS`, about 150 KB of JSON). When more overlap the range, the newest 5,000 are returned and `truncated` is `true`, so the right side of a chart (now) is always complete. A chart that gets `truncated` asks for a shorter range. No cursor and no downsampling.
+4. The instance must be picked, as for its page: otherwise `404`, even when runs remain from an earlier pick. A picked instance without runs in the range gets an empty list.
+5. The response, with `Cache-Control: no-store`:
+
+```
+{
+    "instance_id": 12,
+    "metric": "disk_used_bytes:/",
+    "from": 1759881600,
+    "to": 1759968000,
+    "max_gap_seconds": 90,
+    "truncated": false,
+    "columns": ["start_at", "end_at", "value"],
+    "runs": [[1759870000, 1759912345, 8123456512], [1759912405, 1759968000, 8134567890]]
+}
+```
+
+`from` and `to` are the range used, after defaults. Each run is an array in the order `columns` names, about half the size of objects (egress, section 14). `value` is a JSON number: integers stay integers. `max_gap_seconds` is `RunRule::maxGapSeconds()`, 1.5 times the expected interval rounded down: the same method decides when a gap ends a run (item 3), so charts and storage can never disagree.
 
 All timestamps are stored in UTC, as integer Unix seconds, in columns whose names end in `_at` (for example `created_at`, `expires_at`).
 
@@ -597,6 +620,17 @@ Password hashes (local login during setup) use Argon2id.
 - Slim 4 with `slim/csrf`
 - SQLite
 - uPlot for charts (runs in the browser, drawing JSON returned by the server)
+
+**Drawing runs as steps** (decided in MVP step 11, for the charts step). Charts draw the runs of section 9.1's endpoint. Each run is a horizontal segment at its value from `start_at` to `end_at`. Between two consecutive runs `a` and `b`:
+
+| `b.start_at - a.end_at` | Drawn as |
+|---|---|
+| At most `max_gap_seconds` | Continuous: `a`'s value holds until `b.start_at`, then the line steps to `b`'s value. Normally the gap is one interval, because the reading that changed the value started `b`. |
+| More than `max_gap_seconds` | A break: no line between `a.end_at` and `b.start_at`. This is the outage the gap rule keeps visible (section 9.1 item 3), even when both runs have the same value. |
+
+For uPlot: one point `(start_at, value)` and one point `(end_at, value)` per run (one point when they are equal), a `null` value between two runs more than `max_gap_seconds` apart. The series is drawn with `uPlot.paths.stepped({align: 1})` and `spanGaps: false`. The last run ends at its `end_at`, not at the chart's right edge, so a client that stopped reporting shows as a line that stops. A run of one reading is a single point, drawn as a dot. `disk_used_bytes` runs keep their first value (the deadband), so the chart can differ from the real value by up to 0.1% of the filesystem's total, invisible at chart scale.
+
+Known limit: `max_gap_seconds` comes from today's fixed interval. Once the heartbeat interval is configurable (section 7.3), runs stored under an older interval may be judged with the newer one; that step decides how.
 - systemd timers for scheduled work (check evaluation, daily job)
 
 The daily job's units live in `server/systemd/` until packaging installs them: `maguari-server-daily-job.service` (`Type=oneshot`, as `maguari-server`, running `maguari-server run-daily-job --scheduled`, with `ProtectSystem=strict` and only `/var/lib/maguari` writable) and `maguari-server-daily-job.timer` (`OnCalendar=*-*-* 06:00:00 UTC`, `Persistent=true`, so a job missed while the server instance was off runs when it is back). There is no timer in development: run the command by hand, or press "Run now".
@@ -608,6 +642,7 @@ Routes are grouped by surface. Each group has its own middleware chain, so new r
 | Group | Middleware |
 |---|---|
 | `/admin/*` | Session check, CSRF check |
+| `/admin/api/*` | The same chain as `/admin/*` (an inner group), for JSON read by the web app's own scripts. Without a signed-in administrator the answer is `401 {"error": "unauthorized"}`, not a redirect to the login page, which a script's `fetch()` would follow. |
 | `/api/client/*` | HMAC verification, per-client rate limit (at most 20 accepted requests per 60 seconds per client, counted from `clients_nonces`; then `429 rate_limited` with `Retry-After: 60`) |
 | `/auth/*` | IP rate limiting on form submissions; session and CSRF check on forms (setup, local login) |
 
@@ -634,7 +669,9 @@ Every response under `/api/client/` is JSON, whatever the `Accept` header says, 
 | 500 | `server_error` | Anything uncaught (logged, details never sent) |
 | 503 | `unavailable` | Database or secret key not ready |
 
-Outside `/api/client/`, errors keep the HTML pages (negotiated by `Accept` as before).
+Every response under `/admin/api/` is JSON too, whatever the `Accept` header says, with `Cache-Control: no-store`. Errors are `{"error": "<code>"}`, and a `bad_request` also has `"message"`, Maguari's own sentence, because an administrator may call the endpoint by hand. The codes are the server's own (`Http/AdminApiError`), not the client protocol's, and reuse its strings where the meaning is the same: `bad_request` (400), `unauthorized` (401), `not_found` (404, including an unknown route), `method_not_allowed` (405, with `Allow`), `server_error` (500, logged, details never sent) and `unavailable` (503, database or secret key not ready). The routes are read-only `GET`s; the CSRF check passes them without a token, because it checks only state-changing methods.
+
+Outside `/api/client/` and `/admin/api/`, errors keep the HTML pages (negotiated by `Accept` as before).
 
 ### 10.3 UI requirements
 
@@ -706,7 +743,7 @@ Alerts (emails) are not the only way problems surface. Notifications show them i
 - Local passwords: 12 to 1,024 characters, no composition rules, hashed with Argon2id
 - CSRF tokens on every state-changing request
 - No state-changing GET routes
-- Security headers: `Content-Security-Policy`, `Strict-Transport-Security`, `frame-ancestors`, `Referrer-Policy: no-referrer` (keeps the setup token out of `Referer` headers)
+- Security headers: `Content-Security-Policy`, `Strict-Transport-Security`, `frame-ancestors`, `Referrer-Policy: no-referrer` (keeps the setup token out of `Referer` headers), `X-Content-Type-Options: nosniff` (a JSON body is never read as a script or a page)
 - Session ID regeneration at login and at setup completion
 - Secrets encrypted at rest (section 9.3)
 
@@ -870,7 +907,7 @@ Implement in this order, one step at a time:
 8. Daily scheduled job with a "Run now" button, with the boot disk size check (section 6.3) as its first check. Done in two sub-steps (`docs/plans/mvp-step-8.md`): 8.1 the job and the disk size check, 8.2 the dashboard and "Run now".
 9. Certificate expiry: the client's certificate scanner (section 6.1.1) and the local and remote certificate checks in the daily job. In four sub-steps (`docs/plans/mvp-step-9.md`): 9.1 Monitoring's layers, 9.2 local expiry dates reach the server, 9.3 the local certificate check, 9.4 the remote certificate check.
 10. Send a test email to the administrator. In two sub-steps (`docs/plans/mvp-step-10.md`): 10.1 SMTP settings (the Notifications context, the encrypted password, the Email page and the seed file's `[smtp]` section), 10.2 the test email (PHPMailer, the "Send test email" button and its error sentences, section 13.2).
-11. Read stored runs through an API endpoint for future charts.
+11. Read stored runs through an API endpoint for future charts (`docs/plans/mvp-step-11.md`): `GET /admin/api/instances/{id}/runs` (section 9.1), the `/admin/api/*` surface (section 10.2) and the rule for drawing runs as steps (section 10.1).
 
 First steps after the MVP: the egress indicator (section 10.3) and Google sign-in.
 

@@ -17,11 +17,14 @@ use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Domain\Readings;
 use Maguari\Server\Monitoring\Domain\RunDecision;
+use Maguari\Server\Monitoring\Domain\RunQuery;
 use Maguari\Server\Monitoring\Domain\RunRule;
+use Maguari\Server\Monitoring\Domain\RunSeries;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
+use Maguari\Server\Monitoring\Exception\InvalidRunQuery;
 use Maguari\Server\Monitoring\Infrastructure\CertificateHostnameRepository;
 use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
 use Maguari\Shared\Protocol;
@@ -40,6 +43,12 @@ final class MonitoringApi
      */
     public const EXPECTED_INTERVAL_SECONDS = Protocol::HEARTBEAT_INTERVAL_SECONDS;
 
+    /**
+     * The most runs one read returns (design section 9.1): about 150 KB of
+     * JSON. A longer series keeps its newest runs.
+     */
+    public const MAX_RUNS = 5_000;
+
     private readonly MetricRunRepository $runs;
     private readonly RunRule $runRule;
     private readonly DailyJob $dailyJob;
@@ -50,7 +59,7 @@ final class MonitoringApi
      */
     public function __construct(
         private readonly Database $database,
-        Clock $clock,
+        private readonly Clock $clock,
         FleetApi $fleet,
         TlsCertificateReader $tls,
     ) {
@@ -124,6 +133,29 @@ final class MonitoringApi
     public function certificateHostnameSuggestions(int $instanceId): array
     {
         return $this->certificateHostnames->suggestions($instanceId);
+    }
+
+    /**
+     * The runs of one metric that overlap a time range, for charts (design
+     * section 9.1). Reads only SQLite. The range defaults to the last 24 hours.
+     *
+     * @param array<string, list<string>> $parameters metric, and optionally
+     *        from and to in Unix seconds, with every value given for each
+     * @throws InvalidRunQuery with a sentence for the administrator
+     */
+    public function runs(int $instanceId, array $parameters): RunSeries
+    {
+        $query = RunQuery::parse($parameters, $this->clock->now());
+        // One more than the limit, only to tell whether there are more.
+        $runs = $this->runs->overlapping($instanceId, $query->metric, $query->from, $query->to, self::MAX_RUNS + 1);
+        $truncated = count($runs) > self::MAX_RUNS;
+
+        return new RunSeries(
+            $query,
+            $truncated ? array_slice($runs, 1) : $runs,
+            $this->runRule->maxGapSeconds(),
+            $truncated,
+        );
     }
 
     /**

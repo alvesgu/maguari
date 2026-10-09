@@ -26,11 +26,7 @@ final class ClientApiResponse
      */
     public static function json(ResponseInterface $response, array $data): ResponseInterface
     {
-        $response->getBody()->write(json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
-
-        return $response
-            ->withHeader('Content-Type', 'application/json')
-            ->withHeader('Cache-Control', 'no-store');
+        return JsonResponse::write($response, $data);
     }
 
     public static function status(ErrorCode $code): int

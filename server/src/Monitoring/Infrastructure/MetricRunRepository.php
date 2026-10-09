@@ -10,6 +10,13 @@ use Maguari\Shared\Metric;
 
 final class MetricRunRepository
 {
+    /** Public only so a test can check its query plan. */
+    public const OVERLAPPING_SQL = 'SELECT id, value, start_at, end_at FROM monitoring_metric_runs '
+        . 'WHERE instance_id = :instance AND metric = :metric AND start_at <= :to AND end_at >= :from '
+        . 'AND start_at >= COALESCE((SELECT MAX(start_at) FROM monitoring_metric_runs '
+        . 'WHERE instance_id = :instance AND metric = :metric AND start_at <= :from), 0) '
+        . 'ORDER BY start_at DESC, id DESC LIMIT :limit';
+
     public function __construct(
         private readonly Database $database,
     ) {
@@ -59,6 +66,28 @@ final class MetricRunRepository
         }
 
         return $runs;
+    }
+
+    /**
+     * The newest $limit runs of one metric with start_at <= $to and
+     * end_at >= $from, in start order (ties by ID). Runs never overlap, so
+     * only the last run starting at or before $from can reach into the range
+     * from before it: both conditions on start_at search the index, and a
+     * long history outside the range is never read.
+     *
+     * @return list<MetricRun>
+     */
+    public function overlapping(int $instanceId, string $metric, int $from, int $to, int $limit): array
+    {
+        $statement = $this->database->pdo()->prepare(self::OVERLAPPING_SQL);
+        $statement->bindValue('instance', $instanceId, \PDO::PARAM_INT);
+        $statement->bindValue('metric', $metric);
+        $statement->bindValue('from', $from, \PDO::PARAM_INT);
+        $statement->bindValue('to', $to, \PDO::PARAM_INT);
+        $statement->bindValue('limit', $limit, \PDO::PARAM_INT);
+        $statement->execute();
+
+        return array_reverse(array_map(self::run(...), $statement->fetchAll()));
     }
 
     /**

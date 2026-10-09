@@ -26,6 +26,9 @@ final class Readings
 
     private const DISK_KINDS = [Metric::DISK_USED_BYTES, Metric::DISK_TOTAL_BYTES];
 
+    /** The kinds stored as runs. Readings of any other kind are dropped. */
+    public const STORED_KINDS = [...self::DISK_KINDS, Metric::CERTIFICATE_EXPIRES_AT];
+
     /**
      * @param list<Reading> $readings
      */

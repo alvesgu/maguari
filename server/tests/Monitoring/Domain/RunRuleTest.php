@@ -43,6 +43,21 @@ final class RunRuleTest extends TestCase
         $this->assertSame(RunDecision::Insert, $this->decide(1000, 23, interval: 15));
     }
 
+    /**
+     * Charts judge gaps with maxGapSeconds(), so it must be exactly the gap
+     * at which decide() stops extending a run.
+     */
+    public function testMaxGapSecondsIsWhereRunsEnd(): void
+    {
+        foreach ([15 => 22, 60 => 90, 61 => 91, 300 => 450, 900 => 1350] as $interval => $expected) {
+            $rule = new RunRule($interval);
+
+            $this->assertSame($expected, $rule->maxGapSeconds(), "interval {$interval}");
+            $this->assertSame(RunDecision::Extend, $this->decide(1000, $rule->maxGapSeconds(), interval: $interval));
+            $this->assertSame(RunDecision::Insert, $this->decide(1000, $rule->maxGapSeconds() + 1, interval: $interval));
+        }
+    }
+
     public function testADifferentValueStartsARun(): void
     {
         $this->assertSame(RunDecision::Insert, $this->decide(1001, 60));

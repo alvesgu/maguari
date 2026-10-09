@@ -72,6 +72,9 @@ final class AppTest extends TestCase
         $app->post('/api/client/test-failure', function (): never {
             throw new RuntimeException('secret-detail');
         });
+        $app->get('/admin/api/test-failure', function (): never {
+            throw new RuntimeException('secret-detail');
+        });
 
         return $app;
     }
@@ -82,6 +85,7 @@ final class AppTest extends TestCase
         $this->assertStringContainsString('max-age=', $response->getHeaderLine('Strict-Transport-Security'));
         $this->assertSame('DENY', $response->getHeaderLine('X-Frame-Options'));
         $this->assertSame('no-referrer', $response->getHeaderLine('Referrer-Policy'));
+        $this->assertSame('nosniff', $response->getHeaderLine('X-Content-Type-Options'));
     }
 
     public function testAdminRedirectsToLoginWithoutASession(): void
@@ -367,5 +371,36 @@ final class AppTest extends TestCase
         $this->assertSame('application/json', $response->getHeaderLine('Content-Type'));
         $this->assertSame('{"error":"server_error"}', (string) $response->getBody());
         $this->assertStringContainsString('secret-detail', $logged);
+    }
+
+    public function testAdminApiIsUnavailableWhileTheDatabaseIsNotReady(): void
+    {
+        foreach (['/admin/api', '/admin/api/instances/1/runs', '/admin/api/anything'] as $path) {
+            $response = $this->request('GET', $path, $this->notReadyApp());
+
+            $this->assertSame(503, $response->getStatusCode(), $path);
+            $this->assertSame('application/json', $response->getHeaderLine('Content-Type'));
+            $this->assertSame('no-store', $response->getHeaderLine('Cache-Control'));
+            $this->assertSame('{"error":"unavailable"}', (string) $response->getBody());
+            $this->assertSecurityHeaders($response);
+        }
+
+        // The pages keep their plain-text message.
+        $this->assertStringStartsWith('text/plain', $this->request('GET', '/admin/apiary', $this->notReadyApp())->getHeaderLine('Content-Type'));
+    }
+
+    public function testAdminApiServerErrorIsJsonAndLogged(): void
+    {
+        $response = null;
+        $logged = $this->captureErrorLog(function () use (&$response): void {
+            $response = $this->request('GET', '/admin/api/test-failure', $this->appWithFailingRoute(true));
+        });
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame('application/json', $response->getHeaderLine('Content-Type'));
+        $this->assertSame('no-store', $response->getHeaderLine('Cache-Control'));
+        $this->assertSame('{"error":"server_error"}', (string) $response->getBody());
+        $this->assertStringContainsString('secret-detail', $logged);
+        $this->assertSecurityHeaders($response);
     }
 }
