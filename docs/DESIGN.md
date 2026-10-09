@@ -50,15 +50,18 @@ Maguari follows GCP's own wording: the Compute Engine console calls them "VM ins
 | Reading | One measured value at one moment |
 | Run | A stored stretch of consecutive equal readings (for disk used, nearly equal; section 9.1) |
 | Check | A test with a pass or fail result (HTTP, database, heartbeat age) |
-| Incident | An ongoing problem on one instance, from its first failed check until recovery |
+| Subject | What on an instance a check result is about, for checks with more than one result per instance (a certificate's domain or hostname); empty otherwise |
+| Incident | An ongoing problem with one check of one instance and one subject, from the check's first failure until it has passed again for long enough (section 7.4). Several can be open on one instance at once. |
 | Action | Something Maguari does to fix a problem: restart, reboot or reset |
 | Restart | Restarting one service through the client |
 | Reboot | Rebooting the OS through the client |
 | Reset | Resetting the instance through the Compute Engine API |
 | Command | An action delivered to a client inside a heartbeat response |
-| Alert | An email sent to the administrator |
+| Alert | An email sent to the administrators |
 | Notification | An item shown in the web app about an incident or a system condition (section 10.4) |
 | Mode | An instance's remediation setting: automatic, alert-only or maintenance |
+| Event | A record that something happened in one context, written in the same transaction as the change and delivered later to the contexts that react to it (section 2.1) |
+| Tick | The per-minute command that judges heartbeat ages and delivers pending events (section 10.1) |
 
 ## 1. Goals and non-goals
 
@@ -118,16 +121,17 @@ Fleet and Clients are separate because they change for different reasons: Fleet 
 2. A context never reads or writes another context's tables.
 3. Contexts refer to each other's things by ID only (an incident stores an instance ID, not an instance object).
 4. The GCP word "instance" in API responses is translated into Fleet's own model inside the GCP adapter. No other context sees raw GCP API data.
+5. When one context must react to something that happened in another, it learns about it through a **domain event** stored in an **outbox**. The event is written in the same transaction as the change that caused it, so a change is never stored without its event or the other way round. Events are delivered later by the tick (section 10.1), never inside a heartbeat or "Run now" request, so a slow reaction (an SMTP server, for example) can never slow those requests down. Queries that need an answer now ("which instances are picked?") stay direct calls to public interfaces.
 
 #### Flow of one failing heartbeat
 
 1. **Clients** receives the heartbeat, verifies the HMAC and passes readings and check results to Monitoring.
-2. **Monitoring** stores readings as runs and evaluates checks. A check fails.
-3. **Remediation** learns about the failure, opens an incident and decides the next action on the escalation ladder.
+2. **Monitoring** stores readings as runs and evaluates checks (heartbeat age on the next tick). A check fails, and Monitoring writes an event saying so in the same transaction as the result.
+3. The tick delivers the event. **Remediation** opens an incident for that instance, check and subject, writes its own event and (from phase 3, section 17) decides the next action on the escalation ladder.
 4. For a restart or reboot, Remediation asks **Clients** to queue a command. For a reset, it asks **Fleet** to call the GCP API.
-5. **Notifications** learns the incident opened, sends the alert and shows the notification.
+5. The tick delivers Remediation's event. **Notifications** shows the notification and sends the alert.
 
-Monitoring does not know Remediation exists, and Remediation does not know how emails are sent. Steps 3 and 5 will use domain events (a later design step). Until then, contexts use direct calls to public interfaces.
+Monitoring does not know Remediation exists, and Remediation does not know how emails are sent. Steps 3 and 5 use domain events (rule 5 above); step 4 is a direct call, because Remediation needs the answer.
 
 ## 3. Repository layout
 
@@ -173,7 +177,7 @@ server/public/               Web root: index.php and static assets (assets/magua
 4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. The content area is up to 96rem wide so the dashboard table fits on wide screens, paragraphs keep a readable line length (72 characters) and table cells never wrap: project IDs, zones and timestamps stay on one line, and a table wider than the window scrolls sideways. This styling is temporary and kept minimal until the redesign before 1.0 (section 18). It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. The one script, `public/assets/maguari.js`, is external for the same reason: templates never use `<script>` without `src` or event handler attributes. Every page loads both from the layout. nginx will serve `/assets/` directly (packaging).
 5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more. `Cli/` is its counterpart for the command line: `bin/maguari-server` calls the contexts' public interfaces, and `Cli/` only turns their results into lines (for example `DailyJobReport`), so the output is tested without running the command.
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
-7. Monitoring, a core context, is split into layers (MVP step 9). Remediation's structure is decided when it gets code. Supporting and generic contexts (Fleet, Clients, Access and Notifications) stay flat. Monitoring's layers:
+7. The core contexts, Monitoring (since MVP step 9) and Remediation (from phase 1 of the road to 1.0, when it gets its first code), are split into layers. The incident is an aggregate in Remediation's `Domain/`. Supporting and generic contexts (Fleet, Clients, Access and Notifications) stay flat. The layers, shown for Monitoring:
    - `MonitoringApi.php` (the public interface) and `Exception/` (the exceptions it throws) at the context's root.
    - `Domain/`: pure rules and values (for example `RunRule`, `Readings`, `DiskSizeRule`, `CheckResult`). It uses nothing outside `Domain/`, the context's `Exception/` and `shared/`, and no database, network, file or clock functions. The rule is about hidden inputs: `gmdate()` is allowed only with an explicit timestamp (not `null`, which means now), and `date()` never, because its output depends on the timezone setting. `tests/Monitoring/LayersTest.php` enforces this.
    - `Application/`: orchestration that uses the other layers (`DailyJob`).
@@ -259,7 +263,7 @@ Readings of unknown kinds are ignored, so newer clients keep working with older 
 
 The web app shows each enrolled instance's last heartbeat on the dashboard (`/admin`, every picked instance, read from SQLite only) and on its project's page: "No heartbeat yet", "On time" (at most 90 seconds old, 1.5 times the interval, the same factor as section 9.1 item 3) or "Late". This is display only; the heartbeat-age check that opens incidents (section 6.2) comes with Monitoring.
 
-**Temporary (MVP):** the "On time"/"Late" judgment is heartbeat-age logic, which belongs to Monitoring, and its fixed 90 seconds will be wrong once the heartbeat interval is configurable (section 7.3). It lives in Clients only for the MVP (`ClientsApi::LATE_AFTER_SECONDS`) and will be replaced by Monitoring's heartbeat-age check, based on each instance's interval. Clients will keep providing the last heartbeat time.
+**Temporary (MVP):** the "On time"/"Late" judgment is heartbeat-age logic, which belongs to Monitoring, and its fixed 90 seconds will be wrong once the heartbeat interval is configurable (section 7.3). It lives in Clients only for the MVP (`ClientsApi::LATE_AFTER_SECONDS`). Phase 1 of the road to 1.0 replaces it with Monitoring's heartbeat-age check (section 6.2), evaluated every minute by the tick (section 10.1) and based on each instance's interval. Clients will keep providing the last heartbeat time.
 
 ### 5.3 Commands
 
@@ -368,7 +372,7 @@ On every heartbeat, the client reads `/proc/self/mounts` and measures each mount
 
 ### 6.2 Server side (remote)
 
-- Heartbeat age per instance
+- Heartbeat age per instance, judged every minute by the tick (section 10.1), not inside heartbeat requests. A heartbeat older than 1.5 times the instance's interval fails the check; an enrolled instance that never sent one is not checked.
 - HTTP checks of public web apps
 - Remote TLS certificate expiry (checks the certificate actually served, catching a renewed certificate that was never reloaded; section 6.3.2)
 - Instance status from the Compute Engine API
@@ -387,7 +391,7 @@ The job belongs to Monitoring (`MonitoringApi::runDailyJob()`). The systemd time
 1. **One run at a time.** In one `BEGIN IMMEDIATE` transaction, a run starts only if no run is unfinished and younger than 15 minutes; otherwise it is refused ("The daily job is already running, started at ... UTC.").
 2. The Compute Engine calls happen outside any transaction. Then all results are written and the run is marked finished in one transaction.
 3. **Failures.** Any error the job can catch, during the checks or while storing the results, marks the run finished and failed, without results, and the caller logs it (`The daily job failed: <class>: <message>`): the CLI on stderr, which systemd sends to the journal, and "Run now" in PHP's error log. So the 15 minute rule in item 1 only covers runs that were killed (or whose failure could not be recorded, for example when the database itself fails).
-4. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Results are shown, not acted on: no incident, alert or notification yet.
+4. Each check result is pass, fail or not checked (the check could not run), with a fixed sentence for the administrator. Until phase 1 of the road to 1.0, results are shown, not acted on. From then on, a failed result opens an incident like any other failed check (section 7.4); "not checked" never does.
 5. **"Run now"** is a form on the dashboard and on each instance page posting to `POST /admin/daily-job` (session and CSRF, like every `/admin` form). It always runs the whole job, for every instance, inside the request, with the trigger `manual`, then redirects (`303`) back: to the instance page when the form's `instance_id` names a picked instance (the address is built from that ID, never taken from the request, so it cannot redirect elsewhere), otherwise to `/admin`. A run already in progress or a failed run also redirects; both pages say what happened in the same status line (`templates/daily-job-status.php`), and a failure's details go only to PHP's error log. **Known limit:** nginx's usual FastCGI timeout (`fastcgi_read_timeout`, 60 seconds) bounds the request, and each project costs one listing of up to 10 pages. With many projects the administrator could see a `504` while the run still finishes in php-fpm. The remote certificate check adds to this: a reachable hostname costs well under a second, but an unreachable one up to 10 seconds (two connections of at most 5 seconds each, plus name resolution, which the timeout does not bound), so a handful of unreachable hostnames can also lead to a `504`. If that happens, the fix is queued runs: the button records a request and a timer that runs every minute picks it up.
 6. **The dashboard** (`/admin`, read from SQLite only) has a "Daily job" section above the instances: the last run (never run, running since, did not finish, failed or finished with its duration), a note when no scheduled run exists yet, a warning when the timer's latest run started more than 25 hours ago (manual runs do not count) and the "Run now" button. The instances table has a "Disk size" column with each instance's result from the **last successful run**, its sentence behind an (i) icon (section 10.3); failures are also listed below the table. A "Certificates" column shows the worst of the instance's certificate results, local and served, from the same run (a failure over not checked over a pass), as "Pass (3)" with the number checked when all pass, "Fail" or "Not checked", and is empty for an instance without certificates; its (i) icon lists each certificate with its sentence, and failed certificates are listed below the table. When the last run did not succeed, the page says which run the results come from.
 
@@ -497,10 +501,14 @@ Coherence rules (warning only):
 
 ### 7.4 Incidents
 
-1. An incident opens when a check on an instance fails and no incident is already open for that instance.
-2. Everything that happens during the problem belongs to the incident: failed checks, actions taken, alerts sent and notifications shown.
-3. Safeguard counters that describe "one ongoing problem" (consecutive failures, escalation step) live in the incident.
-4. The incident resolves when the failing checks pass again. Resolving it also resolves its notification.
+Incidents belong to Remediation, where the incident is an aggregate (section 3.1 item 7).
+
+1. An incident is about **one check of one instance and one subject** (for example the remote certificate check of `example.com` on one instance), not about the instance as a whole. Several incidents can be open on one instance at once, for different checks or subjects, but at most one for the same instance, check and subject.
+2. An incident opens when a check fails and no incident is open for that instance, check and subject. Every check qualifies: heartbeat age and each of the daily job's checks (disk size, local and remote certificate expiry), and later checks as they are added. "Not checked" never opens an incident, and never counts as passing either.
+3. Everything that happens during the problem belongs to the incident: failed checks, actions taken, alerts sent and notifications shown.
+4. Safeguard counters that describe "one ongoing problem" (consecutive failures, escalation step) live in the incident.
+5. The incident resolves only after its check has passed continuously for a few minutes, **5 minutes (proposed)**, so a check that flaps does not open and resolve incidents over and over. A failure within that time keeps the incident open and starts the wait again. Resolving it also resolves its notification.
+6. Remediation learns about failures and passes through Monitoring's events, and Notifications learns about opened and resolved incidents through Remediation's events (section 2.1 rule 5).
 
 ## 8. GCP integration
 
@@ -592,7 +600,7 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 ### 9.2 Other tables
 
 - Projects and instances
-- Events: alerts, remediation actions, commands and their results
+- Records of what happened: alerts, remediation actions, commands and their results (not to be confused with domain events, which are stored in the outbox of section 2.1 rule 5)
 - Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at, failed)`, with `finished_at` NULL while running or after the run was killed and `failed` 1 for a run that hit an error, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at, subject)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. `subject` says what on the instance a result is about, for checks with more than one result per instance (a certificate's domain), and is empty otherwise (the disk size check). Every run is kept: about one row per instance per check (per certificate, for certificates) per day.
 - Hostnames for the remote certificate check (section 6.3.2): `monitoring_certificate_hostnames(id, instance_id, hostname, added_at)`, unique by instance and hostname. `instance_id` is Fleet's instance ID, with no foreign key.
 - SMTP settings (section 13.1): `notifications_smtp_settings(id, host, port, username, password_ciphertext, from_address, updated_at)`, at most one row (`id` is always 1); no row means email is not set up. `username` is empty for a server that needs no sign-in, and then `password_ciphertext` is NULL.
@@ -631,7 +639,9 @@ Password hashes (local login during setup) use Argon2id.
 For uPlot: one point `(start_at, value)` and one point `(end_at, value)` per run (one point when they are equal), a `null` value between two runs more than `max_gap_seconds` apart. The series is drawn with `uPlot.paths.stepped({align: 1})` and `spanGaps: false`. The last run ends at its `end_at`, not at the chart's right edge, so a client that stopped reporting shows as a line that stops. A run of one reading is a single point, drawn as a dot. `disk_used_bytes` runs keep their first value (the deadband), so the chart can differ from the real value by up to 0.1% of the filesystem's total, invisible at chart scale.
 
 Known limit: `max_gap_seconds` comes from today's fixed interval. Once the heartbeat interval is configurable (section 7.3), runs stored under an older interval may be judged with the newer one; that step decides how.
-- systemd timers for scheduled work (check evaluation, daily job)
+- systemd timers for scheduled work: the tick (below) and the daily job
+
+**The tick** is one command, run every minute by a systemd timer in production and by hand in development. It judges every enrolled instance's heartbeat age in Monitoring (section 6.2), replacing the temporary judgment in Clients (section 5.2), and then delivers pending events (section 2.1 rule 5). Delivering events, sending alerts included, happens only here: never inside a heartbeat or "Run now" request.
 
 The daily job's units live in `server/systemd/` until packaging installs them: `maguari-server-daily-job.service` (`Type=oneshot`, as `maguari-server`, running `maguari-server run-daily-job --scheduled`, with `ProtectSystem=strict` and only `/var/lib/maguari` writable) and `maguari-server-daily-job.timer` (`OnCalendar=*-*-* 06:00:00 UTC`, `Persistent=true`, so a job missed while the server instance was off runs when it is back). There is no timer in development: run the command by hand, or press "Run now".
 
@@ -706,9 +716,9 @@ Egress indicator:
 
 Alerts (emails) are not the only way problems surface. Notifications show them inside the web app.
 
-1. **Sources:** every incident creates a notification. System conditions also create notifications: the seed config file still present (section 11.5) and egress above 80% (section 10.3).
-2. **Dashboard (main screen):** a notification stays visible until the administrator hides it or its incident is resolved (or its system condition clears).
-3. **Logs screen:** every notification always appears there, hidden or not, resolved or not.
+1. **Sources:** every incident creates a notification (from phase 1 of the road to 1.0). System conditions also create notifications: the seed config file still present (section 11.5) and egress above 80% (section 10.3). System-condition notifications come in later phases.
+2. **Dashboard (main screen):** lists the notifications of open incidents. Each has a "Hide" button. A notification stays visible until the administrator hides it or its incident is resolved (or its system condition clears).
+3. **Logs screen:** a new screen listing every notification, hidden or not, resolved or not.
 
 ## 11. Security
 
@@ -887,6 +897,13 @@ Sending uses **PHPMailer** (`phpmailer/phpmailer` 7.x): it supports PHP 8.1 on i
 
 "(reply 535)" is the server's 4xx or 5xx reply code, shown only when there is one. Every failure also writes one line to PHP's error log, `The test email failed at <stage>: <first line of the reply>`; for AUTH only the code, because the server's text may repeat the username. The password is never in a sentence or a log line. A refused greeting has no code: PHPMailer sends `QUIT` inside its connect step. Success means the server accepted the message, not that it arrived.
 
+### 13.3 Alerts
+
+1. One alert email when an incident opens and one when it resolves (section 7.4).
+2. When many instances fail at once, one summary email replaces the individual ones. "Many" uses the same threshold as the mass-failure circuit breaker (section 7.3: 50% of instances, and at least 2).
+3. Alerts go to every administrator's email address. Choosing which alerts each administrator receives is a per-user preference (section 18 item 3), which comes in phase 5 of the road to 1.0.
+4. Alerts are sent only when the tick delivers events (section 10.1), so an SMTP server that is slow or down never slows a heartbeat or "Run now" request.
+
 ## 14. Infrastructure
 
 1. The server runs on a free tier e2-micro (regions `us-west1`, `us-central1` or `us-east1`) with a standard persistent disk up to 30 GB.
@@ -913,13 +930,13 @@ After the MVP, work follows the road to 1.0 (section 17).
 
 ## 16. Open questions
 
-1. Which phase of the road to 1.0 (section 17) brings Google sign-in? It was planned as one of the first steps after the MVP but is not yet placed in a phase.
+None at the moment. Closed: Google sign-in comes in phase 5 of the road to 1.0, as an item of section 18 (item 5).
 
 ## 17. Road to 1.0
 
 After the MVP, work continues in these phases, in this order. Each phase is planned in steps, one at a time, like the MVP.
 
-1. **Incidents and alerts:** incidents (section 7.4), notifications (section 10.4) and alert emails. Monitoring's real heartbeat-age check (section 6.2), based on each instance's interval, replaces the temporary 90-second judgment in Clients (section 5.2).
+1. **Incidents and alerts** (`docs/plans/phase-1.md`): domain events and the tick (sections 2.1 and 10.1), incidents (section 7.4), notifications (section 10.4) and alert emails (section 13.3). Monitoring's real heartbeat-age check (section 6.2), based on each instance's interval, replaces the temporary 90-second judgment in Clients (section 5.2).
 2. **More checks:** HTTP checks of public web apps from the server (section 6.2), plus service state, local HTTP and database checks on the client (section 6.1).
 3. **Remediation:** the escalation ladder (section 7.1) and its safeguards (section 7.2).
 4. **Packaging and deployment:** the `.deb` packages, tested locally in Ubuntu containers running systemd; the APT repository (section 12.3); then the real installation at `maguari.mancilla.com.br`. The egress indicator (section 10.3) comes with this phase, because it only means something on the real server.
@@ -943,6 +960,7 @@ Gaps the MVP leaves open on purpose that must be closed before 1.0.
    - Per-user settings cover preferences only (which alerts each administrator receives, timezone and display), never thresholds, so an instance's status is the same for every administrator.
    - Until then, every threshold is a single named constant, never a literal repeated in code.
 4. **The seed config file warning** (sections 10.3 and 11.5 item 3) must exist. Since MVP step 10 the seed file can contain the SMTP password (section 11.5.1), so a file left on the server after setup exposes a secret to anyone who can read it.
+5. **Google sign-in** (section 11.1) with the email allowlist, which disables the local password login once configured. Until then, the one administrator created by the setup wizard signs in with the local password.
 
 ## 19. Roadmap after 1.0
 
