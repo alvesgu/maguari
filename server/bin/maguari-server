@@ -11,11 +11,14 @@ use Maguari\Server\Access\Exception\SetupNotAllowed;
 use Maguari\Server\Access\SeedConfigReader;
 use Maguari\Server\Cli\DailyJobReport;
 use Maguari\Server\Cli\SeedConfigReport;
+use Maguari\Server\Cli\TickReport;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Gcp\AccessTokenSourceFactory;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\DatabaseUnavailable;
 use Maguari\Server\Kernel\Database\Migrator;
+use Maguari\Server\Kernel\Events\EventDelivery;
+use Maguari\Server\Kernel\FileLock;
 use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\SystemClock;
@@ -53,6 +56,10 @@ function maguariServerMain(array $args): int
         return refuseRoot(array_slice($args, 1)) ?? runDailyJobCommand(array_slice($args, 2));
     }
 
+    if ($command === 'tick') {
+        return refuseRoot(array_slice($args, 1)) ?? tickCommand(array_slice($args, 2));
+    }
+
     if ($command === 'create-secret-key') {
         return refuseRoot(array_slice($args, 1), 'the key file would end up owned by root') ?? createSecretKeyCommand();
     }
@@ -63,7 +70,8 @@ function maguariServerMain(array $args): int
         . "  maguari-server issue-setup-token --base-url=https://maguari.example.com\n"
         . "  maguari-server set-base-url --base-url=https://maguari.example.com\n"
         . "  maguari-server create-secret-key\n"
-        . "  maguari-server run-daily-job [--scheduled]\n");
+        . "  maguari-server run-daily-job [--scheduled]\n"
+        . "  maguari-server tick\n");
 
     return 1;
 }
@@ -268,6 +276,57 @@ function runDailyJobCommand(array $args): int
     }
 
     return 0;
+}
+
+/**
+ * The per-minute tick (design section 10.1), run by a systemd timer in
+ * production and by hand in development: delivers pending domain events and
+ * deletes old delivered ones. One tick at a time, through a lock file next to
+ * the database. Prints nothing when nothing happened. Exits with 1 when an
+ * event failed, so systemd shows the failure.
+ *
+ * @param string[] $args
+ */
+function tickCommand(array $args): int
+{
+    if ($args !== []) {
+        fwrite(STDERR, "Usage: maguari-server tick\n");
+
+        return 1;
+    }
+
+    $database = Database::fromEnvironment();
+
+    if (!(new Migrator($database))->isUpToDate()) {
+        fwrite(STDERR, "The database {$database->path()} is missing or not up to date. Run maguari-server migrate first.\n");
+
+        return 1;
+    }
+
+    $lock = FileLock::tryAcquire($database->path() . '.tick-lock');
+
+    if ($lock === null) {
+        fwrite(STDERR, "Another tick is still running, so this one did nothing.\n");
+
+        return 0;
+    }
+
+    $clock = new SystemClock();
+    // No context subscribes to events yet (phase 1, step 1.1).
+    $delivery = new EventDelivery($database, $clock, []);
+    $report = $delivery->deliver();
+    $delivery->pruneDelivered();
+    $lock->release();
+
+    foreach (TickReport::lines($report) as $line) {
+        echo $line . "\n";
+    }
+
+    foreach (TickReport::errorLines($report) as $line) {
+        fwrite(STDERR, $line . "\n");
+    }
+
+    return $report->failures === [] ? 0 : 1;
 }
 
 /**

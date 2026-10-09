@@ -1,0 +1,18 @@
+# Runs the Maguari tick (design section 10.1): judges heartbeat ages and
+# delivers pending events. Started every minute by maguari-server-tick.timer;
+# installed by packaging.
+[Unit]
+Description=Maguari tick
+Documentation=https://github.com/alvesgu/maguari
+
+[Service]
+Type=oneshot
+User=maguari-server
+Group=maguari-server
+ExecStart=/usr/bin/maguari-server tick
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+# The database, its WAL files and the tick's lock file. /etc/maguari stays readable.
+ReadWritePaths=/var/lib/maguari

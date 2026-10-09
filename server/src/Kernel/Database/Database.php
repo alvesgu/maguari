@@ -17,6 +17,8 @@ final class Database
 
     private ?PDO $pdo = null;
 
+    private bool $inTransaction = false;
+
     public function __construct(
         private readonly string $path = self::DEFAULT_PATH,
     ) {
@@ -124,6 +126,7 @@ final class Database
     {
         $pdo = $this->pdo();
         $pdo->exec('BEGIN IMMEDIATE');
+        $this->inTransaction = true;
 
         try {
             $result = $callback($pdo);
@@ -134,7 +137,18 @@ final class Database
             $pdo->exec('ROLLBACK');
 
             throw $exception;
+        } finally {
+            $this->inTransaction = false;
         }
+    }
+
+    /**
+     * Whether transaction() is running. PDO::inTransaction() cannot tell,
+     * because BEGIN IMMEDIATE is sent as plain SQL.
+     */
+    public function inTransaction(): bool
+    {
+        return $this->inTransaction;
     }
 
     /**

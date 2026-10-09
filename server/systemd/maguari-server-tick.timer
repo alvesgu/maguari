@@ -1,0 +1,13 @@
+# Starts the Maguari tick at the start of every minute (design section 10.1).
+# No Persistent=: a missed minute is not worth running late. systemd never
+# starts the service again while it is still running.
+[Unit]
+Description=Run the Maguari tick every minute
+Documentation=https://github.com/alvesgu/maguari
+
+[Timer]
+OnCalendar=*-*-* *:*:00 UTC
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

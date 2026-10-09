@@ -117,11 +117,16 @@ Fleet and Clients are separate because they change for different reasons: Fleet 
 
 #### Rules between contexts
 
-1. A context calls another context only through that context's public interface (one class per context, for example `Fleet\FleetApi`). Nothing else in a context is used from outside.
+1. A context calls another context only through that context's public interface (one class per context, for example `Fleet\FleetApi`), together with the exceptions it throws and the events it publishes (`<Context>/Event/`, rule 5). Nothing else in a context is used from outside.
 2. A context never reads or writes another context's tables.
 3. Contexts refer to each other's things by ID only (an incident stores an instance ID, not an instance object).
 4. The GCP word "instance" in API responses is translated into Fleet's own model inside the GCP adapter. No other context sees raw GCP API data.
 5. When one context must react to something that happened in another, it learns about it through a **domain event** stored in an **outbox**. The event is written in the same transaction as the change that caused it, so a change is never stored without its event or the other way round. Events are delivered later by the tick (section 10.1), never inside a heartbeat or "Run now" request, so a slow reaction (an SMTP server, for example) can never slow those requests down. Queries that need an answer now ("which instances are picked?") stay direct calls to public interfaces.
+   - The outbox is one table, `kernel_events` (section 9.2), written through `Kernel/Events/EventOutbox`, which refuses to write outside a transaction. An event's type is `<context>.<name>` (for example `monitoring.check_failed`) and its payload is JSON with IDs and values only (rule 3). Each context builds the events it publishes in its own `Event/` folder.
+   - `Kernel/Events/EventDelivery` delivers pending events in ID order. Each event gets its own `BEGIN IMMEDIATE` transaction, in which every subscriber that handles its type runs and the event is marked delivered, so its effects happen exactly once. Subscribers only write to the database (they never send email); events they write are delivered in the same tick, up to 1,000 events per tick.
+   - A subscriber that throws rolls its event back. The tick logs it and delivery stops at that event until the next tick, so the order holds. An event that failed on 3 ticks is skipped and kept (`failed_attempts` 3) for diagnosis, so one bug cannot stop every later event.
+   - Delivered events are deleted 7 days after delivery, by the tick.
+   - Kernel never names a context: subscribers are handed to `EventDelivery` where the app is wired (`bin/maguari-server`).
 
 #### Flow of one failing heartbeat
 
@@ -164,7 +169,7 @@ server/src/Fleet/            Supporting context
 server/src/Clients/          Supporting context
 server/src/Notifications/    Generic context
 server/src/Access/           Generic context
-server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption, HTTP client, TLS certificate reader)
+server/src/Kernel/           Truly generic helpers only (clock, IDs, secrets encryption, HTTP client, TLS certificate reader, file lock, event outbox and delivery)
 server/src/Http/             Slim wiring: routes, route groups, middleware, thin controllers
 server/src/Cli/              What bin/maguari-server prints, as small pure functions tested directly
 server/templates/            Plain PHP templates for the web app (no template engine)
@@ -172,13 +177,13 @@ server/public/               Web root: index.php and static assets (assets/magua
 ```
 
 1. PHP namespace root: `Maguari\Server\` mapped to `server/src/` (PSR-4).
-2. Each context keeps its database migrations inside its own folder, as numbered `.sql` files in `server/src/<Context>/Migrations/`. A runner in `Kernel/Database/` finds them by scanning those folders (so Kernel never names a context), applies pending ones and records them in `kernel_migrations`, the one table without a context prefix. Migrations run from the CLI (`maguari-server migrate`), never on a web request.
+2. Each context keeps its database migrations inside its own folder, as numbered `.sql` files in `server/src/<Context>/Migrations/`. A runner in `Kernel/Database/` finds them by scanning those folders (so Kernel never names a context), applies pending ones and records them in `kernel_migrations`. Kernel's own migrations (`Kernel/Migrations/`) are found the same way. Kernel's tables, `kernel_migrations` and the event outbox `kernel_events`, are the only ones without a context prefix. Migrations run from the CLI (`maguari-server migrate`), never on a web request.
 3. Table names are prefixed with the context name (for example `fleet_instances`, `monitoring_metric_runs`), so ownership is visible in SQLite.
 4. The web app has one stylesheet, `public/assets/maguari.css`: a simple dark theme (black and dark gray backgrounds, light text, `color-scheme: dark`, text contrast above WCAG AA), with no theme toggle. The content area is up to 96rem wide so the dashboard table fits on wide screens, paragraphs keep a readable line length (72 characters) and table cells never wrap: project IDs, zones and timestamps stay on one line, and a table wider than the window scrolls sideways. This styling is temporary and kept minimal until the redesign before 1.0 (section 18). It is an external file because the Content-Security-Policy blocks inline styles; templates never use `style` attributes or `<style>`. The one script, `public/assets/maguari.js`, is external for the same reason: templates never use `<script>` without `src` or event handler attributes. Every page loads both from the layout. nginx will serve `/assets/` directly (packaging).
 5. `Http/` stays thin: controllers translate HTTP into calls on a context's public interface and nothing more. `Cli/` is its counterpart for the command line: `bin/maguari-server` calls the contexts' public interfaces, and `Cli/` only turns their results into lines (for example `DailyJobReport`), so the output is tested without running the command.
 6. `Kernel/` is not a dumping ground. Anything with Maguari-specific meaning belongs in a context.
 7. The core contexts, Monitoring (since MVP step 9) and Remediation (from phase 1 of the road to 1.0, when it gets its first code), are split into layers. The incident is an aggregate in Remediation's `Domain/`. Supporting and generic contexts (Fleet, Clients, Access and Notifications) stay flat. The layers, shown for Monitoring:
-   - `MonitoringApi.php` (the public interface) and `Exception/` (the exceptions it throws) at the context's root.
+   - `MonitoringApi.php` (the public interface), `Exception/` (the exceptions it throws) and `Event/` (the events it publishes, section 2.1 rule 5) at the context's root.
    - `Domain/`: pure rules and values (for example `RunRule`, `Readings`, `DiskSizeRule`, `CheckResult`). It uses nothing outside `Domain/`, the context's `Exception/` and `shared/`, and no database, network, file or clock functions. The rule is about hidden inputs: `gmdate()` is allowed only with an explicit timestamp (not `null`, which means now), and `date()` never, because its output depends on the timezone setting. `tests/Monitoring/LayersTest.php` enforces this.
    - `Application/`: orchestration that uses the other layers (`DailyJob`).
    - `Infrastructure/`: SQL only (`MetricRunRepository`, `DailyJobRepository`).
@@ -507,7 +512,7 @@ Incidents belong to Remediation, where the incident is an aggregate (section 3.1
 2. An incident opens when a check fails and no incident is open for that instance, check and subject. Every check qualifies: heartbeat age and each of the daily job's checks (disk size, local and remote certificate expiry), and later checks as they are added. "Not checked" never opens an incident, and never counts as passing either.
 3. Everything that happens during the problem belongs to the incident: failed checks, actions taken, alerts sent and notifications shown.
 4. Safeguard counters that describe "one ongoing problem" (consecutive failures, escalation step) live in the incident.
-5. The incident resolves only after its check has passed continuously for a few minutes, **5 minutes (proposed)**, so a check that flaps does not open and resolve incidents over and over. A failure within that time keeps the incident open and starts the wait again. Resolving it also resolves its notification.
+5. The incident resolves only after its check has passed continuously for a few minutes, 5 minutes, so a check that flaps does not open and resolve incidents over and over. A failure within that time keeps the incident open and starts the wait again. Resolving it also resolves its notification.
 6. Remediation learns about failures and passes through Monitoring's events, and Notifications learns about opened and resolved incidents through Remediation's events (section 2.1 rule 5).
 
 ## 8. GCP integration
@@ -604,6 +609,7 @@ All timestamps are stored in UTC, as integer Unix seconds, in columns whose name
 - Daily job runs and check results (section 6.3): `monitoring_daily_job_runs(id, triggered_by, started_at, finished_at, failed)`, with `finished_at` NULL while running or after the run was killed and `failed` 1 for a run that hit an error, and `monitoring_check_results(id, job_run_id, instance_id, check_name, outcome, detail, checked_at, subject)`. `outcome` is `pass`, `fail` or `not_checked`; `detail` holds only Maguari's own sentences. `subject` says what on the instance a result is about, for checks with more than one result per instance (a certificate's domain), and is empty otherwise (the disk size check). Every run is kept: about one row per instance per check (per certificate, for certificates) per day.
 - Hostnames for the remote certificate check (section 6.3.2): `monitoring_certificate_hostnames(id, instance_id, hostname, added_at)`, unique by instance and hostname. `instance_id` is Fleet's instance ID, with no foreign key.
 - SMTP settings (section 13.1): `notifications_smtp_settings(id, host, port, username, password_ciphertext, from_address, updated_at)`, at most one row (`id` is always 1); no row means email is not set up. `username` is empty for a server that needs no sign-in, and then `password_ciphertext` is NULL.
+- The event outbox (section 2.1 rule 5): `kernel_events(id, type, payload, occurred_at, delivered_at, failed_attempts)`, with `delivered_at` NULL while pending. An index on `(delivered_at, id)` finds pending events in order and serves pruning.
 - Audit log: logins, configuration changes, manual actions
 - Settings and secrets
 
@@ -641,7 +647,12 @@ For uPlot: one point `(start_at, value)` and one point `(end_at, value)` per run
 Known limit: `max_gap_seconds` comes from today's fixed interval. Once the heartbeat interval is configurable (section 7.3), runs stored under an older interval may be judged with the newer one; that step decides how.
 - systemd timers for scheduled work: the tick (below) and the daily job
 
-**The tick** is one command, run every minute by a systemd timer in production and by hand in development. It judges every enrolled instance's heartbeat age in Monitoring (section 6.2), replacing the temporary judgment in Clients (section 5.2), and then delivers pending events (section 2.1 rule 5). Delivering events, sending alerts included, happens only here: never inside a heartbeat or "Run now" request.
+**The tick** is one command, `maguari-server tick` (section 12.2.1), run every minute by a systemd timer in production and by hand in development. It judges every enrolled instance's heartbeat age in Monitoring (section 6.2), replacing the temporary judgment in Clients (section 5.2), and then delivers pending events (section 2.1 rule 5). Delivering events, sending alerts included, happens only here: never inside a heartbeat or "Run now" request.
+
+1. **One tick at a time:** an exclusive, non-blocking `flock()` on a lock file next to the database (`maguari.sqlite.tick-lock`, mode 0600, `Kernel/FileLock`). A tick that finds it held does nothing and exits with 0. The lock goes away with the process, so a killed tick never blocks the next. systemd already never starts a running oneshot service twice; the lock covers manual runs.
+2. **Output:** nothing when nothing happened, so the journal stays quiet; otherwise one line per delivered event (`Cli/TickReport`). A failed event is one line on stderr naming the event, the exception and how many ticks it has failed on, and the tick exits with 1.
+3. **Units** in `server/systemd/` until packaging installs them: `maguari-server-tick.service` (`Type=oneshot`, as `maguari-server`, running `maguari-server tick`, with `ProtectSystem=strict` and only `/var/lib/maguari` writable) and `maguari-server-tick.timer` (`OnCalendar=*-*-* *:*:00 UTC`, `AccuracySec=1s`, without `Persistent=`: a missed minute is not worth running late).
+4. **Development:** run it by hand, or every minute in a spare terminal, from the repository root with the development environment loaded: `while true; do server/bin/maguari-server tick; sleep 60; done`. From phase 1 step 1.2 on, heartbeat ages are judged only while ticks run continuously (section 6.2), so keep the loop running.
 
 The daily job's units live in `server/systemd/` until packaging installs them: `maguari-server-daily-job.service` (`Type=oneshot`, as `maguari-server`, running `maguari-server run-daily-job --scheduled`, with `ProtectSystem=strict` and only `/var/lib/maguari` writable) and `maguari-server-daily-job.timer` (`OnCalendar=*-*-* 06:00:00 UTC`, `Persistent=true`, so a job missed while the server instance was off runs when it is back). There is no timer in development: run the command by hand, or press "Run now".
 
@@ -821,13 +832,14 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 | `issue-setup-token --base-url=<url>` | Migrates the database, issues a one-time setup token and prints the setup URL (section 11.2). Records `<url>` as the server's address (section 5.6). Refuses once an administrator exists. |
 | `set-base-url --base-url=<url>` | Sets or changes the server's address used in enroll commands (section 5.6): for installs set up before it was recorded, after a domain change and in development |
 | `create-secret-key` | Creates the secret key file if it does not exist, and never overwrites it (section 9.3) |
+| `tick` | The per-minute tick (section 10.1): delivers pending events and deletes old delivered ones. Prints nothing when nothing happened. Exit code 0, also when another tick is still running (one line on stderr); 1 when an event failed or the database is missing or not migrated. |
 | `run-daily-job [--scheduled]` | Runs the daily job (section 6.3) and prints one line per instance and check (and per certificate) plus a summary. The run is recorded as `manual` (for example when started over SSH) unless `--scheduled` is given, which only the systemd service passes. Exit code 0 whenever the job ran, whatever the checks found; 1 with one line on stderr when it could not run or failed (already running, database missing or not migrated, an error during the job). |
 
 `--base-url` follows one rule everywhere, shared with the client's `--server` (`shared/src/ServerUrl.php`): `https://`, or `http://` only when the host is exactly `localhost` (case-insensitive); no user, password, path, query or fragment.
 
 No command ends with a PHP stack trace. Any error is printed as one line on stderr with exit code 1. When the database cannot be created or opened, the line names its path and mentions `MAGUARI_DATABASE`.
 
-`migrate`, `issue-setup-token`, `set-base-url`, `create-secret-key` and `run-daily-job` refuse to run as root, so neither the database nor the key file is ever owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
+`migrate`, `issue-setup-token`, `set-base-url`, `create-secret-key`, `run-daily-job` and `tick` refuse to run as root, so neither the database nor the key file is ever owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
 
 ### 12.3 APT repository
 
@@ -936,7 +948,7 @@ None at the moment. Closed: Google sign-in comes in phase 5 of the road to 1.0, 
 
 After the MVP, work continues in these phases, in this order. Each phase is planned in steps, one at a time, like the MVP.
 
-1. **Incidents and alerts** (`docs/plans/phase-1.md`): domain events and the tick (sections 2.1 and 10.1), incidents (section 7.4), notifications (section 10.4) and alert emails (section 13.3). Monitoring's real heartbeat-age check (section 6.2), based on each instance's interval, replaces the temporary 90-second judgment in Clients (section 5.2).
+1. **Incidents and alerts** (`docs/plans/phase-1.md`), in five steps: 1.1 domain events and the tick (done), 1.2 check outcomes as events and Monitoring's heartbeat-age check, 1.3 incidents, 1.4 notifications and the Logs screen, 1.5 alert emails. It covers domain events and the tick (sections 2.1 and 10.1), incidents (section 7.4), notifications (section 10.4) and alert emails (section 13.3). Monitoring's real heartbeat-age check (section 6.2), based on each instance's interval, replaces the temporary 90-second judgment in Clients (section 5.2).
 2. **More checks:** HTTP checks of public web apps from the server (section 6.2), plus service state, local HTTP and database checks on the client (section 6.1).
 3. **Remediation:** the escalation ladder (section 7.1) and its safeguards (section 7.2).
 4. **Packaging and deployment:** the `.deb` packages, tested locally in Ubuntu containers running systemd; the APT repository (section 12.3); then the real installation at `maguari.mancilla.com.br`. The egress indicator (section 10.3) comes with this phase, because it only means something on the real server.

@@ -52,6 +52,7 @@ final class MigratorTest extends TestCase
             'Clients/0003_clients_nonces.sql',
             'Fleet/0001_fleet_projects.sql',
             'Fleet/0002_fleet_instances.sql',
+            'Kernel/0001_kernel_events.sql',
             'Monitoring/0001_monitoring_metric_runs.sql',
             'Monitoring/0002_monitoring_daily_job.sql',
             'Monitoring/0003_monitoring_daily_job_failed.sql',

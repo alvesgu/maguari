@@ -361,4 +361,105 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('', $stdout);
         $this->assertSame('The daily job is already running, started at ' . gmdate('Y-m-d H:i', $startedAt) . " UTC.\n", $stderr);
     }
+
+    public function testTickNeedsAMigratedDatabase(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame("The database {$path} is missing or not up to date. Run maguari-server migrate first.\n", $stderr);
+        $this->assertFileDoesNotExist($path);
+    }
+
+    public function testTickPrintsNothingWhenThereIsNothingToDo(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame('', $stdout);
+        $this->assertSame('', $stderr);
+        $this->assertSame(0600, fileperms($path . '.tick-lock') & 0777);
+    }
+
+    public function testTickDeliversPendingEventsAndPrunesOldOnes(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at, delivered_at) VALUES ('monitoring.check_passed', '{}', 1, 1)");
+        $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', '{\"instance_id\":1}', 2)");
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame("Delivered event 2 (monitoring.check_failed).\n", $stdout);
+        $this->assertSame('', $stderr);
+        $this->assertSame(
+            [['id' => 2, 'pending' => 0]],
+            $pdo->query('SELECT id, delivered_at IS NULL AS pending FROM kernel_events')->fetchAll(\PDO::FETCH_ASSOC),
+        );
+    }
+
+    public function testTickReportsAFailedEventOnStderr(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', 'not json', 2)");
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertStringStartsWith('The event 1 (monitoring.check_failed) failed: JsonException: ', $stderr);
+        $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
+    }
+
+    public function testASecondTickWhileOneIsRunningDoesNothing(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', '{}', 2)");
+        $lock = fopen($path . '.tick-lock', 'c');
+        $this->assertNotFalse($lock);
+        $this->assertTrue(flock($lock, LOCK_EX));
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        flock($lock, LOCK_UN);
+        fclose($lock);
+        $this->assertSame(0, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame("Another tick is still running, so this one did nothing.\n", $stderr);
+        $this->assertNull($pdo->query('SELECT delivered_at FROM kernel_events')->fetchColumn());
+    }
+
+    public function testTickRejectsArguments(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+
+        [$status, , $stderr] = $this->runCommand($path, ['tick', '--now']);
+
+        $this->assertSame(1, $status);
+        $this->assertSame("Usage: maguari-server tick\n", $stderr);
+    }
+
+    public function testTheTickTimerRunsTheTickEveryMinute(): void
+    {
+        $directory = dirname(__DIR__, 2) . '/systemd';
+        $service = (string) file_get_contents($directory . '/maguari-server-tick.service');
+        $timer = (string) file_get_contents($directory . '/maguari-server-tick.timer');
+
+        $this->assertStringContainsString("\nExecStart=/usr/bin/maguari-server tick\n", $service);
+        $this->assertStringContainsString("\nUser=maguari-server\n", $service);
+        $this->assertStringContainsString("\nOnCalendar=*-*-* *:*:00 UTC\n", $timer);
+        $this->assertDoesNotMatchRegularExpression('/^Persistent=/m', $timer);
+    }
 }

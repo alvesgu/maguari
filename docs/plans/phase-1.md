@@ -6,14 +6,14 @@ The MVP (design section 15) is finished. Phase 1 of the road to 1.0 (design sect
 
 Decisions already recorded in the design:
 
-- **7.4:** an incident is about one check of one instance and one subject; several can be open on one instance. A failed check opens one; "not checked" never does. Heartbeat age and the daily job's checks all qualify. It resolves only after its check has passed for 5 minutes **(proposed)**. Incidents belong to Remediation, which gets layers like Monitoring (3.1 item 7); the incident is an aggregate.
+- **7.4:** an incident is about one check of one instance and one subject; several can be open on one instance. A failed check opens one; "not checked" never does. Heartbeat age and the daily job's checks all qualify. It resolves only after its check has passed for 5 minutes. Incidents belong to Remediation, which gets layers like Monitoring (3.1 item 7); the incident is an aggregate.
 - **2.1 rule 5:** contexts react to each other through domain events in an outbox, written in the same transaction as the change and delivered later, never inside a heartbeat or "Run now" request.
 - **10.1:** one per-minute command, the tick, judges heartbeat ages in Monitoring (replacing `ClientsApi::LATE_AFTER_SECONDS`, 5.2) and then delivers pending events.
 - **13.3:** one alert email when an incident opens, one when it resolves, a summary email instead when many instances fail at once (the circuit breaker's 50%, at least 2), sent to every administrator.
 - **10.4:** the dashboard lists notifications of open incidents, each with "Hide"; a new Logs screen lists all of them.
 - **16, 18 item 5:** Google sign-in is a phase 5 item.
 
-This plan proposes how. Everything under "Proposals" needs approval before code is written; the questions are collected at the end.
+This plan proposes how. The proposals were approved with three fixes (A, B and C), recorded where they apply; the answers are at the end.
 
 ## Steps
 
@@ -27,7 +27,7 @@ Each step is one commit that passes both test suites, followed by a review befor
 | 1.4 | Notifications on the dashboard and the Logs screen | Notifications with "Hide"; `/admin/logs` |
 | 1.5 | Alert emails | Emails on open and resolve, the summary email, retries |
 
-Steps 1.2 to 1.5 each depend on the one before. Phase 1 has no production install (deployment is phase 4), so events written in step 1.2 before Remediation subscribes in step 1.3 are lost harmlessly; in development, run the daily job again after step 1.3.
+Steps 1.2 to 1.5 each depend on the one before. Phase 1 has no production install (deployment is phase 4). Events written in step 1.2 before Remediation subscribes in step 1.3 are delivered to nobody; Remediation's reconciliation (P7 item 6) opens the incidents they would have opened on the first tick after step 1.3. Running the daily job again would not, because unchanged results write no events.
 
 ## Proposals
 
@@ -67,7 +67,7 @@ kernel_events(id, type, payload, occurred_at, delivered_at, failed_attempts)
 
 `maguari-server tick`, refusing root like the other database commands (design 12.2.1).
 
-1. **Order:** (a) Monitoring judges heartbeat ages (from step 1.2); (b) events are delivered; (c) Remediation resolves incidents whose 5 minutes have passed (from step 1.3); (d) events are delivered again; (e) Notifications sends pending alerts (from step 1.5).
+1. **Order:** (a) Monitoring judges heartbeat ages (from step 1.2); (b) events are delivered; (c) Remediation resolves incidents whose 5 minutes have passed and, once a day, reconciles (P7 item 6) (from step 1.3); (d) events are delivered again; (e) Notifications sends pending alerts (from step 1.5).
 2. **One tick at a time:** an exclusive `flock()` on a lock file next to the database (`maguari.sqlite.tick-lock`). A second tick that finds it held exits with 0 and one line on stderr. The lock goes away with the process, so a killed tick blocks nothing, unlike a database row. systemd already never starts a running oneshot service twice; the lock covers manual runs.
 3. **Output:** nothing when nothing happened, otherwise one line per delivered event, opened or resolved incident and sent alert, so the journal stays quiet. Errors as one line on stderr with exit code 1, never a stack trace.
 4. **Units** in `server/systemd/` until packaging: `maguari-server-tick.service` (as the daily job's: `Type=oneshot`, as `maguari-server`, `ProtectSystem=strict`, only `/var/lib/maguari` writable) and `maguari-server-tick.timer` (`OnCalendar=*-*-* *:*:00 UTC`, `AccuracySec=1s`, no `Persistent=`: a missed minute is not worth running late).
@@ -98,6 +98,7 @@ Proposed: `ClientsApi::recordHeartbeat()` calls `MonitoringApi::recordHeartbeat(
 2. The daily job writes them in the transaction that stores its results; the tick writes heartbeat-age ones in its own transaction. Neither delivers anything.
 3. The payload is the instance ID, the check name, the subject, the time and the result's sentence (for the alert email, P9 item 4).
 4. **Subjects that disappear.** A hostname removed from an instance, or a certificate no longer reported, would leave its incident open forever, because nothing ever passes again. When a successful daily run has no result for a subject that has a state row, Monitoring deletes the row and writes `monitoring.check_withdrawn`. Removing a hostname does the same at once. Remediation then closes the incident as withdrawn (P7 item 4).
+5. **Fix B: only while the instance is reporting.** A certificate stops being reported both when it was removed and when the instance went silent. So a missing result withdraws its subject only while the instance's heartbeat-age check passes. When the instance is silent (heartbeat age failing, or no heartbeat at all), its missing results count as not checked: the state row and any incident stay. Removing a hostname is an administrator's decision and withdraws at once in either case.
 
 *Alternative:* an event for every result, including every heartbeat-age pass each minute. Simpler and self-correcting, but about 14,000 events a day for 10 instances, almost all saying nothing new.
 
@@ -125,6 +126,10 @@ remediation_incidents(id, instance_id, check_name, subject, opened_at, passing_s
 3. `check_passed` sets `passing_since` on the open incident (if any). Step (c) of the tick resolves incidents whose `passing_since` is at least 5 minutes old, with `resolution` `passed`, and writes `remediation.incident_resolved`. A daily check that passes on "Run now" therefore resolves on one of the next ticks, without another run.
 4. `check_withdrawn` resolves the open incident at once with `resolution` `withdrawn` and writes `remediation.incident_resolved` with that reason.
 5. The instance page lists the instance's open incidents and the last 20 resolved ones, with the check, subject, times and resolution. The dashboard gets nothing yet: its notifications come in step 1.4.
+6. **Fix A: daily reconciliation.** Events only on changes means an event lost to a bug (P2 item 3) or written before Remediation subscribed would leave Remediation and Monitoring disagreeing for good. Once a day, Remediation compares its open incidents with Monitoring's current failing states, read through a new `MonitoringApi::failingChecks()` (instance, check, subject and since):
+   - A failing state with no open incident opens one, as `check_failed` would, and writes `remediation.incident_opened`.
+   - An open incident whose key Monitoring does not report as failing is stale. If Monitoring reports it passing for at least 5 minutes, or not at all, it resolves with `resolution` `reconciled` and writes `remediation.incident_resolved`; if passing for less, it gets `passing_since` and resolves through the normal rule.
+   - It runs as step (f) of the tick when the last reconciliation is more than 24 hours old (stored in `remediation_reconciliations(id, ran_at, opened, resolved)`), so the first tick after step 1.3 runs it at once. Each incident it opens or resolves prints a line: in normal operation it should find nothing, so anything it finds points at a lost event.
 
 Not in phase 1: consecutive-failure counters, the escalation step and anything else of phase 3. The table gets those columns then.
 
@@ -163,9 +168,9 @@ notifications_alerts(id, notification_id, kind, created_at, sent_at, attempts, l
 
 - 1.1: section 2.1 rule 1 (`Event/` is public), 3.1 items 2 and 7 (`kernel_events`, `Event/`), 9.2 (the outbox table), 10.1 (the tick's units), 12.2.1 (`tick`).
 - 1.2: sections 5.2 (the temporary note removed), 6.2 (P5), 6.3 (outcome changes), 9.2 (the two new tables).
-- 1.3: sections 3.1 item 7 (Remediation's layers), 7.4 (withdrawn incidents), 9.2.
+- 1.3: sections 3.1 item 7 (Remediation's layers), 7.4 (withdrawn incidents, reconciliation), 9.2.
 - 1.4: sections 10.2 (the new routes), 10.4, 9.2.
-- 1.5: sections 13.3, 9.2; the 5 minutes lose **(proposed)** if approved.
+- 1.5: sections 13.3, 9.2.
 - Section 17: phase 1 lists its steps as they are done.
 
 ## Not in phase 1
@@ -178,8 +183,8 @@ notifications_alerts(id, notification_id, kind, created_at, sent_at, attempts, l
 ## Tests (per step)
 
 1. **1.1:** `EventOutbox` refuses to write outside a transaction; delivery in `id` order, one transaction per event, rolled back on a failing subscriber; events written by a subscriber are delivered in the same tick; the 1,000 limit; skipping after 3 failed ticks; pruning after 7 days; the tick lock (a second tick exits 0); `tick` refuses root and prints nothing when idle.
-2. **1.2:** `HeartbeatAgeRule` at the limit and one second past it; no heartbeat is not checked; the downtime rule (a tick after a 4-minute gap judges nothing late); outcome changes write exactly one event and repeats write none; "not checked" writes none; withdrawn subjects (removed hostname, certificate gone from a successful run, not from a failed run); the dashboard and project page show the same states as before.
-3. **1.3:** the aggregate's rules in `Domain/` tests; the partial unique index; open, fail again, pass, fail within 5 minutes, resolve at exactly 5 minutes; withdrawn; two incidents on one instance; `LayersTest` for Remediation.
+2. **1.2:** `HeartbeatAgeRule` at the limit and one second past it; no heartbeat is not checked; the downtime rule (a tick after a 4-minute gap judges nothing late); outcome changes write exactly one event and repeats write none; "not checked" writes none; withdrawn subjects (removed hostname, certificate gone from a successful run, not from a failed run, not while the instance is silent); the dashboard and project page show the same states as before.
+3. **1.3:** the aggregate's rules in `Domain/` tests; the partial unique index; open, fail again, pass, fail within 5 minutes, resolve at exactly 5 minutes; withdrawn; two incidents on one instance; reconciliation (opens a missing incident, resolves a stale one, waits for a recent pass, runs once a day and at once when it never ran); `LayersTest` for Remediation.
 4. **1.4:** notifications follow incidents; Hide is per administrator, needs CSRF and `POST`; hidden and resolved ones leave the dashboard but stay on Logs; paging.
 5. **1.5:** one alert per open and resolve; recipients; the summary rule at 49%, 50% and with 1 instance; retries up to 60 minutes; not set up; the 40-second limit with a slow fake mailer; no sending inside a heartbeat or "Run now" request (the fake mailer is never called there).
 
@@ -197,18 +202,68 @@ From the repository root:
 scripts/test-ubuntu-22.04.sh
 ```
 
-Each step's manual check follows the pattern of earlier steps: stop the development client for two minutes and run the tick to see the heartbeat-age failure, its incident, its notification and its email (with a local SMTP catcher), then start the client again and see it resolve 5 minutes later.
+Each step's manual check follows the pattern of earlier steps: stop the development client for two minutes and watch the heartbeat-age failure, its incident, its notification and its email (with a local SMTP catcher), then start the client again and see it resolve 5 minutes later.
 
-## Questions
+**Fix C: the tick loop must run continuously** during every manual check from step 1.2 on (the loop in P3 item 5). Because of the downtime rule (P5 item 3), a tick run by hand after a gap of more than 3 minutes treats the ticks as resuming and judges no heartbeat late, so occasional manual ticks never show a failure. Each step's manual check says so.
 
-1. **The outbox in Kernel** (P1), with `kernel_events` as the second unprefixed table, or one outbox per context?
-2. **Outcome changes only** (P6), with `check_withdrawn` for subjects that disappear, or an event for every result?
-3. **Monitoring records heartbeat times itself** (P4), or the tick passes them from Clients?
-4. **Hide per administrator** (P8 item 3), or global?
-5. **Alert retries:** 60 minutes, then given up; nothing sent retroactively when SMTP is set up later (P9 item 6)?
-6. **The summary's known limit** (P9): accept it, or hold opening alerts one tick?
-7. **5 minutes** to resolve (design 7.4 item 5): confirm, so it loses **(proposed)**?
+## Answers
+
+1. **Outbox:** in Kernel, `kernel_events` (P1). Approved.
+2. **Events:** outcome changes only (P6). Approved, with fixes A (daily reconciliation, P7 item 6) and B (withdraw only while the instance is reporting, P6 item 5).
+3. **Heartbeat times:** Monitoring records them itself (P4). Approved.
+4. **Hide:** per administrator (P8 item 3).
+5. **Alert retries:** 60 minutes, then given up; nothing sent retroactively (P9 item 6).
+6. **The summary's known limit:** accepted (P9).
+7. **5 minutes** to resolve: confirmed, and no longer marked proposed in design section 7.4.
+8. **Fix C:** every manual check from step 1.2 on runs the tick loop continuously (Verification).
+
+## Found while implementing
+
+### Step 1.1
+
+- `PDO::inTransaction()` does not see transactions opened with `exec('BEGIN IMMEDIATE')`, so `EventOutbox` could not tell whether it was inside one. `Database` now tracks it itself (`Database::inTransaction()`).
+- A failing event stops delivery only while it can still be retried. On its third failure it is skipped and delivery goes on in the same tick, so `DeliveryReport` holds a list of failures, of which only the last can be unskipped.
+- The tick exits with 1 when an event failed, so systemd marks the run failed and the failure is visible with `systemctl status`.
+- Delivery marks the event delivered before running its subscribers, inside the same transaction, so a second delivery of the same event (which the lock already prevents) would change nothing.
+
+#### Manual check (step 1.1)
+
+In each terminal, from the repository root:
+
+```
+source scripts/dev-env.sh
+```
+
+Apply the new migration:
+
+```
+server/bin/maguari-server migrate
+```
+
+With nothing pending, the tick prints nothing:
+
+```
+server/bin/maguari-server tick
+```
+
+Write an event by hand, as a context will from step 1.2:
+
+```
+sqlite3 server/var/dev.sqlite "INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', '{\"instance_id\":1}', strftime('%s','now'))"
+```
+
+The next tick delivers it (to nobody yet) and prints `Delivered event <id> (monitoring.check_failed).`:
+
+```
+server/bin/maguari-server tick
+```
+
+Start the tick loop, which every later step's manual check needs running (Fix C):
+
+```
+while true; do server/bin/maguari-server tick; sleep 60; done
+```
 
 ## Status
 
-Planned, waiting for approval.
+Approved. Step 1.1 implemented, waiting for review.
