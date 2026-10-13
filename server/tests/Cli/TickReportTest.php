@@ -8,6 +8,9 @@ use Maguari\Server\Cli\TickReport;
 use Maguari\Server\Kernel\Events\DeliveredEvent;
 use Maguari\Server\Kernel\Events\DeliveryReport;
 use Maguari\Server\Kernel\Events\FailedDelivery;
+use Maguari\Server\Remediation\Domain\Incident;
+use Maguari\Server\Remediation\Domain\IncidentKey;
+use Maguari\Server\Remediation\Domain\Reconciliation;
 use PHPUnit\Framework\TestCase;
 
 final class TickReportTest extends TestCase
@@ -59,5 +62,21 @@ final class TickReportTest extends TestCase
             'The event 9 (monitoring.check_passed) failed: LogicException: Another bug. '
                 . 'Delivery stops here until the next tick (failed 1 of 3 times before it is skipped).',
         ], TickReport::errorLines($report));
+    }
+
+    public function testOneLinePerIncidentTheTickResolvedOrReconciled(): void
+    {
+        $resolved = Incident::open(new IncidentKey(1, 'heartbeat_age', ''), 100)->withId(3)->passed(200)->resolveIfDue(500);
+        $opened = Incident::open(new IncidentKey(1, 'local_certificate', 'example.com'), 100)->withId(4);
+        $stale = Incident::open(new IncidentKey(9, 'disk_size', ''), 100)->withId(2)->reconcile(null, 600);
+        $this->assertNotNull($resolved);
+
+        $this->assertSame([
+            'Resolved incident 3 on my-project/us-east1-b/web (heartbeat_age): it passed for 5 minutes.',
+            'Reconciliation opened incident 4 on my-project/us-east1-b/web (local_certificate example.com): its check is failing but no incident was open.',
+            'Reconciliation resolved incident 2 on instance 9 (disk_size): its check is no longer failing.',
+        ], TickReport::incidentLines([$resolved], new Reconciliation(600, [$opened], [$stale]), [1 => 'my-project/us-east1-b/web']));
+        $this->assertSame([], TickReport::incidentLines([], null, []));
+        $this->assertSame([], TickReport::incidentLines([], new Reconciliation(600, [], []), []));
     }
 }

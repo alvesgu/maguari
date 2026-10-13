@@ -15,7 +15,10 @@ use Maguari\Server\Monitoring\Application\DailyJob;
 use Maguari\Server\Monitoring\Application\HeartbeatAges;
 use Maguari\Server\Monitoring\Application\ServedCertificates;
 use Maguari\Server\Monitoring\Domain\CertificateHostname;
+use Maguari\Server\Monitoring\Domain\CheckLabels;
+use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\CheckResult;
+use Maguari\Server\Monitoring\Domain\CheckState;
 use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Domain\HeartbeatStatus;
@@ -62,6 +65,7 @@ final class MonitoringApi
     private readonly CertificateHostnames $certificateHostnames;
     private readonly HeartbeatRepository $heartbeats;
     private readonly HeartbeatAges $heartbeatAges;
+    private readonly CheckStateRepository $checkStates;
 
     /**
      * @param TlsCertificateReader $tls reads the certificates hostnames serve
@@ -75,7 +79,8 @@ final class MonitoringApi
         $this->runs = new MetricRunRepository($database);
         $this->runRule = new RunRule(self::EXPECTED_INTERVAL_SECONDS);
         $hostnames = new CertificateHostnameRepository($database);
-        $checkStates = new CheckStates(new CheckStateRepository($database), new EventOutbox($database));
+        $this->checkStates = new CheckStateRepository($database);
+        $checkStates = new CheckStates($this->checkStates, new EventOutbox($database));
         $this->dailyJob = new DailyJob($database, $clock, $fleet, $this->runs, $hostnames, new ServedCertificates($tls), $checkStates);
         $this->certificateHostnames = new CertificateHostnames($database, $clock, $hostnames, $this->runs, $checkStates);
         $this->heartbeats = new HeartbeatRepository($database);
@@ -129,6 +134,37 @@ final class MonitoringApi
     public function heartbeatStatuses(array $instanceIds): array
     {
         return $this->heartbeatAges->statuses($instanceIds);
+    }
+
+    /**
+     * Every check currently failing, with the time it started failing, for
+     * Remediation's daily reconciliation (design section 7.4). Reads only
+     * SQLite, so it can run inside the caller's transaction.
+     *
+     * @return list<CheckState> in instance, check name and subject order
+     */
+    public function failingChecks(): array
+    {
+        return $this->checkStates->failing();
+    }
+
+    /**
+     * When the check started passing, or null when it is failing or has no
+     * outcome (never checked, only "not checked", or withdrawn).
+     */
+    public function passingSince(int $instanceId, string $checkName, string $subject): ?int
+    {
+        $state = $this->checkStates->find($instanceId, $checkName, $subject);
+
+        return $state?->outcome === CheckOutcome::Pass ? $state->since : null;
+    }
+
+    /**
+     * A check's name for people, for example "Disk size".
+     */
+    public static function checkLabel(string $checkName): string
+    {
+        return CheckLabels::of($checkName);
     }
 
     /**

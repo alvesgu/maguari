@@ -6,6 +6,9 @@ namespace Maguari\Server\Cli;
 
 use Maguari\Server\Kernel\Events\DeliveryReport;
 use Maguari\Server\Kernel\Events\EventDelivery;
+use Maguari\Server\Remediation\Domain\Incident;
+use Maguari\Server\Remediation\Domain\Reconciliation;
+use Maguari\Server\Remediation\Domain\ResolutionRule;
 
 /**
  * What `maguari-server tick` prints (design section 12.2.1). Nothing when
@@ -33,6 +36,51 @@ final class TickReport
         }
 
         return $lines;
+    }
+
+    /**
+     * One line per incident the tick resolved, and per incident the daily
+     * reconciliation opened or resolved. Incidents opened from events show as
+     * their delivered remediation.incident_opened event.
+     *
+     * @param list<Incident> $resolved
+     * @param array<int, string> $names instance names by ID; an ID is shown
+     *        for an instance that is not picked
+     * @return list<string> without line endings
+     */
+    public static function incidentLines(array $resolved, ?Reconciliation $reconciliation, array $names): array
+    {
+        $lines = [];
+
+        foreach ($resolved as $incident) {
+            $lines[] = sprintf('Resolved incident %s: it passed for %d minutes.', self::incident($incident, $names), intdiv(ResolutionRule::RESOLVE_AFTER_SECONDS, 60));
+        }
+
+        foreach ($reconciliation->opened ?? [] as $incident) {
+            $lines[] = sprintf('Reconciliation opened incident %s: its check is failing but no incident was open.', self::incident($incident, $names));
+        }
+
+        foreach ($reconciliation->resolved ?? [] as $incident) {
+            $lines[] = sprintf('Reconciliation resolved incident %s: its check is no longer failing.', self::incident($incident, $names));
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param array<int, string> $names
+     */
+    private static function incident(Incident $incident, array $names): string
+    {
+        $key = $incident->key;
+
+        return sprintf(
+            '%d on %s (%s%s)',
+            (int) $incident->id,
+            $names[$key->instanceId] ?? 'instance ' . $key->instanceId,
+            $key->checkName,
+            $key->subject === '' ? '' : ' ' . $key->subject,
+        );
     }
 
     /**

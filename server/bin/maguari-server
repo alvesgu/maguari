@@ -27,6 +27,7 @@ use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Remediation\RemediationApi;
 use Maguari\Shared\ServerUrl;
 
 /**
@@ -298,7 +299,8 @@ function runDailyJobCommand(array $args): int
 /**
  * The per-minute tick (design section 10.1), run by a systemd timer in
  * production and by hand in development: judges heartbeat ages, delivers
- * pending domain events and deletes old delivered ones. One tick at a time, through a lock file next to
+ * pending domain events, resolves incidents (and once a day reconciles
+ * them), delivers again and deletes old delivered events. One tick at a time, through a lock file next to
  * the database. Prints nothing when nothing happened. Exits with 1 when an
  * event failed, so systemd shows the failure.
  *
@@ -332,23 +334,53 @@ function tickCommand(array $args): int
     $http = new StreamHttpClient();
     $fleet = new FleetApi($database, $clock, AccessTokenSourceFactory::fromEnvironment($http, $clock), $http);
     $monitoring = new MonitoringApi($database, $clock, $fleet, new StreamTlsCertificateReader());
+    $remediation = new RemediationApi($database, $clock, $monitoring);
+    $delivery = new EventDelivery($database, $clock, $remediation->subscribers());
     // (a) Heartbeat ages, whose outcome changes are delivered right after.
     $monitoring->judgeHeartbeatAges();
-    // (b) No context subscribes to events yet (phase 1, step 1.2).
-    $delivery = new EventDelivery($database, $clock, []);
-    $report = $delivery->deliver();
+    // (b) Remediation opens and updates incidents from Monitoring's events.
+    $reports = [$delivery->deliver()];
+    // (c) Incidents whose check passed long enough, and the daily reconciliation.
+    $resolved = $remediation->resolveDue();
+    $reconciliation = $remediation->reconcileIfDue();
+
+    // (d) Their events, unless delivery stopped at a failing event, which
+    // waits for the next tick.
+    $delivered = count($reports[0]->delivered) + count($reports[0]->failures);
+
+    if (!$reports[0]->stopped() && $delivered < EventDelivery::MAX_EVENTS_PER_DELIVERY) {
+        $reports[] = $delivery->deliver(EventDelivery::MAX_EVENTS_PER_DELIVERY - $delivered);
+    }
+
     $delivery->pruneDelivered();
     $lock->release();
 
-    foreach (TickReport::lines($report) as $line) {
+    $names = [];
+
+    foreach ($fleet->pickedInstances() as $instance) {
+        $names[$instance->id] = "{$instance->gcpProjectId}/{$instance->zone}/{$instance->name}";
+    }
+
+    $lines = [
+        ...TickReport::lines($reports[0]),
+        ...TickReport::incidentLines($resolved, $reconciliation, $names),
+        ...(isset($reports[1]) ? TickReport::lines($reports[1]) : []),
+    ];
+    $failed = false;
+
+    foreach ($lines as $line) {
         echo $line . "\n";
     }
 
-    foreach (TickReport::errorLines($report) as $line) {
-        fwrite(STDERR, $line . "\n");
+    foreach ($reports as $report) {
+        foreach (TickReport::errorLines($report) as $line) {
+            fwrite(STDERR, $line . "\n");
+        }
+
+        $failed = $failed || $report->failures !== [];
     }
 
-    return $report->failures === [] ? 0 : 1;
+    return $failed ? 1 : 0;
 }
 
 /**

@@ -47,6 +47,20 @@ final class CheckStateRepository
         return array_map(self::state(...), $statement->fetchAll());
     }
 
+    /**
+     * @return list<CheckState> every failing outcome, in instance, check name and subject order
+     */
+    public function failing(): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT instance_id, check_name, subject, outcome, since FROM monitoring_check_states '
+                . 'WHERE outcome = ? ORDER BY instance_id, check_name, subject',
+        );
+        $statement->execute([CheckOutcome::Fail->value]);
+
+        return array_map(self::state(...), $statement->fetchAll());
+    }
+
     public function save(CheckState $state): void
     {
         $this->database->pdo()->prepare(

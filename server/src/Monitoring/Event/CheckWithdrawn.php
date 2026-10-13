@@ -28,12 +28,12 @@ final class CheckWithdrawn
      */
     public static function fromEvent(Event $event): self
     {
-        $payload = EventPayload::of($event, self::TYPE);
+        $event->expectType(self::TYPE);
 
         return new self(
-            EventPayload::int($payload, 'instance_id'),
-            EventPayload::string($payload, 'check_name'),
-            EventPayload::string($payload, 'subject'),
+            $event->int('instance_id'),
+            $event->string('check_name'),
+            $event->string('subject'),
             $event->occurredAt,
         );
     }

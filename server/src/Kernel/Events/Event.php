@@ -27,4 +27,36 @@ final class Event
             throw new \InvalidArgumentException(sprintf('Invalid event type "%s".', $type));
         }
     }
+
+    /**
+     * Refuses an event of another type, for classes that read one type back.
+     *
+     * @throws \UnexpectedValueException
+     */
+    public function expectType(string $type): void
+    {
+        if ($this->type !== $type) {
+            throw new \UnexpectedValueException(sprintf('Expected a %s event, got %s.', $type, $this->type));
+        }
+    }
+
+    /**
+     * @throws \UnexpectedValueException when the payload has no such integer
+     */
+    public function int(string $key): int
+    {
+        $value = $this->payload[$key] ?? null;
+
+        return is_int($value) ? $value : throw new \UnexpectedValueException("The event's {$key} is not an integer.");
+    }
+
+    /**
+     * @throws \UnexpectedValueException when the payload has no such string
+     */
+    public function string(string $key): string
+    {
+        $value = $this->payload[$key] ?? null;
+
+        return is_string($value) ? $value : throw new \UnexpectedValueException("The event's {$key} is not a string.");
+    }
 }

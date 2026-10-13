@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Tests\Http;
 
+use Maguari\Server\Kernel\Events\EventDelivery;
+use Maguari\Server\Kernel\Events\EventOutbox;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
+use Maguari\Server\Monitoring\Event\CheckFailed;
+use Maguari\Server\Monitoring\Event\CheckPassed;
+use Maguari\Server\Monitoring\Event\CheckWithdrawn;
 use Maguari\Server\Tests\Support\Browser;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
@@ -75,6 +80,8 @@ final class InstancePageFlowTest extends TestCase
         $this->assertStringContainsString('<h1>web</h1>', $body);
         $this->assertStringContainsString('<a href="/admin/projects/1">my-project</a> · Zone us-east1-b', $body);
         $this->assertStringContainsString('No results yet: the daily job has not finished a run.', $body);
+        $this->assertStringContainsString('<p>No open incidents.</p>', $body);
+        $this->assertStringNotContainsString('Resolved incidents', $body);
         $this->assertStringContainsString('<p>The daily job has never run.</p>', $body);
         $this->assertStringContainsString('<form method="post" action="/admin/daily-job">', $body);
         $this->assertStringContainsString('<input type="hidden" name="instance_id" value="' . $this->instanceId . '">', $body);
@@ -279,5 +286,30 @@ final class InstancePageFlowTest extends TestCase
 
         $this->assertStringContainsString('<tr><td><a href="' . $this->page() . '">web</a></td>', $body);
         $this->assertStringContainsString('<tr><td>other</td>', $body);
+    }
+
+    public function testListsOpenAndResolvedIncidents(): void
+    {
+        $outbox = new EventOutbox($this->environment->database);
+        $clock = $this->environment->clock;
+        $publish = fn (object $event) => $this->environment->database->transaction(fn () => $outbox->record($event->toEvent()));
+        $openedAt = $clock->now();
+        $publish(new CheckFailed($this->instanceId, 'remote_certificate', 'www.example.com', $openedAt, 'Expired.'));
+        $publish(new CheckFailed($this->instanceId, 'heartbeat_age', '', $openedAt, 'Late.'));
+        $clock->advance(60);
+        $publish(new CheckPassed($this->instanceId, 'heartbeat_age', '', $clock->now(), 'On time.'));
+        $publish(new CheckFailed($this->instanceId, 'disk_size', '', $clock->now(), 'Grown.'));
+        $publish(new CheckWithdrawn($this->instanceId, 'disk_size', '', $clock->now()));
+        (new EventDelivery($this->environment->database, $clock, $this->environment->remediation->subscribers()))->deliver();
+        $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
+
+        $body = (string) $this->signedInBrowser()->get($this->page())->getBody();
+
+        $this->assertStringContainsString('<tr><td>Heartbeat age</td><td></td><td>' . $utc($openedAt) . '</td><td>Passing since ' . $utc($openedAt + 60) . '</td></tr>', $body);
+        $this->assertStringContainsString('<tr><td>Served certificate</td><td>www.example.com</td><td>' . $utc($openedAt) . '</td><td>Failing</td></tr>', $body);
+        $this->assertLessThan(strpos($body, '<td>Served certificate</td>'), strpos($body, '<td>Heartbeat age</td>'), 'Newest first.');
+        $this->assertStringContainsString('<h3>Resolved incidents</h3>', $body);
+        $this->assertStringContainsString('<tr><td>Disk size</td><td></td><td>' . $utc($openedAt + 60) . '</td><td>' . $utc($openedAt + 60) . '</td><td>Withdrawn<span class="info">', $body);
+        $this->assertStringNotContainsString('<p>No open incidents.</p>', $body);
     }
 }

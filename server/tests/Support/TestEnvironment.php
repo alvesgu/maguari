@@ -17,6 +17,7 @@ use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Notifications\NotificationsApi;
+use Maguari\Server\Remediation\RemediationApi;
 use Slim\App as SlimApp;
 
 /**
@@ -39,6 +40,7 @@ final class TestEnvironment
     public readonly FleetApi $fleet;
     public readonly FakeTlsCertificateReader $tls;
     public readonly MonitoringApi $monitoring;
+    public readonly RemediationApi $remediation;
     public readonly ClientsApi $clients;
     public readonly FakeMailer $mailer;
     public readonly NotificationsApi $notifications;
@@ -65,6 +67,7 @@ final class TestEnvironment
         $this->fleet = new FleetApi($this->database, $this->clock, $this->tokens, $this->http);
         $this->tls = new FakeTlsCertificateReader();
         $this->monitoring = new MonitoringApi($this->database, $this->clock, $this->fleet, $this->tls);
+        $this->remediation = new RemediationApi($this->database, $this->clock, $this->monitoring);
         $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox, $this->monitoring);
         $this->mailer = new FakeMailer();
         $this->notifications = new NotificationsApi($this->database, $this->clock, $this->secretBox, $this->mailer);
@@ -77,7 +80,7 @@ final class TestEnvironment
 
     public function app(): SlimApp
     {
-        return App::create($this->access, $this->fleet, $this->clients, $this->monitoring, $this->notifications, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
+        return App::create($this->access, $this->fleet, $this->clients, $this->monitoring, $this->remediation, $this->notifications, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
     }
 
     public function browser(string $ip = '192.0.2.10'): Browser

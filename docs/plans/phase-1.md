@@ -319,6 +319,58 @@ The current outcomes and the latest events can be read with:
 sqlite3 server/var/dev.sqlite "SELECT * FROM monitoring_check_states; SELECT id, type, payload FROM kernel_events ORDER BY id DESC LIMIT 10"
 ```
 
+### Step 1.3
+
+- Reconciliation must know whether Monitoring reports a check passing, and since when, not only which checks fail. `MonitoringApi` has `passingSince()` next to `failingChecks()`.
+- Reconciliation runs in step (c), right after resolving due incidents, as P3 item 1 places it, not as a separate step (f) after the alerts. Its events are delivered in step (d) of the same tick.
+- Step (d) is skipped when step (b) stopped at a failing event. Delivering again in the same tick would count a second failure for it, and skipping is meant to take 3 ticks. Both deliveries together deliver at most 1,000 events.
+- Reconciliation also clears `passing_since` on an open incident whose check Monitoring reports failing (a lost `check_failed`). Without that, the incident would resolve 5 minutes later while still failing.
+- An incident that reconciliation opens starts at the time Monitoring says the check started failing, and its `incident_opened` event has an empty sentence, because the failed result's sentence is not kept.
+- A withdrawn incident resolves at the event's time, like failed and passed use theirs.
+- Incidents are immutable: each rule of the aggregate returns the incident after it, and the repository stores it.
+- The tick prints one line for each incident it resolves and each incident reconciliation opens or resolves, naming the instance as `project/zone/name`. Incidents opened from events show as their delivered `remediation.incident_opened` event.
+- The readers for event payloads moved from Monitoring's `Event/` onto Kernel's `Event` (`expectType()`, `int()`, `string()`), since Remediation's events need the same ones. The Domain purity check moved to `tests/Support/DomainLayersTestCase.php`, shared by both `LayersTest` classes.
+- Pages name checks with `MonitoringApi::checkLabel()` ("Heartbeat age", "Disk size", "Certificate on the instance", "Served certificate").
+
+#### Manual check (step 1.3)
+
+In each terminal, from the repository root:
+
+```
+source scripts/dev-env.sh
+```
+
+Apply the new migration:
+
+```
+server/bin/maguari-server migrate
+```
+
+In the first terminal, run the app from `server/`:
+
+```
+php -S localhost:8080 -t public
+```
+
+In the second terminal, run the client:
+
+```
+client/bin/maguari-client run
+```
+
+In the third terminal, start the tick loop and keep it running (Fix C):
+
+```
+while true; do server/bin/maguari-server tick; sleep 60; done
+```
+
+1. The first tick runs the reconciliation at once (it never ran). Any check still failing from testing step 1.2 opens an incident and prints `Reconciliation opened incident <id> on <project/zone/name> (<check>): its check is failing but no incident was open.` Otherwise it prints nothing for it.
+2. Stop the client with Ctrl+C. Within two or three minutes a tick prints `Delivered event <id> (monitoring.check_failed).` and `Delivered event <id> (remediation.incident_opened).` The instance page lists the incident under Incidents as "Heartbeat age", "Failing".
+3. Start the client again. The next tick prints `Delivered event <id> (monitoring.check_passed).` and the page shows "Passing since" a time.
+4. Stop the client again before 5 minutes pass, wait for the `check_failed` line, then start it again. The same incident stays open (no new `incident_opened`), and its wait starts over.
+5. Leave the client running. Five minutes after the pass, a tick prints `Resolved incident <id> on <project/zone/name> (heartbeat_age): it passed for 5 minutes.` and `Delivered event <id> (remediation.incident_resolved).` The page lists it under Resolved incidents as "Passed".
+6. On the instance page, add the hostname `expired.badssl.com` (a public test site whose certificate is expired) and press "Run now". The next tick prints a `check_failed` and an `incident_opened` line, and the page lists a "Served certificate" incident for it. Remove the hostname: the next tick prints `check_withdrawn` and `incident_resolved` lines, and the page lists it as "Withdrawn".
+
 ## Status
 
-Approved. Steps 1.1 and 1.2 implemented; step 1.2 is waiting for review.
+Approved. Steps 1.1 to 1.3 implemented; step 1.3 is waiting for review.

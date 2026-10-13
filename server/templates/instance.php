@@ -2,6 +2,7 @@
 /**
  * @var \Closure $e @var string $csrf @var \Closure $partial
  * @var \Maguari\Server\Fleet\Instance $instance
+ * @var \Maguari\Server\Remediation\Domain\InstanceIncidents $incidents
  * @var \Maguari\Server\Monitoring\Domain\CheckResult[] $certificates from $resultsRun
  * @var ?\Maguari\Server\Monitoring\Domain\DailyJobRun $lastRun the daily job's latest run, whatever its state
  * @var ?\Maguari\Server\Monitoring\Domain\DailyJobRun $resultsRun the last successful run
@@ -11,9 +12,40 @@
  */
 use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CertificateHostname;
+use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Remediation\Domain\ResolutionRule;
+use Maguari\Server\Remediation\RemediationApi;
+
+$utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 ?>
 <h1><?= $e($instance->name) ?></h1>
 <p><a href="/admin">Back to the dashboard</a> · Project <a href="/admin/projects/<?= $instance->projectId ?>"><?= $e($instance->gcpProjectId) ?></a> · Zone <?= $e($instance->zone) ?></p>
+<h2>Incidents</h2>
+<p>An incident opens when a check fails and resolves after the check has passed for <?= intdiv(ResolutionRule::RESOLVE_AFTER_SECONDS, 60) ?> minutes.</p>
+<?php if ($incidents->open === []): ?>
+<p>No open incidents.</p>
+<?php else: ?>
+<table>
+<thead><tr><th>Check</th><th>Subject</th><th>Opened</th><th>State</th></tr></thead>
+<tbody>
+<?php foreach ($incidents->open as $incident): ?>
+<tr><td><?= $e(MonitoringApi::checkLabel($incident->key->checkName)) ?></td><td><?= $e($incident->key->subject) ?></td><td><?= $e($utc($incident->openedAt)) ?></td><td><?= $incident->passingSince === null ? 'Failing' : $e('Passing since ' . $utc($incident->passingSince)) ?></td></tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
+<?php if ($incidents->resolved !== []): ?>
+<h3>Resolved incidents</h3>
+<p>The latest <?= RemediationApi::RESOLVED_SHOWN ?> at most, newest first.</p>
+<table>
+<thead><tr><th>Check</th><th>Subject</th><th>Opened</th><th>Resolved</th><th>Resolution</th></tr></thead>
+<tbody>
+<?php foreach ($incidents->resolved as $incident): ?>
+<tr><td><?= $e(MonitoringApi::checkLabel($incident->key->checkName)) ?></td><td><?= $e($incident->key->subject) ?></td><td><?= $e($utc($incident->openedAt)) ?></td><td><?= $e($utc((int) $incident->resolvedAt)) ?></td><td><?php if ($incident->resolution !== null): ?><?= $e($incident->resolution->label()) ?><?= $partial('info', ['text' => $incident->resolution->explanation()]) ?><?php endif; ?></td></tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
 <h2>Certificates</h2>
 <?= $partial('daily-job-status', ['run' => $lastRun]) ?>
 <form method="post" action="/admin/daily-job">

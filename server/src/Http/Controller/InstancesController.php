@@ -9,13 +9,14 @@ use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Http\View;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Remediation\RemediationApi;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Slim\Exception\HttpNotFoundException;
 
 /**
- * One picked instance's page (design section 8.1 item 4): its certificate
- * results and the hostnames its remote certificate check connects to. Reads
+ * One picked instance's page (design section 8.1 item 4): its incidents, its
+ * certificate results and the hostnames its remote certificate check connects to. Reads
  * only SQLite; adding a hostname connects to nothing.
  */
 final class InstancesController
@@ -23,6 +24,7 @@ final class InstancesController
     public function __construct(
         private readonly FleetApi $fleet,
         private readonly MonitoringApi $monitoring,
+        private readonly RemediationApi $remediation,
         private readonly View $view,
     ) {
     }
@@ -92,6 +94,7 @@ final class InstancesController
         return $this->view->render($request, $response, 'instance', [
             'title' => $instance->name,
             'instance' => $instance,
+            'incidents' => $this->remediation->incidents($instance->id),
             'certificates' => $summary->certificateResults[$instance->id] ?? [],
             'lastRun' => $summary->lastRun,
             'resultsRun' => $summary->lastSucceededRun,

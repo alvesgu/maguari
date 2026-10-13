@@ -21,4 +21,15 @@ final class DeliveryReport
         public readonly bool $limitReached,
     ) {
     }
+
+    /**
+     * Whether delivery stopped at a failing event, which waits for the next
+     * tick: delivering again in the same tick would count a second failure.
+     */
+    public function stopped(): bool
+    {
+        $last = $this->failures[count($this->failures) - 1] ?? null;
+
+        return $last !== null && !$last->skipped;
+    }
 }

@@ -40,14 +40,14 @@ abstract class CheckOutcomeChanged
      */
     public static function fromEvent(Event $event): static
     {
-        $payload = EventPayload::of($event, static::TYPE);
+        $event->expectType(static::TYPE);
 
         return new static(
-            EventPayload::int($payload, 'instance_id'),
-            EventPayload::string($payload, 'check_name'),
-            EventPayload::string($payload, 'subject'),
+            $event->int('instance_id'),
+            $event->string('check_name'),
+            $event->string('subject'),
             $event->occurredAt,
-            EventPayload::string($payload, 'detail'),
+            $event->string('detail'),
         );
     }
 

@@ -515,21 +515,48 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('', $stdout, 'An unchanged outcome writes no event.');
     }
 
+    public function testTickReconcilesOnceADayAndPrintsWhatItFound(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
+        $pdo->exec("INSERT INTO fleet_instances (id, project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, 1, '1', 'us-east1-b', 'web', 0)");
+        // A failure whose event was lost.
+        $pdo->exec("INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since) VALUES (1, 'disk_size', '', 'fail', 2)");
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame(
+            "Reconciliation opened incident 1 on my-project/us-east1-b/web (disk_size): its check is failing but no incident was open.\n"
+                . "Delivered event 1 (remediation.incident_opened).\n",
+            $stdout,
+        );
+
+        [, $stdout] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame('', $stdout, 'Once a day.');
+    }
+
     public function testTickDeliversPendingEventsAndPrunesOldOnes(): void
     {
         $path = $this->directory . '/maguari.sqlite';
         $this->runCommand($path, ['migrate']);
         $pdo = new \PDO('sqlite:' . $path);
         $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at, delivered_at) VALUES ('monitoring.check_passed', '{}', 1, 1)");
-        $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', '{\"instance_id\":1}', 2)");
+        $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', "
+            . "'{\"instance_id\":1,\"check_name\":\"disk_size\",\"subject\":\"\",\"detail\":\"A sentence.\"}', 2)");
+        $pdo->exec("INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since) VALUES (1, 'disk_size', '', 'fail', 2)");
 
         [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
 
         $this->assertSame(0, $status, $stderr);
-        $this->assertSame("Delivered event 2 (monitoring.check_failed).\n", $stdout);
+        // Remediation opens an incident, whose event is delivered in the same tick.
+        $this->assertSame("Delivered event 2 (monitoring.check_failed).\nDelivered event 3 (remediation.incident_opened).\n", $stdout);
         $this->assertSame('', $stderr);
         $this->assertSame(
-            [['id' => 2, 'pending' => 0]],
+            [['id' => 2, 'pending' => 0], ['id' => 3, 'pending' => 0]],
             $pdo->query('SELECT id, delivered_at IS NULL AS pending FROM kernel_events')->fetchAll(\PDO::FETCH_ASSOC),
         );
     }
