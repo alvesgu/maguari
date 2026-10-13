@@ -33,15 +33,16 @@ final class NotificationsApi
     /** Notifications per page of the Logs screen. */
     public const LOG_PAGE_SIZE = 100;
 
-    public const RECONCILE_EVERY_SECONDS = 86_400;
+    /** Hourly, like Remediation's reconciliation. */
+    public const RECONCILE_EVERY_SECONDS = 3_600;
 
     /** The sentence of a notification the reconciliation creates: the incident's own is not kept. */
     public const RECONCILED_DETAIL = 'Opened by reconciliation; see the instance page for details.';
 
     /**
-     * Alerts are tried for this long, then given up, and a notification the
-     * reconciliation creates sends its "opened" alert only for an incident
-     * that opened this recently: old alerts are never sent late.
+     * An alert is tried for this long, then given up. An incident still open
+     * whose "opened" email was given up gets it again, late, from the next
+     * reconciliation (reconcileIfDue()).
      */
     public const ALERT_FOR_SECONDS = 3_600;
 
@@ -128,7 +129,7 @@ final class NotificationsApi
 
     /**
      * Notifications are a projection of Remediation's incidents, kept by
-     * events. When the last comparison is more than a day old (or none ran),
+     * events. When the last comparison is more than an hour old (or none ran),
      * compares the unresolved notifications with Remediation's open
      * incidents, so an event lost to a bug, or delivered before Notifications
      * subscribed, cannot leave them disagreeing for good: an open incident
@@ -136,9 +137,12 @@ final class NotificationsApi
      * no longer open is resolved now. One transaction. Run by the tick when
      * no event is pending.
      *
-     * Alerts: a created notification sends "opened" only if its incident
-     * opened within ALERT_FOR_SECONDS; a resolved one sends "resolved" only
-     * if its "opened" alert was sent or may still be.
+     * Alerts: a created notification sends "opened", saying the incident was
+     * detected late. So does every notification whose incident is still open
+     * and whose "opened" email was neither sent nor pending (given up), while
+     * email is set up: these are current problems nobody was told about. A
+     * resolved one sends "resolved" only if its "opened" alert was sent or
+     * may still be.
      *
      * @return ?NotificationReconciliation null when not due
      */
@@ -171,10 +175,7 @@ final class NotificationsApi
                 $key = $incident->key;
                 $id = (int) $this->notifications->add($incidentId, $key->instanceId, $key->checkName, $key->subject, $incident->openedAt, self::RECONCILED_DETAIL);
                 $created[] = $this->notifications->find($id) ?? throw new \LogicException('The notification just added is missing.');
-
-                if ($incident->openedAt >= $at - self::ALERT_FOR_SECONDS) {
-                    $this->alerts->add($id, AlertKind::Opened, $at);
-                }
+                $this->alerts->add($id, AlertKind::Opened, $at, late: true);
             }
 
             foreach ($this->notifications->unresolved() as $notification) {
@@ -188,9 +189,21 @@ final class NotificationsApi
                 }
             }
 
-            $this->notifications->recordReconciliation($at, count($created), count($resolved));
+            $lateAlerts = [];
 
-            return new NotificationReconciliation($at, $created, $resolved);
+            // Not while email is not set up: the alert would only be given up again.
+            if ($this->smtpSettings->find() !== null) {
+                foreach ($this->notifications->unresolved() as $notification) {
+                    if (isset($open[$notification->incidentId]) && !$this->alerts->openedNotGivenUp($notification->id)) {
+                        $this->alerts->add($notification->id, AlertKind::Opened, $at, late: true);
+                        $lateAlerts[] = $notification;
+                    }
+                }
+            }
+
+            $this->notifications->recordReconciliation($at, count($created), count($resolved), count($lateAlerts));
+
+            return new NotificationReconciliation($at, $created, $resolved, $lateAlerts);
         });
     }
 

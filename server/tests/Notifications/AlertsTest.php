@@ -8,6 +8,7 @@ use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Kernel\Events\EventDelivery;
 use Maguari\Server\Kernel\Events\EventOutbox;
 use Maguari\Server\Monitoring\Event\CheckFailed;
+use Maguari\Server\Monitoring\Event\CheckWithdrawn;
 use Maguari\Server\Notifications\AlertKind;
 use Maguari\Server\Notifications\AlertOutcome;
 use Maguari\Server\Notifications\AlertReport;
@@ -319,28 +320,111 @@ final class AlertsTest extends TestCase
         $this->assertSame(3, $slow->sent, 'The rest on the next tick.');
     }
 
-    public function testReconciliationSendsOpenedOnlyForARecentIncident(): void
+    /**
+     * Opens an incident in Remediation through Monitoring's event, without
+     * delivering Remediation's own event to Notifications.
+     */
+    private function openIncidentUnseen(int $instanceIndex): void
     {
-        $this->pick(2);
-        $this->setUpEmail();
         $outbox = new EventOutbox($this->environment->database);
-        $failed = function (int $instanceId) use ($outbox): void {
-            $this->environment->database->transaction(fn () => $outbox->record(
-                (new CheckFailed($instanceId, 'heartbeat_age', '', $this->environment->clock->now(), 'Late.'))->toEvent(),
-            ));
-            (new EventDelivery($this->environment->database, $this->environment->clock, $this->environment->remediation->subscribers()))->deliver();
-        };
-        // Incidents Notifications never heard of: one old, one recent.
-        $failed($this->instances[0]->id);
-        $this->environment->clock->advance(3601);
-        $failed($this->instances[1]->id);
+        $this->environment->database->transaction(fn () => $outbox->record(
+            (new CheckFailed($this->instances[$instanceIndex]->id, 'heartbeat_age', '', $this->environment->clock->now(), 'Late.'))->toEvent(),
+        ));
+        (new EventDelivery($this->environment->database, $this->environment->clock, $this->environment->remediation->subscribers()))->deliver();
+    }
 
-        $this->environment->notifications->reconcileIfDue($this->environment->remediation);
+    public function testReconciliationSendsALateOpenedEmailForEveryOpenIncident(): void
+    {
+        // 2 of 5: not a mass failure, so two individual emails.
+        $this->pick(5);
+        $this->setUpEmail();
+        // Incidents Notifications never heard of: one opened days ago, one just now.
+        $oldAt = $this->environment->clock->now();
+        $this->openIncidentUnseen(0);
+        $this->environment->clock->advance(3 * 86_400);
+        $this->openIncidentUnseen(1);
+
+        $reconciliation = $this->environment->notifications->reconcileIfDue($this->environment->remediation);
         $this->send();
 
-        $this->assertCount(1, $this->sent());
-        $this->assertSame('[Maguari] Incident on web-02: Heartbeat age', $this->sent()[0]->subject);
-        $this->assertStringContainsString("\n\nOpened by reconciliation; see the instance page for details.\n\n", $this->sent()[0]->body);
+        $this->assertCount(2, $reconciliation?->created ?? []);
+        $this->assertSame([], $reconciliation?->lateAlerts, 'Created ones already have their alert.');
+        $this->assertSame(['[Maguari] Incident on web-01: Heartbeat age', '[Maguari] Incident on web-02: Heartbeat age'], array_map(static fn (Email $email): string => $email->subject, $this->sent()));
+        $this->assertStringStartsWith(
+            "An incident opened on web-01: Heartbeat age.\n\nDetected late: failing since " . gmdate('Y-m-d H:i', $oldAt) . " UTC.\n\n"
+                . "Opened by reconciliation; see the instance page for details.\n\n",
+            $this->sent()[0]->body,
+        );
+    }
+
+    public function testAnIncidentRemediationReconciledIsDetectedLateToo(): void
+    {
+        $this->pick(1);
+        $this->setUpEmail();
+        $since = $this->environment->clock->now() - 7200;
+        $this->environment->database->pdo()->exec(
+            "INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since, detail) VALUES ({$this->instances[0]->id}, 'disk_size', '', 'fail', {$since}, 'Grown.')",
+        );
+        $this->environment->remediation->reconcileIfDue();
+        (new EventDelivery($this->environment->database, $this->environment->clock, $this->environment->notifications->subscribers()))->deliver();
+
+        $this->send();
+
+        $this->assertStringStartsWith(
+            "An incident opened on web-01: Disk size.\n\nDetected late: failing since " . gmdate('Y-m-d H:i', $since) . " UTC.\n\nGrown.\n\n",
+            $this->sent()[0]->body,
+        );
+    }
+
+    public function testAnOpenedEmailGivenUpIsSentLateWhileTheIncidentIsStillOpen(): void
+    {
+        $this->pick(2);
+        $remediation = $this->environment->remediation;
+        $notifications = $this->environment->notifications;
+        $deliverAll = function (): void {
+            (new EventDelivery($this->environment->database, $this->environment->clock, [
+                ...$this->environment->remediation->subscribers(),
+                ...$this->environment->notifications->subscribers(),
+            ]))->deliver();
+        };
+        // Two incidents open, the normal way, while email is not set up:
+        // their emails are given up.
+        $outbox = new EventOutbox($this->environment->database);
+
+        foreach ([0, 1] as $index) {
+            $this->environment->database->transaction(fn () => $outbox->record(
+                (new CheckFailed($this->instances[$index]->id, 'heartbeat_age', '', $this->environment->clock->now(), 'Late.'))->toEvent(),
+            ));
+        }
+
+        $deliverAll();
+        $this->send();
+        $this->assertSame(['opened', 'opened'], array_column($this->alertRows(), 'kind'));
+
+        $notifications->reconcileIfDue($remediation);
+        $this->assertCount(2, $this->alertRows(), 'Nothing queued while email is not set up.');
+
+        // Email is set up, and one incident resolves in the meantime.
+        $this->setUpEmail();
+        $this->environment->database->transaction(fn () => $outbox->record(
+            (new CheckWithdrawn($this->instances[1]->id, 'heartbeat_age', '', $this->environment->clock->now()))->toEvent(),
+        ));
+        $deliverAll();
+        $this->environment->clock->advance(3601);
+
+        $reconciliation = $notifications->reconcileIfDue($remediation);
+        $this->send();
+
+        $this->assertSame([1], array_map(static fn ($notification): int => $notification->incidentId, $reconciliation?->lateAlerts ?? []));
+        $this->assertSame(['[Maguari] Incident on web-01: Heartbeat age'], array_map(static fn (Email $email): string => $email->subject, $this->sent()));
+        $this->assertStringContainsString("\n\nDetected late: failing since ", $this->sent()[0]->body);
+        $page = $notifications->logPage(1, null);
+        $labels = array_map(static fn ($alert): string => $alert->label(), $page->alerts[$page->notifications[1]->id]);
+        $this->assertSame(['Opened', 'Opened (detected late)'], $labels, 'Both kept, for the Logs screen.');
+
+        // Sent: nothing more on later reconciliations.
+        $this->environment->clock->advance(3601);
+        $this->assertSame([], $notifications->reconcileIfDue($remediation)?->lateAlerts);
     }
 
     public function testReconciliationSendsResolvedOnlyWhenOpenedWasNotGivenUp(): void

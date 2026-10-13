@@ -37,7 +37,7 @@ final class IncidentEventSubscriber implements Subscriber
             $id = $this->notifications->add($opened->incidentId, $opened->instanceId, $opened->checkName, $opened->subject, $opened->at, $opened->detail);
 
             if ($id !== null) {
-                $this->alerts->add($id, AlertKind::Opened, $this->clock->now());
+                $this->alerts->add($id, AlertKind::Opened, $this->clock->now(), $opened->detectedLate);
             }
         } elseif ($event->type === IncidentResolved::TYPE) {
             // An incident opened before Notifications subscribed has no

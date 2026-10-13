@@ -1,6 +1,6 @@
 -- Incidents (design section 7.4): one per check of one instance and one
 -- subject, opened when the check fails and resolved after it has passed for
--- 5 minutes, when its subject is withdrawn, or by the daily reconciliation.
+-- 5 minutes, when its subject is withdrawn, or by the hourly reconciliation.
 -- instance_id is Fleet's instance ID, with no foreign key (design section
 -- 2.1). passing_since is when the check started passing while open.
 CREATE TABLE remediation_incidents (
@@ -22,7 +22,7 @@ CREATE UNIQUE INDEX remediation_incidents_open ON remediation_incidents (instanc
 -- Serves an instance's incidents, open and recently resolved.
 CREATE INDEX remediation_incidents_instance ON remediation_incidents (instance_id, resolved_at);
 
--- Runs of the daily reconciliation with Monitoring's outcomes (design
+-- Runs of the hourly reconciliation with Monitoring's outcomes (design
 -- section 7.4), with how many incidents each opened and resolved.
 CREATE TABLE remediation_reconciliations (
     id INTEGER PRIMARY KEY,

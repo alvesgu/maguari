@@ -12,6 +12,7 @@ final class Alert
     /**
      * @param ?string $lastFailure Maguari's sentence for the latest failure
      * @param ?int $summaryId set when a summary email replaced it
+     * @param bool $late whether the email says the incident was detected late
      */
     public function __construct(
         public readonly int $id,
@@ -23,7 +24,16 @@ final class Alert
         public readonly int $attempts,
         public readonly ?string $lastFailure,
         public readonly ?int $summaryId,
+        public readonly bool $late = false,
     ) {
+    }
+
+    /**
+     * For the Logs screen, for example "Opened (detected late)".
+     */
+    public function label(): string
+    {
+        return $this->kind->label() . ($this->late ? ' (detected late)' : '');
     }
 
     public function isPending(): bool

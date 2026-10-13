@@ -175,14 +175,14 @@ final class IncidentNotificationsTest extends TestCase
         );
     }
 
-    public function testReconciliationRunsAtOnceWhenItNeverRanAndThenOnceADay(): void
+    public function testReconciliationRunsAtOnceWhenItNeverRanAndThenOnceAnHour(): void
     {
         $notifications = $this->environment->notifications;
         $remediation = $this->environment->remediation;
 
         $this->assertNotNull($notifications->reconcileIfDue($remediation));
-        $this->environment->clock->advance(86_400);
-        $this->assertNull($notifications->reconcileIfDue($remediation), 'Exactly a day later is not more than a day.');
+        $this->environment->clock->advance(3_600);
+        $this->assertNull($notifications->reconcileIfDue($remediation), 'Exactly an hour later is not more than an hour.');
         $this->environment->clock->advance(1);
         $first = $notifications->reconcileIfDue($remediation);
         $this->assertNotNull($first);

@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Incidents opened and resolved from Monitoring's events, by the tick's
- * Remediation step and by the daily reconciliation (design section 7.4).
+ * Remediation step and by the hourly reconciliation (design section 7.4).
  */
 final class IncidentsTest extends TestCase
 {
@@ -93,7 +93,7 @@ final class IncidentsTest extends TestCase
         $this->assertSame($openedAt, $incident->openedAt, 'Opened when the check failed, not when the event was delivered.');
         $this->assertSame([[
             'remediation.incident_opened',
-            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'It failed.'],
+            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'It failed.', 'detected_late' => false],
             $openedAt,
         ]], $this->remediationEvents());
     }
@@ -229,7 +229,7 @@ final class IncidentsTest extends TestCase
         $this->environment->database->pdo()->exec('DELETE FROM remediation_reconciliations');
     }
 
-    public function testReconciliationRunsAtOnceWhenItNeverRanAndThenOnceADay(): void
+    public function testReconciliationRunsAtOnceWhenItNeverRanAndThenOnceAnHour(): void
     {
         $remediation = $this->environment->remediation;
         $this->forgetReconciliations();
@@ -238,8 +238,8 @@ final class IncidentsTest extends TestCase
         $this->assertNotNull($first);
         $this->assertSame([[$first->ranAt, 0, 0]], array_map('array_values', $this->environment->database->pdo()
             ->query('SELECT ran_at, opened, resolved FROM remediation_reconciliations')->fetchAll()));
-        $this->environment->clock->advance(86_400);
-        $this->assertNull($remediation->reconcileIfDue(), 'Exactly a day later is not more than a day.');
+        $this->environment->clock->advance(3_600);
+        $this->assertNull($remediation->reconcileIfDue(), 'Exactly an hour later is not more than an hour.');
         $this->environment->clock->advance(1);
         $this->assertNotNull($remediation->reconcileIfDue());
         $this->assertNull($remediation->reconcileIfDue());
@@ -260,7 +260,7 @@ final class IncidentsTest extends TestCase
         $this->assertSame($since, $incident->openedAt);
         $this->assertSame([[
             'remediation.incident_opened',
-            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'disk_size', 'subject' => '', 'detail' => 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB.'],
+            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'disk_size', 'subject' => '', 'detail' => 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB.', 'detected_late' => true],
             $since,
         ]], $this->remediationEvents());
     }

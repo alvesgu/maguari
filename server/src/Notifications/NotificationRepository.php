@@ -64,10 +64,10 @@ final class NotificationRepository
         return $ranAt === null || $ranAt === false ? null : (int) $ranAt;
     }
 
-    public function recordReconciliation(int $at, int $created, int $resolved): void
+    public function recordReconciliation(int $at, int $created, int $resolved, int $lateAlerts): void
     {
-        $this->database->pdo()->prepare('INSERT INTO notifications_reconciliations (ran_at, created, resolved) VALUES (?, ?, ?)')
-            ->execute([$at, $created, $resolved]);
+        $this->database->pdo()->prepare('INSERT INTO notifications_reconciliations (ran_at, created, resolved, late_alerts) VALUES (?, ?, ?, ?)')
+            ->execute([$at, $created, $resolved, $lateAlerts]);
     }
 
     /**

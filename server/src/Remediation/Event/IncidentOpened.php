@@ -17,8 +17,10 @@ final class IncidentOpened
 
     /**
      * @param string $detail the failed result's sentence, from Monitoring;
-     *        the latest one, or a fixed sentence, when the daily
-     *        reconciliation opened the incident
+     *        the latest one, or a fixed sentence, when the reconciliation
+     *        opened the incident
+     * @param bool $detectedLate whether the reconciliation opened it, after
+     *        a lost event: the check has been failing since $at
      */
     public function __construct(
         public readonly int $incidentId,
@@ -27,13 +29,14 @@ final class IncidentOpened
         public readonly string $subject,
         public readonly int $at,
         public readonly string $detail,
+        public readonly bool $detectedLate = false,
     ) {
     }
 
     /**
      * @param Incident $incident stored, so it has an ID
      */
-    public static function of(Incident $incident, string $detail): self
+    public static function of(Incident $incident, string $detail, bool $detectedLate = false): self
     {
         return new self(
             $incident->id ?? throw new \LogicException('Store the incident before its event.'),
@@ -42,6 +45,7 @@ final class IncidentOpened
             $incident->key->subject,
             $incident->openedAt,
             $detail,
+            $detectedLate,
         );
     }
 
@@ -59,6 +63,8 @@ final class IncidentOpened
             $event->string('subject'),
             $event->occurredAt,
             $event->string('detail'),
+            // Events written before the flag existed were never late.
+            $event->bool('detected_late', false),
         );
     }
 
@@ -70,6 +76,7 @@ final class IncidentOpened
             'check_name' => $this->checkName,
             'subject' => $this->subject,
             'detail' => $this->detail,
+            'detected_late' => $this->detectedLate,
         ], $this->at);
     }
 }

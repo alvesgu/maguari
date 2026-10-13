@@ -1,4 +1,4 @@
--- Runs of Notifications' daily reconciliation with Remediation's open
+-- Runs of Notifications' hourly reconciliation with Remediation's open
 -- incidents (design section 10.4), with how many notifications each created
 -- and resolved.
 CREATE TABLE notifications_reconciliations (

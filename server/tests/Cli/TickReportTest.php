@@ -102,6 +102,10 @@ final class TickReportTest extends TestCase
             'Reconciliation created notification 5 of incident 3 on my-project/us-east1-b/web (local_certificate example.com): its incident is open but had none.',
             'Reconciliation resolved notification 4 of incident 2 on instance 9 (disk_size): its incident is no longer open.',
         ], TickReport::notificationLines(new NotificationReconciliation(600, [$created], [$resolved]), [1 => 'my-project/us-east1-b/web']));
+        $this->assertSame(
+            ['Reconciliation queued the opened alert of notification 5 of incident 3 on instance 1 (local_certificate example.com) again, late: its incident is still open and the email was never sent.'],
+            TickReport::notificationLines(new NotificationReconciliation(600, [], [], [$created]), []),
+        );
         $this->assertSame([], TickReport::notificationLines(null, []));
     }
 

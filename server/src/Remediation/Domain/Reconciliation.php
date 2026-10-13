@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Maguari\Server\Remediation\Domain;
 
 /**
- * What one daily reconciliation changed. In normal operation both lists are
+ * What one hourly reconciliation changed. In normal operation both lists are
  * empty: anything here points at a lost event.
  */
 final class Reconciliation

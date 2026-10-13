@@ -431,6 +431,8 @@ while true; do server/bin/maguari-server tick; sleep 60; done
 - A stored SMTP password the key cannot decrypt is a failure tried for 60 minutes, not a reason to give up at once, since an administrator can enter it again.
 - A failed or given-up email is a line on stderr, with the SMTP detail for the log, but the tick still exits with 0: it is not a bug and is tried again. While email is not set up, each new alert prints one "Gave up ... Email is not set up." line.
 - The tick reads the administrators' addresses and the base URL through `AccessApi`.
+- Changed after review: both reconciliations, Remediation's and Notifications', run every hour instead of once a day (`RECONCILE_EVERY_SECONDS = 3_600`), still printing one line per repair so repairs stay visible as a sign of a problem upstream. The glossary defines "Reconciliation".
+- Changed after review: no 60-minute rule for reconciliation. Any incident that is still open and whose "opened" email was never sent gets it, saying "Detected late: failing since <time> UTC.": an incident Remediation's reconciliation opened (`detected_late` in `remediation.incident_opened`; events written before it read as false), a notification Notifications' reconciliation created, and an open incident whose "opened" email was given up, queued again by each hourly reconciliation while email is set up (not while it is not, or it would be given up again every hour). The alert table is rebuilt so a notification can keep a given-up alert and a later one: at most one per kind that is not given up. `ALERT_FOR_SECONDS` is now only the retry window.
 
 #### Manual check (step 1.5)
 

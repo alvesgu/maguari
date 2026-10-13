@@ -100,7 +100,7 @@ final class RemediationApi
     }
 
     /**
-     * The daily reconciliation with Monitoring, when due. Run by the tick.
+     * The hourly reconciliation with Monitoring, when due. Run by the tick.
      */
     public function reconcileIfDue(): ?Reconciliation
     {

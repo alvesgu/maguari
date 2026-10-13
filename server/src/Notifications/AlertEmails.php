@@ -16,14 +16,15 @@ final class AlertEmails
     /**
      * @param ?Instance $instance null when the instance is no longer picked
      * @param ?string $baseUrl the server's address, for the link; none without it
+     * @param bool $late whether to say the incident was detected late
      * @return array{string, string} subject and body
      */
-    public static function single(AlertKind $kind, Notification $notification, ?Instance $instance, ?string $baseUrl): array
+    public static function single(AlertKind $kind, Notification $notification, ?Instance $instance, ?string $baseUrl, bool $late = false): array
     {
         $name = self::instanceName($notification, $instance);
         $what = self::what($notification);
         $lines = $kind === AlertKind::Opened
-            ? ["An incident opened on {$name}: {$what}.", '', ...self::paragraph($notification->detail)]
+            ? ["An incident opened on {$name}: {$what}.", '', ...self::paragraph($late ? self::late($notification) : ''), ...self::paragraph($notification->detail)]
             : ["The incident on {$name} is resolved: {$what}.", '', ...self::paragraph(self::resolution($notification))];
         $lines[] = 'Instance: ' . $name;
 
@@ -61,9 +62,10 @@ final class AlertEmails
      *
      * @param list<Notification> $notifications
      * @param array<int, Instance> $instances picked instances by ID
+     * @param array<int, bool> $late by notification ID, whether to say it was detected late
      * @return array{string, string} subject and body
      */
-    public static function summary(AlertKind $kind, array $notifications, array $instances, ?string $baseUrl): array
+    public static function summary(AlertKind $kind, array $notifications, array $instances, ?string $baseUrl, array $late = []): array
     {
         $instanceCount = count(array_unique(array_map(static fn (Notification $notification): int => $notification->instanceId, $notifications)));
         $verb = $kind === AlertKind::Opened ? 'opened' : 'resolved';
@@ -83,6 +85,10 @@ final class AlertEmails
             $when = $kind === AlertKind::Opened ? $notification->openedAt : ($notification->resolvedAt ?? $notification->openedAt);
             $lines[] = '';
             $lines[] = sprintf('- %s: %s, %s %s', $where, self::what($notification), $verb, self::utc($when));
+
+            if ($kind === AlertKind::Opened && ($late[$notification->id] ?? false)) {
+                $lines[] = '  ' . self::late($notification);
+            }
             $text = $kind === AlertKind::Opened ? $notification->detail : self::resolution($notification);
 
             if ($text !== '') {
@@ -97,6 +103,15 @@ final class AlertEmails
         }
 
         return [self::ascii(sprintf('[Maguari] %s %s on %s', $incidents, $verb, $on)), implode("\n", $lines) . "\n"];
+    }
+
+    /**
+     * For an incident nobody was told about when it opened: a lost event,
+     * or an email given up while it is still open.
+     */
+    private static function late(Notification $notification): string
+    {
+        return sprintf('Detected late: failing since %s.', self::utc($notification->openedAt));
     }
 
     private static function instanceName(Notification $notification, ?Instance $instance): string

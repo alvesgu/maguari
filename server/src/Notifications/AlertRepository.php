@@ -8,7 +8,7 @@ use Maguari\Server\Kernel\Database\Database;
 
 final class AlertRepository
 {
-    private const COLUMNS = 'id, notification_id, kind, created_at, sent_at, given_up_at, attempts, last_failure, summary_id';
+    private const COLUMNS = 'id, notification_id, kind, created_at, sent_at, given_up_at, attempts, last_failure, summary_id, late';
 
     public function __construct(
         private readonly Database $database,
@@ -16,14 +16,20 @@ final class AlertRepository
     }
 
     /**
-     * Adds a pending alert, once per notification and kind. Call inside a transaction.
+     * Adds a pending alert, unless the notification has one of this kind
+     * that is pending or sent. Call inside a transaction.
+     *
+     * @param bool $late whether the email says the incident was detected late
+     * @return bool whether it was added
      */
-    public function add(int $notificationId, AlertKind $kind, int $at): void
+    public function add(int $notificationId, AlertKind $kind, int $at, bool $late = false): bool
     {
-        $this->database->pdo()->prepare(
-            'INSERT INTO notifications_alerts (notification_id, kind, created_at) VALUES (?, ?, ?) '
-                . 'ON CONFLICT (notification_id, kind) DO NOTHING',
-        )->execute([$notificationId, $kind->value, $at]);
+        $statement = $this->database->pdo()->prepare(
+            'INSERT OR IGNORE INTO notifications_alerts (notification_id, kind, created_at, late) VALUES (?, ?, ?, ?)',
+        );
+        $statement->execute([$notificationId, $kind->value, $at, (int) $late]);
+
+        return $statement->rowCount() === 1;
     }
 
     /**
@@ -143,6 +149,7 @@ final class AlertRepository
                 (int) $row['attempts'],
                 $row['last_failure'],
                 $row['summary_id'] === null ? null : (int) $row['summary_id'],
+                (bool) $row['late'],
             ),
             $statement->fetchAll(),
         );

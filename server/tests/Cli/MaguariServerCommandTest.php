@@ -524,7 +524,7 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('', $stdout, 'An unchanged outcome writes no event.');
     }
 
-    public function testTickReconcilesOnceADayAndPrintsWhatItFound(): void
+    public function testTickReconcilesOnceAnHourAndPrintsWhatItFound(): void
     {
         $path = $this->directory . '/maguari.sqlite';
         $this->prepareForTick($path);
@@ -551,7 +551,7 @@ final class MaguariServerCommandTest extends TestCase
 
         [, $stdout] = $this->runCommand($path, ['tick']);
 
-        $this->assertSame('', $stdout, 'Once a day.');
+        $this->assertSame('', $stdout, 'Once an hour.');
     }
 
     public function testTickReconcilesNotificationsWithOpenIncidents(): void

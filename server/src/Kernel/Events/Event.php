@@ -51,6 +51,19 @@ final class Event
     }
 
     /**
+     * A boolean that newer events have and older ones may not: $default when
+     * missing.
+     *
+     * @throws \UnexpectedValueException when present but not a boolean
+     */
+    public function bool(string $key, bool $default): bool
+    {
+        $value = $this->payload[$key] ?? $default;
+
+        return is_bool($value) ? $value : throw new \UnexpectedValueException("The event's {$key} is not a boolean.");
+    }
+
+    /**
      * @throws \UnexpectedValueException when the payload has no such string
      */
     public function string(string $key): string

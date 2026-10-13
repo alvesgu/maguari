@@ -21,9 +21,20 @@ final class EventsTest extends TestCase
         $event = IncidentOpened::of($incident, 'Expired on 2026-09-30.')->toEvent();
 
         $this->assertSame('remediation.incident_opened', $event->type);
-        $this->assertSame(['incident_id' => 3, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'Expired on 2026-09-30.'], $event->payload);
+        $this->assertSame(['incident_id' => 3, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'Expired on 2026-09-30.', 'detected_late' => false], $event->payload);
         $this->assertSame(100, $event->occurredAt);
         $this->assertEquals(new IncidentOpened(3, 7, 'local_certificate', 'example.com', 100, 'Expired on 2026-09-30.'), IncidentOpened::fromEvent($event));
+    }
+
+    public function testIncidentOpenedSaysWhenItWasDetectedLate(): void
+    {
+        $incident = Incident::open(new IncidentKey(7, 'disk_size', ''), 100)->withId(3);
+        $late = IncidentOpened::of($incident, 'Grown.', detectedLate: true);
+
+        $this->assertTrue(IncidentOpened::fromEvent($late->toEvent())->detectedLate);
+        // Written before the flag existed.
+        $old = new Event('remediation.incident_opened', ['incident_id' => 3, 'instance_id' => 7, 'check_name' => 'disk_size', 'subject' => '', 'detail' => 'Grown.'], 100);
+        $this->assertFalse(IncidentOpened::fromEvent($old)->detectedLate);
     }
 
     public function testIncidentResolvedRoundTrips(): void

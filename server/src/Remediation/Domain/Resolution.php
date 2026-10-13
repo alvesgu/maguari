@@ -15,7 +15,7 @@ enum Resolution: string
     /** Its subject is gone: a removed hostname or certificate. */
     case Withdrawn = 'withdrawn';
 
-    /** The daily reconciliation found Monitoring no longer failing it. */
+    /** The hourly reconciliation found Monitoring no longer failing it. */
     case Reconciled = 'reconciled';
 
     public function label(): string
@@ -32,7 +32,7 @@ enum Resolution: string
         return match ($this) {
             self::Passed => sprintf('The check passed for %d minutes.', intdiv(ResolutionRule::RESOLVE_AFTER_SECONDS, 60)),
             self::Withdrawn => 'What was checked is gone: a hostname was removed, or the instance no longer reports the certificate.',
-            self::Reconciled => 'The daily comparison with the checks\' current results found the check no longer failing.',
+            self::Reconciled => 'The hourly comparison with the checks\' current results found the check no longer failing.',
         };
     }
 }

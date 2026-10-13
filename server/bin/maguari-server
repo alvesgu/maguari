@@ -301,7 +301,7 @@ function runDailyJobCommand(array $args): int
 /**
  * The per-minute tick (design section 10.1), run by a systemd timer in
  * production and by hand in development: judges heartbeat ages, delivers
- * pending domain events, resolves incidents (and once a day reconciles
+ * pending domain events, resolves incidents (and once an hour reconciles
  * them), delivers again, sends alert emails and deletes old delivered
  * events. A failed email is one line on stderr but does not fail the tick:
  * it is tried again on the next one. One tick at a time, through a lock file next to
@@ -347,7 +347,7 @@ function tickCommand(array $args): int
     // (b) Remediation opens and updates incidents from Monitoring's events,
     // and Notifications keeps one notification per incident.
     $reports = [$delivery->deliver()];
-    // (c) Incidents whose check passed long enough, and the daily reconciliation.
+    // (c) Incidents whose check passed long enough, and the hourly reconciliation.
     $resolved = $remediation->resolveDue();
     $reconciliation = $remediation->reconcileIfDue();
 
@@ -359,7 +359,7 @@ function tickCommand(array $args): int
         $reports[] = $delivery->deliver(EventDelivery::MAX_EVENTS_PER_DELIVERY - $delivered);
     }
 
-    // Notifications' daily reconciliation, only when no event is pending:
+    // Notifications' hourly reconciliation, only when no event is pending:
     // otherwise it could act before an event and lose its facts.
     $lastReport = $reports[count($reports) - 1];
     $notificationReconciliation = $lastReport->stopped() || $lastReport->limitReached || count($reports) === 1

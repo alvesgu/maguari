@@ -97,9 +97,15 @@ final class AlertSender
                 continue;
             }
 
+            $late = [];
+
+            foreach ($alerts as $alert) {
+                $late[$alert->notificationId] = $alert->late;
+            }
+
             [$subject, $body] = $summary
-                ? AlertEmails::summary($kind, $members, $instances, $baseUrl)
-                : AlertEmails::single($kind, $members[0], $instances[$members[0]->instanceId] ?? null, $baseUrl);
+                ? AlertEmails::summary($kind, $members, $instances, $baseUrl, $late)
+                : AlertEmails::single($kind, $members[0], $instances[$members[0]->instanceId] ?? null, $baseUrl, $alerts[0]->late);
 
             try {
                 $this->mailer->send($settings, new Email($recipients, $subject, $body), self::localHostname($baseUrl));
@@ -141,7 +147,7 @@ final class AlertSender
                 );
                 $alerts = array_map(
                     static fn (Alert $alert): Alert => in_array($alert, $loose, true)
-                        ? new Alert($alert->id, $alert->notificationId, $alert->kind, $alert->createdAt, $alert->sentAt, $alert->givenUpAt, $alert->attempts, $alert->lastFailure, $summaryId)
+                        ? new Alert($alert->id, $alert->notificationId, $alert->kind, $alert->createdAt, $alert->sentAt, $alert->givenUpAt, $alert->attempts, $alert->lastFailure, $summaryId, $alert->late)
                         : $alert,
                     $alerts,
                 );

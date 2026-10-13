@@ -72,8 +72,8 @@ final class TickReport
     }
 
     /**
-     * One line per notification Notifications' daily reconciliation created
-     * or resolved.
+     * One line per notification Notifications' hourly reconciliation created
+     * or resolved, and per "opened" alert it queued again, late.
      *
      * @param array<int, string> $names instance names by ID
      * @return list<string> without line endings
@@ -88,6 +88,13 @@ final class TickReport
 
         foreach ($reconciliation->resolved ?? [] as $notification) {
             $lines[] = sprintf('Reconciliation resolved notification %s: its incident is no longer open.', self::notification($notification, $names));
+        }
+
+        foreach ($reconciliation->lateAlerts ?? [] as $notification) {
+            $lines[] = sprintf(
+                'Reconciliation queued the opened alert of notification %s again, late: its incident is still open and the email was never sent.',
+                self::notification($notification, $names),
+            );
         }
 
         return $lines;

@@ -18,12 +18,13 @@ use Maguari\Server\Remediation\Infrastructure\IncidentRepository;
 
 /**
  * The tick's Remediation step (design section 10.1): resolves incidents whose
- * check has passed long enough and, once a day, reconciles open incidents
+ * check has passed long enough and, once an hour, reconciles open incidents
  * with Monitoring's current outcomes (design section 7.4).
  */
 final class IncidentResolutions
 {
-    public const RECONCILE_EVERY_SECONDS = 86_400;
+    /** Hourly: an incident a lost event left behind is repaired within the hour. */
+    public const RECONCILE_EVERY_SECONDS = 3_600;
 
     /** The sentence of an incident reconciliation opens when Monitoring stored none. */
     public const RECONCILED_DETAIL = 'Opened by reconciliation; see the instance page for details.';
@@ -62,7 +63,7 @@ final class IncidentResolutions
 
     /**
      * Compares open incidents with Monitoring's failing checks, when the last
-     * comparison is more than a day old (or never ran), so an event lost to a
+     * comparison is more than an hour old (or never ran), so an event lost to a
      * bug, or written before Remediation subscribed, cannot leave the two
      * disagreeing for good.
      *
@@ -92,7 +93,7 @@ final class IncidentResolutions
                 if ($incident === null) {
                     // Opened as check_failed would have, with the latest sentence.
                     $incident = $this->incidents->save(Incident::open($key, $state->since));
-                    $this->outbox->record(IncidentOpened::of($incident, $state->detail ?? self::RECONCILED_DETAIL)->toEvent());
+                    $this->outbox->record(IncidentOpened::of($incident, $state->detail ?? self::RECONCILED_DETAIL, detectedLate: true)->toEvent());
                     $opened[] = $incident;
                 } elseif ($incident->passingSince !== null) {
                     // A lost check_failed: it is failing, not passing.
