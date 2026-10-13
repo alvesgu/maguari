@@ -26,6 +26,23 @@ final class RemediationApi
     /** How many resolved incidents an instance's page lists. */
     public const RESOLVED_SHOWN = 20;
 
+    /**
+     * Many instances failing at once (design sections 7.2 item 5 and 7.3):
+     * at least this share of the picked instances, and at least
+     * MASS_FAILURE_MIN_INSTANCES. Alert emails are summarized then (section
+     * 13.3), and phase 3's circuit breaker will reuse it.
+     */
+    public const MASS_FAILURE_SHARE = 0.5;
+    public const MASS_FAILURE_MIN_INSTANCES = 2;
+
+    /**
+     * Whether $failing of $picked instances is a mass failure.
+     */
+    public static function isMassFailure(int $failing, int $picked): bool
+    {
+        return $failing >= self::MASS_FAILURE_MIN_INSTANCES && $failing >= self::MASS_FAILURE_SHARE * $picked;
+    }
+
     private readonly IncidentRepository $incidents;
     private readonly IncidentResolutions $resolutions;
     private readonly CheckEventSubscriber $subscriber;

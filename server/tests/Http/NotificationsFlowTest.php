@@ -6,6 +6,7 @@ namespace Maguari\Server\Tests\Http;
 
 use Maguari\Server\Kernel\Events\EventDelivery;
 use Maguari\Server\Kernel\Events\EventOutbox;
+use Maguari\Server\Notifications\SmtpSettingsInput;
 use Maguari\Server\Remediation\Domain\Resolution;
 use Maguari\Server\Remediation\Event\IncidentOpened;
 use Maguari\Server\Remediation\Event\IncidentResolved;
@@ -181,5 +182,35 @@ final class NotificationsFlowTest extends TestCase
         }
 
         $this->assertStringContainsString('No notifications yet.', (string) $browser->get('/admin/logs')->getBody());
+    }
+
+    public function testLogsShowEachAlertsOutcome(): void
+    {
+        $this->publish($this->open(1));
+        // Email is not set up, so the tick gives the alert up.
+        $this->environment->notifications->sendPendingAlerts($this->environment->fleet, $this->environment->access);
+
+        $body = (string) $this->signedInBrowser()->get('/admin/logs')->getBody();
+
+        $this->assertStringContainsString('<th>Alert emails</th>', $body);
+        $this->assertStringContainsString('<td>Opened: Not sent, given up ' . self::utc($this->environment->clock->now()) . '<span class="info">', $body);
+        $this->assertStringContainsString('>Email is not set up.</span>', $body);
+    }
+
+    public function testAHeartbeatOrRunNowNeverSendsAnAlert(): void
+    {
+        $this->environment->notifications->saveSmtpSettings(new SmtpSettingsInput('smtp.example.com', '587', 'alerts@example.com', 'secret password', 'alerts@example.com'));
+        $this->publish($this->open(1));
+        $client = $this->environment->enrollClient($this->instanceId);
+        $browser = $this->signedInBrowser();
+
+        $this->environment->clients->recordHeartbeat($client->clientId, json_encode([
+            'protocol_version' => 1, 'client_version' => '0.1.0', 'client_id' => $client->clientId, 'sent_at' => $this->environment->clock->now(),
+        ], JSON_THROW_ON_ERROR));
+        $this->environment->http->queueJson(200, ['items' => []]);
+        $browser->post('/admin/daily-job', Browser::csrfFields($browser->get('/admin')));
+
+        $this->assertSame([], $this->environment->mailer->sent);
+        $this->assertNull($this->environment->database->pdo()->query('SELECT sent_at FROM notifications_alerts')->fetchColumn());
     }
 }

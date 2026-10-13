@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Notifications;
 
+use Maguari\Server\Access\AccessApi;
+use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Events\Subscriber;
@@ -33,8 +35,19 @@ final class NotificationsApi
 
     public const RECONCILE_EVERY_SECONDS = 86_400;
 
+    /** The sentence of a notification the reconciliation creates: the incident's own is not kept. */
+    public const RECONCILED_DETAIL = 'Opened by reconciliation; see the instance page for details.';
+
+    /**
+     * Alerts are tried for this long, then given up, and a notification the
+     * reconciliation creates sends its "opened" alert only for an incident
+     * that opened this recently: old alerts are never sent late.
+     */
+    public const ALERT_FOR_SECONDS = 3_600;
+
     private readonly SmtpSettingsRepository $smtpSettings;
     private readonly NotificationRepository $notifications;
+    private readonly AlertRepository $alerts;
 
     public function __construct(
         private readonly Database $database,
@@ -44,6 +57,7 @@ final class NotificationsApi
     ) {
         $this->smtpSettings = new SmtpSettingsRepository($database);
         $this->notifications = new NotificationRepository($database);
+        $this->alerts = new AlertRepository($database);
     }
 
     /**
@@ -53,7 +67,7 @@ final class NotificationsApi
      */
     public function subscribers(): array
     {
-        return [new IncidentEventSubscriber($this->notifications)];
+        return [new IncidentEventSubscriber($this->notifications, $this->alerts, $this->clock)];
     }
 
     /**
@@ -108,6 +122,7 @@ final class NotificationsApi
             $older && $last !== null ? $last->id : null,
             $newer !== [],
             $newer[self::LOG_PAGE_SIZE] ?? null,
+            $this->alerts->forNotifications(array_map(static fn (Notification $notification): int => $notification->id, $notifications)),
         );
     }
 
@@ -120,6 +135,10 @@ final class NotificationsApi
      * without a notification gets one, and a notification whose incident is
      * no longer open is resolved now. One transaction. Run by the tick when
      * no event is pending.
+     *
+     * Alerts: a created notification sends "opened" only if its incident
+     * opened within ALERT_FOR_SECONDS; a resolved one sends "resolved" only
+     * if its "opened" alert was sent or may still be.
      *
      * @return ?NotificationReconciliation null when not due
      */
@@ -150,14 +169,22 @@ final class NotificationsApi
                 }
 
                 $key = $incident->key;
-                $id = $this->notifications->add($incidentId, $key->instanceId, $key->checkName, $key->subject, $incident->openedAt);
-                $created[] = $this->notifications->find((int) $id) ?? throw new \LogicException('The notification just added is missing.');
+                $id = (int) $this->notifications->add($incidentId, $key->instanceId, $key->checkName, $key->subject, $incident->openedAt, self::RECONCILED_DETAIL);
+                $created[] = $this->notifications->find($id) ?? throw new \LogicException('The notification just added is missing.');
+
+                if ($incident->openedAt >= $at - self::ALERT_FOR_SECONDS) {
+                    $this->alerts->add($id, AlertKind::Opened, $at);
+                }
             }
 
             foreach ($this->notifications->unresolved() as $notification) {
                 if (!isset($open[$notification->incidentId])) {
-                    $this->notifications->resolve($notification->incidentId, $at);
+                    $this->notifications->resolve($notification->incidentId, $at, null);
                     $resolved[] = $this->notifications->find($notification->id) ?? $notification;
+
+                    if ($this->alerts->openedNotGivenUp($notification->id)) {
+                        $this->alerts->add($notification->id, AlertKind::Resolved, $at);
+                    }
                 }
             }
 
@@ -165,6 +192,27 @@ final class NotificationsApi
 
             return new NotificationReconciliation($at, $created, $resolved);
         });
+    }
+
+    /**
+     * Sends the pending alert emails (design section 13.3) to every
+     * administrator: a summary instead when many instances fail or recover
+     * at once, retries for up to 60 minutes, and no new email after 40
+     * seconds. Run by the tick only, never inside a request.
+     */
+    public function sendPendingAlerts(FleetApi $fleet, AccessApi $access): AlertReport
+    {
+        try {
+            $settings = $this->settingsForSending();
+        } catch (EmailNotSetUp) {
+            $settings = AlertSender::NOT_SET_UP;
+        } catch (EmailNotSent $unreadable) {
+            $settings = $unreadable->getMessage();
+        }
+
+        $sender = new AlertSender($this->database, $this->clock, $this->alerts, $this->notifications, $this->mailer);
+
+        return $sender->send($settings, $access->administratorEmails(), $fleet->pickedInstances(), $access->baseUrl());
     }
 
     /**
@@ -249,7 +297,7 @@ final class NotificationsApi
         $now = $this->clock->now();
         $from = $baseUrl === null ? '' : ' at ' . $baseUrl;
         $email = new Email(
-            $recipient,
+            [$recipient],
             self::TEST_EMAIL_SUBJECT,
             sprintf(
                 "This is a test email from Maguari%s, sent at %s UTC by %s.\n\nAlerts will be sent the same way.\n",

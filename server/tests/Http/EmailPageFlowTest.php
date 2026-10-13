@@ -250,7 +250,7 @@ final class EmailPageFlowTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertStringContainsString('<p>Sent a test email to jane@example.com through smtp.gmail.com at ', $body);
         $this->assertCount(1, $this->environment->mailer->sent);
-        $this->assertSame('jane@example.com', $this->environment->mailer->sent[0]['email']->recipient);
+        $this->assertSame('jane@example.com', $this->environment->mailer->sent[0]['email']->recipients[0]);
         $this->assertStringContainsString('sent at ', $this->environment->mailer->sent[0]['email']->body);
         $this->assertStringNotContainsString(self::PASSWORD, $body);
     }

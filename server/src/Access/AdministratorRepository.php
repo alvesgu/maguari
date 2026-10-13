@@ -18,6 +18,14 @@ final class AdministratorRepository
         return $this->database->pdo()->query('SELECT 1 FROM access_administrators LIMIT 1')->fetchColumn() !== false;
     }
 
+    /**
+     * @return list<string> every administrator's address, in creation order
+     */
+    public function emails(): array
+    {
+        return $this->database->pdo()->query('SELECT email FROM access_administrators ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
     public function findById(int $id): ?Administrator
     {
         $statement = $this->database->pdo()->prepare('SELECT id, name, email FROM access_administrators WHERE id = ?');

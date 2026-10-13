@@ -145,6 +145,16 @@ final class AccessApi
         return $this->passwordHasher->verify($password, $passwordHash) ? $administrator : null;
     }
 
+    /**
+     * Where alert emails go (design section 13.3): every administrator.
+     *
+     * @return list<string>
+     */
+    public function administratorEmails(): array
+    {
+        return $this->administrators->emails();
+    }
+
     public function administrator(int $id): ?Administrator
     {
         return $this->administrators->findById($id);

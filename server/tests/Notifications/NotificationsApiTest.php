@@ -182,7 +182,7 @@ final class NotificationsApiTest extends TestCase
         ['settings' => $settings, 'email' => $email, 'localHostname' => $hostname] = $this->environment->mailer->sent[0];
         $this->assertSame(SmtpEncryption::StartTls, $settings->encryption);
         $this->assertSame(self::PASSWORD, $settings->password);
-        $this->assertSame('jane@example.com', $email->recipient);
+        $this->assertSame('jane@example.com', $email->recipients[0]);
         $this->assertSame('Maguari test email', $email->subject);
         $this->assertSame(sprintf(
             "This is a test email from Maguari at https://maguari.example.com, sent at %s UTC by Zoë Doe.\n\nAlerts will be sent the same way.\n",

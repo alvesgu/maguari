@@ -11,11 +11,18 @@ namespace Maguari\Server\Notifications;
 final class SendFailureSentence
 {
     public const UNEXPECTED = 'The test email could not be sent. The details are in the server\'s error log.';
+    /** For alert emails, sent by the tick, whose output is the log. */
+    public const UNEXPECTED_ALERT = 'The email could not be sent for an unexpected reason. The details are in the tick\'s output.';
     /** Reply code for "authentication required" (RFC 4954). */
     private const AUTHENTICATION_REQUIRED = 530;
 
-    public static function for(SendFailure $failure, SmtpSettings $settings, string $recipient): string
+    /**
+     * @param list<string>|string $recipients
+     * @param string $unexpected the sentence for a failure outside any SMTP stage
+     */
+    public static function for(SendFailure $failure, SmtpSettings $settings, array|string $recipients, string $unexpected = self::UNEXPECTED): string
     {
+        $recipients = (array) $recipients;
         $host = $settings->host;
         $reply = $failure->replyCode === null ? '' : sprintf(' (reply %d)', $failure->replyCode);
 
@@ -49,9 +56,11 @@ final class SendFailureSentence
             SmtpStage::Sender => $failure->replyCode === self::AUTHENTICATION_REQUIRED
                 ? sprintf('%s requires a username and password.', $host)
                 : sprintf('%s refused the sender address %s%s. Use an address this account is allowed to send from.', $host, $settings->fromAddress, $reply),
-            SmtpStage::Recipient => sprintf('%s refused the recipient address %s%s.', $host, $recipient, $reply),
+            SmtpStage::Recipient => count($recipients) === 1
+                ? sprintf('%s refused the recipient address %s%s.', $host, $recipients[0], $reply)
+                : sprintf('%s refused one of the recipient addresses %s%s.', $host, implode(', ', $recipients), $reply),
             SmtpStage::Message => sprintf('%s refused the message%s.', $host, $reply),
-            null => self::UNEXPECTED,
+            null => $unexpected,
         };
     }
 }

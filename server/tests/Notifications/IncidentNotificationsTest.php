@@ -71,7 +71,7 @@ final class IncidentNotificationsTest extends TestCase
 
         $open = $notifications->openNotifications(1);
         $this->assertSame([4, 3], self::incidentIds($open), 'Newest first.');
-        $this->assertEquals(new Notification(1, 3, 7, 'remote_certificate', 'www.example.com', $openedAt, null, false), $open[1]);
+        $this->assertEquals(new Notification(1, 3, 7, 'remote_certificate', 'www.example.com', $openedAt, null, false, 'A sentence.'), $open[1]);
 
         $this->environment->clock->advance(60);
         $this->publish(new IncidentResolved(3, 7, 'remote_certificate', 'www.example.com', $this->environment->clock->now(), Resolution::Withdrawn));

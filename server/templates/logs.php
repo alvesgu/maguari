@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 /**
- * @var \Closure $e
+ * @var \Closure $e @var \Closure $partial
  * @var \Maguari\Server\Notifications\LogPage $page
  * @var array<int, string> $instanceNames picked instances' "project/name" by ID
  */
@@ -15,10 +15,10 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <p>No notifications yet.</p>
 <?php else: ?>
 <table>
-<thead><tr><th>Opened</th><th>Instance</th><th>Check</th><th>Subject</th><th>Resolved</th><th>Hidden</th></tr></thead>
+<thead><tr><th>Opened</th><th>Instance</th><th>Check</th><th>Subject</th><th>Resolved</th><th>Hidden</th><th>Alert emails</th></tr></thead>
 <tbody>
 <?php foreach ($page->notifications as $notification): ?>
-<tr><td><?= $e($utc($notification->openedAt)) ?></td><td><?php if (isset($instanceNames[$notification->instanceId])): ?><a href="/admin/instances/<?= $notification->instanceId ?>"><?= $e($instanceNames[$notification->instanceId]) ?></a><?php else: ?>Instance <?= $notification->instanceId ?><?php endif; ?></td><td><?= $e(NotificationsApi::checkLabel($notification->checkName)) ?></td><td><?= $e($notification->subject) ?></td><td><?= $notification->resolvedAt === null ? 'Open' : $e($utc($notification->resolvedAt)) ?></td><td><?= $notification->hidden ? 'Hidden by you' : '' ?></td></tr>
+<tr><td><?= $e($utc($notification->openedAt)) ?></td><td><?php if (isset($instanceNames[$notification->instanceId])): ?><a href="/admin/instances/<?= $notification->instanceId ?>"><?= $e($instanceNames[$notification->instanceId]) ?></a><?php else: ?>Instance <?= $notification->instanceId ?><?php endif; ?></td><td><?= $e(NotificationsApi::checkLabel($notification->checkName)) ?></td><td><?= $e($notification->subject) ?></td><td><?= $notification->resolvedAt === null ? 'Open' : $e($utc($notification->resolvedAt)) ?></td><td><?= $notification->hidden ? 'Hidden by you' : '' ?></td><td><?php foreach ($page->alerts[$notification->id] ?? [] as $i => $alert): ?><?= $i > 0 ? '<br>' : '' ?><?= $e($alert->kind->label() . ': ' . $alert->outcome()) ?><?php if ($alert->lastFailure !== null): ?><?= $partial('info', ['text' => $alert->lastFailure]) ?><?php endif; ?><?php endforeach; ?></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>

@@ -589,7 +589,8 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame(0, $status, $stderr);
         // Remediation opens an incident, whose event is delivered in the same tick.
         $this->assertSame("Delivered event 2 (monitoring.check_failed).\nDelivered event 3 (remediation.incident_opened).\n", $stdout);
-        $this->assertSame('', $stderr);
+        // Its alert email cannot be sent without SMTP settings, which does not fail the tick.
+        $this->assertSame("Gave up on the opened alert of incident 1 on instance 1 (disk_size): Email is not set up.\n", $stderr);
         $this->assertSame(
             [['id' => 2, 'pending' => 0], ['id' => 3, 'pending' => 0]],
             $pdo->query('SELECT id, delivered_at IS NULL AS pending FROM kernel_events')->fetchAll(\PDO::FETCH_ASSOC),

@@ -71,9 +71,12 @@ final class SmtpMailerTest extends TestCase
         return new SmtpSettings('localhost', $port, $encryption, $username, $username === '' ? '' : self::PASSWORD, 'alerts@example.com');
     }
 
-    private function send(SmtpSettings $settings, int $timeoutSeconds = 5): void
+    /**
+     * @param list<string> $recipients
+     */
+    private function send(SmtpSettings $settings, int $timeoutSeconds = 5, array $recipients = ['jane@example.com']): void
     {
-        $email = new Email('jane@example.com', 'Maguari test email', "This is a test email from Maguari, sent by Zoë.\n\nSecond paragraph.\n");
+        $email = new Email($recipients, 'Maguari test email', "This is a test email from Maguari, sent by Zoë.\n\nSecond paragraph.\n");
         (new SmtpMailer($timeoutSeconds, ['cafile' => $this->caFile]))->send($settings, $email, 'maguari.example.com');
     }
 
@@ -104,6 +107,17 @@ final class SmtpMailerTest extends TestCase
                 $this->assertStringNotContainsString('CREDENTIALS', $line);
             }
         }
+    }
+
+    public function testSendsOneEmailToEveryRecipient(): void
+    {
+        $this->send(self::settings($this->server('starttls'), SmtpEncryption::StartTls), recipients: ['jane@example.com', 'john@example.com']);
+        $received = $this->received();
+
+        $this->assertContains('[tls] RCPT TO:<jane@example.com>', $received);
+        $this->assertContains('[tls] RCPT TO:<john@example.com>', $received);
+        $this->assertContains('[tls] | To: jane@example.com, john@example.com', $received);
+        $this->assertSame(1, count(array_filter($received, static fn (string $line): bool => $line === '[tls] DATA')));
     }
 
     public function testSendsOverStartTls(): void

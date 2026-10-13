@@ -6,6 +6,8 @@ namespace Maguari\Server\Cli;
 
 use Maguari\Server\Kernel\Events\DeliveryReport;
 use Maguari\Server\Kernel\Events\EventDelivery;
+use Maguari\Server\Notifications\AlertOutcome;
+use Maguari\Server\Notifications\AlertReport;
 use Maguari\Server\Notifications\Notification;
 use Maguari\Server\Notifications\NotificationReconciliation;
 use Maguari\Server\Remediation\Domain\Incident;
@@ -89,6 +91,80 @@ final class TickReport
         }
 
         return $lines;
+    }
+
+    /**
+     * One line per alert email sent, and one when the time limit left some
+     * for the next tick.
+     *
+     * @param array<int, string> $names instance names by ID
+     * @return list<string> for stdout, without line endings
+     */
+    public static function alertLines(AlertReport $report, array $names): array
+    {
+        $lines = [];
+        $to = sprintf('%d %s', $report->recipients, $report->recipients === 1 ? 'administrator' : 'administrators');
+
+        foreach ($report->outcomes as $outcome) {
+            if ($outcome->status === AlertOutcome::SENT) {
+                $lines[] = sprintf('Sent %s to %s.', self::alert($outcome, $names), $to);
+            }
+        }
+
+        if ($report->stoppedEarly) {
+            $lines[] = 'Stopped sending alerts after 40 seconds; the rest are sent on the next tick.';
+        }
+
+        return $lines;
+    }
+
+    /**
+     * One line per alert email that failed or was given up.
+     *
+     * @param array<int, string> $names instance names by ID
+     * @return list<string> for stderr, without line endings
+     */
+    public static function alertErrorLines(AlertReport $report, array $names): array
+    {
+        $lines = [];
+
+        foreach ($report->outcomes as $outcome) {
+            $sentence = str_replace(["\r", "\n"], ' ', (string) $outcome->sentence);
+            $detail = $outcome->logDetail === null ? '' : ' (' . str_replace(["\r", "\n"], ' ', $outcome->logDetail) . ')';
+
+            if ($outcome->status === AlertOutcome::FAILED) {
+                $lines[] = sprintf('Could not send %s: %s%s It is tried again on the next tick.', self::alert($outcome, $names), $sentence, $detail);
+            } elseif ($outcome->status === AlertOutcome::GIVEN_UP) {
+                $lines[] = sprintf('Gave up on %s: %s', self::alert($outcome, $names), $sentence);
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param array<int, string> $names
+     */
+    private static function alert(AlertOutcome $outcome, array $names): string
+    {
+        $kind = $outcome->kind->value;
+
+        if ($outcome->summary) {
+            $incidents = array_map(static fn (Notification $notification): int => $notification->incidentId, $outcome->notifications);
+
+            return sprintf('the summary of %d %s alerts (incidents %s)', count($incidents), $kind, implode(', ', $incidents));
+        }
+
+        $notification = $outcome->notifications[0];
+
+        return sprintf(
+            'the %s alert of incident %d on %s (%s%s)',
+            $kind,
+            $notification->incidentId,
+            $names[$notification->instanceId] ?? 'instance ' . $notification->instanceId,
+            $notification->checkName,
+            $notification->subject === '' ? '' : ' ' . $notification->subject,
+        );
     }
 
     /**

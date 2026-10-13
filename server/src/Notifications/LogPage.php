@@ -16,12 +16,14 @@ final class LogPage
      * @param bool $hasNewer whether a newer page exists
      * @param ?int $newerBefore the "before" of the newer page; null for the
      *        first page (no "before" at all)
+     * @param array<int, list<Alert>> $alerts by notification ID
      */
     public function __construct(
         public readonly array $notifications,
         public readonly ?int $olderBefore,
         public readonly bool $hasNewer,
         public readonly ?int $newerBefore,
+        public readonly array $alerts = [],
     ) {
     }
 }

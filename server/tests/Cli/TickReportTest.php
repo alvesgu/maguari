@@ -8,6 +8,9 @@ use Maguari\Server\Cli\TickReport;
 use Maguari\Server\Kernel\Events\DeliveredEvent;
 use Maguari\Server\Kernel\Events\DeliveryReport;
 use Maguari\Server\Kernel\Events\FailedDelivery;
+use Maguari\Server\Notifications\AlertKind;
+use Maguari\Server\Notifications\AlertOutcome;
+use Maguari\Server\Notifications\AlertReport;
 use Maguari\Server\Notifications\Notification;
 use Maguari\Server\Notifications\NotificationReconciliation;
 use Maguari\Server\Remediation\Domain\Incident;
@@ -64,6 +67,30 @@ final class TickReportTest extends TestCase
             'The event 9 (monitoring.check_passed) failed: LogicException: Another bug. '
                 . 'Delivery stops here until the next tick (failed 1 of 3 times before it is skipped).',
         ], TickReport::errorLines($report));
+    }
+
+    public function testOneLinePerAlertEmail(): void
+    {
+        $web = new Notification(5, 3, 1, 'local_certificate', 'example.com', 100, null, false);
+        $db = new Notification(6, 4, 2, 'heartbeat_age', '', 100, null, false);
+        $report = new AlertReport([
+            new AlertOutcome(AlertKind::Opened, [$web], false, AlertOutcome::SENT),
+            new AlertOutcome(AlertKind::Resolved, [$web, $db], true, AlertOutcome::SENT),
+            new AlertOutcome(AlertKind::Opened, [$db], false, AlertOutcome::FAILED, 'Could not connect.', 'connect: timed out'),
+            new AlertOutcome(AlertKind::Resolved, [$db], false, AlertOutcome::GIVEN_UP, 'Email is not set up.'),
+        ], 1, true);
+        $names = [1 => 'my-project/us-east1-b/web'];
+
+        $this->assertSame([
+            'Sent the opened alert of incident 3 on my-project/us-east1-b/web (local_certificate example.com) to 1 administrator.',
+            'Sent the summary of 2 resolved alerts (incidents 3, 4) to 1 administrator.',
+            'Stopped sending alerts after 40 seconds; the rest are sent on the next tick.',
+        ], TickReport::alertLines($report, $names));
+        $this->assertSame([
+            'Could not send the opened alert of incident 4 on instance 2 (heartbeat_age): Could not connect. (connect: timed out) It is tried again on the next tick.',
+            'Gave up on the resolved alert of incident 4 on instance 2 (heartbeat_age): Email is not set up.',
+        ], TickReport::alertErrorLines($report, $names));
+        $this->assertSame([], TickReport::alertLines(new AlertReport([], 2, false), []));
     }
 
     public function testOneLinePerNotificationReconciled(): void

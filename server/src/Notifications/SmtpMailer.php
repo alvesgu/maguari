@@ -60,7 +60,9 @@ final class SmtpMailer implements Mailer
 
         try {
             $mailer->setFrom($settings->fromAddress, self::SENDER_NAME, false);
-            $mailer->addAddress($email->recipient);
+            foreach ($email->recipients as $recipient) {
+                $mailer->addAddress($recipient);
+            }
             $mailer->Subject = $email->subject;
             // quoted_printable_encode() turns a bare \n into =0A, which would
             // join the lines, so the body gets the CRLF line breaks of SMTP.

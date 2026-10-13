@@ -420,6 +420,65 @@ while true; do server/bin/maguari-server tick; sleep 60; done
 4. Start the client again and wait about six minutes. The tick prints the `Resolved incident` and `incident_resolved` lines, and the Logs screen shows the time it resolved.
 5. Stop the client again until a new incident opens, then start it and wait for it to resolve without hiding it: it leaves the dashboard by itself when it resolves.
 
+### Step 1.5
+
+- `notifications_alerts` has `given_up_at` besides P9's columns, so pending, sent and given up are told apart. A summary is a row of `notifications_alert_summaries`, which `summary_id` points to; the outcome is recorded on each alert it replaced.
+- An email is sent after the event, so the notification keeps what only the event knew: the failed result's sentence (`detail`) and why the incident resolved (`resolution`). These are facts from Monitoring and Remediation, not wording: the email's text is still built when it is sent.
+- The subject names the check's label and subject (`[Maguari] Incident on web-1: Served certificate example.com`) rather than a summary of the sentence, which is in the body.
+- `Email` now has a list of recipients, all in `To`; the test email still goes to one. A refused recipient among several says "refused one of the recipient addresses".
+- `NotificationsApi::sendPendingAlerts()` takes `FleetApi` and `AccessApi` as arguments rather than in its constructor, so only the tick's step depends on them. `RemediationApi::isMassFailure()` holds the rule with `MASS_FAILURE_SHARE` and `MASS_FAILURE_MIN_INSTANCES`.
+- A notification Notifications' reconciliation resolves sends "resolved" only when its "opened" alert was sent or may still be: whoever was told it opened is told it ended, and nobody gets a "resolved" for an incident they never heard of.
+- A stored SMTP password the key cannot decrypt is a failure tried for 60 minutes, not a reason to give up at once, since an administrator can enter it again.
+- A failed or given-up email is a line on stderr, with the SMTP detail for the log, but the tick still exits with 0: it is not a bug and is tried again. While email is not set up, each new alert prints one "Gave up ... Email is not set up." line.
+- The tick reads the administrators' addresses and the base URL through `AccessApi`.
+
+#### Manual check (step 1.5)
+
+In each terminal, from the repository root:
+
+```
+source scripts/dev-env.sh
+```
+
+Apply the new migration:
+
+```
+server/bin/maguari-server migrate
+```
+
+In a fourth terminal, start a local SMTP server that prints every message it receives:
+
+```
+python3 -m aiosmtpd -n -l localhost:1025
+```
+
+On the Email page, save host `localhost`, port `1025`, no username and any from address, and send a test email: it appears in the fourth terminal.
+
+In the first terminal, run the app from `server/`:
+
+```
+php -S localhost:8080 -t public
+```
+
+In the second terminal, run the client:
+
+```
+client/bin/maguari-client run
+```
+
+In the third terminal, start the tick loop and keep it running (Fix C):
+
+```
+while true; do server/bin/maguari-server tick; sleep 60; done
+```
+
+1. Stop the client with Ctrl+C. When the tick prints the `incident_opened` line, it also prints `Sent the opened alert of incident <id> on <project/zone/name> (heartbeat_age) to 1 administrator.`, and the email (subject `[Maguari] Incident on <name>: Heartbeat age`) appears in the fourth terminal with the sentence and the link to the instance page.
+2. Start the client again. About six minutes later the tick prints the `Resolved incident` line and `Sent the resolved alert ...`, and the "Resolved on" email arrives, saying the check passed for 5 minutes.
+3. The Logs screen shows both alerts as "Sent" with their times.
+4. Stop the SMTP server (Ctrl+C in the fourth terminal), then stop the client until an incident opens. The tick prints `Could not send the opened alert ...: Could not connect to localhost on port 1025 ...` on stderr, every minute. While it fails, the Logs screen shows "Not sent yet" with the number of failed tries and the sentence behind the (i) icon. Start the SMTP server again: the next tick sends it, and the Logs screen shows it as sent.
+
+With a single instance a summary email never happens (the rule needs at least 2 instances failing). The tests cover it.
+
 ## Status
 
-Approved. Steps 1.1 to 1.4 implemented; step 1.4 is waiting for review.
+Approved. Steps 1.1 to 1.5 implemented; step 1.5 is waiting for review.

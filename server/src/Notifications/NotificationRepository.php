@@ -16,13 +16,13 @@ final class NotificationRepository
     /**
      * @return ?int the new notification's ID, null when the incident already had one
      */
-    public function add(int $incidentId, int $instanceId, string $checkName, string $subject, int $openedAt): ?int
+    public function add(int $incidentId, int $instanceId, string $checkName, string $subject, int $openedAt, string $detail): ?int
     {
         $statement = $this->database->pdo()->prepare(
-            'INSERT INTO notifications_notifications (incident_id, instance_id, check_name, subject, opened_at) VALUES (?, ?, ?, ?, ?) '
+            'INSERT INTO notifications_notifications (incident_id, instance_id, check_name, subject, opened_at, detail) VALUES (?, ?, ?, ?, ?, ?) '
                 . 'ON CONFLICT (incident_id) DO NOTHING',
         );
-        $statement->execute([$incidentId, $instanceId, $checkName, $subject, $openedAt]);
+        $statement->execute([$incidentId, $instanceId, $checkName, $subject, $openedAt, $detail]);
 
         return $statement->rowCount() === 1 ? (int) $this->database->pdo()->lastInsertId() : null;
     }
@@ -71,16 +71,44 @@ final class NotificationRepository
     }
 
     /**
-     * @return bool whether the incident had an unresolved notification
+     * @param ?string $resolution why, when Remediation said so
+     * @return ?int the notification's ID, null when the incident had no
+     *         unresolved notification
      */
-    public function resolve(int $incidentId, int $resolvedAt): bool
+    public function resolve(int $incidentId, int $resolvedAt, ?string $resolution): ?int
     {
         $statement = $this->database->pdo()->prepare(
-            'UPDATE notifications_notifications SET resolved_at = ? WHERE incident_id = ? AND resolved_at IS NULL',
+            'UPDATE notifications_notifications SET resolved_at = ?, resolution = ? WHERE incident_id = ? AND resolved_at IS NULL',
         );
-        $statement->execute([$resolvedAt, $incidentId]);
+        $statement->execute([$resolvedAt, $resolution, $incidentId]);
 
-        return $statement->rowCount() === 1;
+        if ($statement->rowCount() !== 1) {
+            return null;
+        }
+
+        $id = $this->database->pdo()->prepare('SELECT id FROM notifications_notifications WHERE incident_id = ?');
+        $id->execute([$incidentId]);
+
+        return (int) $id->fetchColumn();
+    }
+
+    /**
+     * @param int[] $ids
+     * @return array<int, Notification> by ID
+     */
+    public function findMany(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $notifications = [];
+
+        foreach ($this->select(0, 'WHERE n.id IN (' . implode(', ', array_fill(0, count($ids), '?')) . ')', array_values($ids)) as $notification) {
+            $notifications[$notification->id] = $notification;
+        }
+
+        return $notifications;
     }
 
     public function exists(int $id): bool
@@ -141,7 +169,7 @@ final class NotificationRepository
     private function select(int $administratorId, string $rest, array $parameters): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT n.id, n.incident_id, n.instance_id, n.check_name, n.subject, n.opened_at, n.resolved_at, '
+            'SELECT n.id, n.incident_id, n.instance_id, n.check_name, n.subject, n.opened_at, n.resolved_at, n.detail, n.resolution, '
                 . 'h.notification_id IS NOT NULL AS hidden FROM notifications_notifications AS n '
                 . 'LEFT JOIN notifications_hidden AS h ON h.notification_id = n.id AND h.administrator_id = ? ' . $rest,
         );
@@ -162,6 +190,8 @@ final class NotificationRepository
                 (int) $row['opened_at'],
                 $row['resolved_at'] === null ? null : (int) $row['resolved_at'],
                 (bool) $row['hidden'],
+                $row['detail'],
+                $row['resolution'],
             ),
             $statement->fetchAll(),
         );

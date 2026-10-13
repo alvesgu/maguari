@@ -302,7 +302,9 @@ function runDailyJobCommand(array $args): int
  * The per-minute tick (design section 10.1), run by a systemd timer in
  * production and by hand in development: judges heartbeat ages, delivers
  * pending domain events, resolves incidents (and once a day reconciles
- * them), delivers again and deletes old delivered events. One tick at a time, through a lock file next to
+ * them), delivers again, sends alert emails and deletes old delivered
+ * events. A failed email is one line on stderr but does not fail the tick:
+ * it is tried again on the next one. One tick at a time, through a lock file next to
  * the database. Prints nothing when nothing happened. Exits with 1 when an
  * event failed, so systemd shows the failure.
  *
@@ -364,6 +366,10 @@ function tickCommand(array $args): int
         ? null
         : $notifications->reconcileIfDue($remediation);
 
+    // (e) Alert emails, outside any transaction, after everything above
+    // is committed, so a slow SMTP server never holds up incidents.
+    $access = new AccessApi($database, $clock);
+    $alerts = $notifications->sendPendingAlerts($fleet, $access);
     $delivery->pruneDelivered();
     $lock->release();
 
@@ -378,11 +384,16 @@ function tickCommand(array $args): int
         ...TickReport::incidentLines($resolved, $reconciliation, $names),
         ...(isset($reports[1]) ? TickReport::lines($reports[1]) : []),
         ...TickReport::notificationLines($notificationReconciliation, $names),
+        ...TickReport::alertLines($alerts, $names),
     ];
     $failed = false;
 
     foreach ($lines as $line) {
         echo $line . "\n";
+    }
+
+    foreach (TickReport::alertErrorLines($alerts, $names) as $line) {
+        fwrite(STDERR, $line . "\n");
     }
 
     foreach ($reports as $report) {
