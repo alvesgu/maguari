@@ -6,6 +6,8 @@ namespace Maguari\Server\Tests\Notifications;
 
 use Maguari\Server\Kernel\Events\EventDelivery;
 use Maguari\Server\Kernel\Events\EventOutbox;
+use Maguari\Server\Monitoring\Event\CheckFailed;
+use Maguari\Server\Notifications\CheckLabels;
 use Maguari\Server\Notifications\Exception\NotificationNotFound;
 use Maguari\Server\Notifications\Notification;
 use Maguari\Server\Remediation\Domain\Resolution;
@@ -122,6 +124,70 @@ final class IncidentNotificationsTest extends TestCase
         $this->expectException(NotificationNotFound::class);
 
         $this->environment->notifications->hide(99, 1);
+    }
+
+    public function testAnUnknownCheckGetsAGenericLabel(): void
+    {
+        $this->assertSame('Disk size', CheckLabels::of('disk_size'));
+        $this->assertSame('Other check (http_status)', CheckLabels::of('http_status'));
+        $this->assertSame('Other check', CheckLabels::of(''));
+        $this->assertSame('Other check (weird)', CheckLabels::of('<Weird>'));
+    }
+
+    /**
+     * Opens incidents in Remediation through Monitoring's events, without
+     * delivering Remediation's own events to Notifications.
+     */
+    private function openIncidentWithoutNotification(int $instanceId, string $checkName): void
+    {
+        $outbox = new EventOutbox($this->environment->database);
+        $this->environment->database->transaction(fn () => $outbox->record(
+            (new CheckFailed($instanceId, $checkName, '', $this->environment->clock->now(), 'It failed.'))->toEvent(),
+        ));
+        (new EventDelivery($this->environment->database, $this->environment->clock, $this->environment->remediation->subscribers()))->deliver();
+    }
+
+    public function testReconciliationCreatesMissingAndResolvesStaleNotifications(): void
+    {
+        $notifications = $this->environment->notifications;
+        $remediation = $this->environment->remediation;
+        // Opened before Notifications subscribed: incidents 1 and 2.
+        $this->openIncidentWithoutNotification(7, 'heartbeat_age');
+        $openedAt = $this->environment->clock->now();
+        $this->environment->clock->advance(60);
+        $this->openIncidentWithoutNotification(8, 'disk_size');
+        // A notification whose incident 9 never existed or was resolved unseen.
+        $this->publish($this->opened(9));
+        $this->deliver();
+        $this->environment->clock->advance(60);
+
+        $reconciliation = $notifications->reconcileIfDue($remediation);
+
+        $this->assertNotNull($reconciliation);
+        $this->assertSame([1, 2], self::incidentIds($reconciliation->created), 'Oldest first.');
+        $this->assertSame($openedAt, $reconciliation->created[0]->openedAt, 'When the incident opened.');
+        $this->assertSame([9], self::incidentIds($reconciliation->resolved));
+        $this->assertSame($this->environment->clock->now(), $reconciliation->resolved[0]->resolvedAt);
+        $this->assertSame([2, 1], self::incidentIds($notifications->openNotifications(1)));
+        $this->assertSame(
+            [[$this->environment->clock->now(), 2, 1]],
+            array_map('array_values', $this->environment->database->pdo()->query('SELECT ran_at, created, resolved FROM notifications_reconciliations')->fetchAll()),
+        );
+    }
+
+    public function testReconciliationRunsAtOnceWhenItNeverRanAndThenOnceADay(): void
+    {
+        $notifications = $this->environment->notifications;
+        $remediation = $this->environment->remediation;
+
+        $this->assertNotNull($notifications->reconcileIfDue($remediation));
+        $this->environment->clock->advance(86_400);
+        $this->assertNull($notifications->reconcileIfDue($remediation), 'Exactly a day later is not more than a day.');
+        $this->environment->clock->advance(1);
+        $first = $notifications->reconcileIfDue($remediation);
+        $this->assertNotNull($first);
+        $this->assertSame([], $first->created);
+        $this->assertSame([], $first->resolved);
     }
 
     public function testTheLogsScreenPagesBy100(): void

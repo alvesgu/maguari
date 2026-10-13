@@ -52,12 +52,12 @@ final class RemediationApi
     }
 
     /**
-     * @param int[] $instanceIds
+     * @param ?int[] $instanceIds null for every instance
      * @return list<Incident> the open incidents of these instances, newest first
      */
-    public function openIncidents(array $instanceIds): array
+    public function openIncidents(?array $instanceIds = null): array
     {
-        return $this->incidents->openAmong($instanceIds);
+        return $instanceIds === null ? array_reverse($this->incidents->allOpen()) : $this->incidents->openAmong($instanceIds);
     }
 
     /**

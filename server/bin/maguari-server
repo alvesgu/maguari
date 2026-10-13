@@ -357,6 +357,13 @@ function tickCommand(array $args): int
         $reports[] = $delivery->deliver(EventDelivery::MAX_EVENTS_PER_DELIVERY - $delivered);
     }
 
+    // Notifications' daily reconciliation, only when no event is pending:
+    // otherwise it could act before an event and lose its facts.
+    $lastReport = $reports[count($reports) - 1];
+    $notificationReconciliation = $lastReport->stopped() || $lastReport->limitReached || count($reports) === 1
+        ? null
+        : $notifications->reconcileIfDue($remediation);
+
     $delivery->pruneDelivered();
     $lock->release();
 
@@ -370,6 +377,7 @@ function tickCommand(array $args): int
         ...TickReport::lines($reports[0]),
         ...TickReport::incidentLines($resolved, $reconciliation, $names),
         ...(isset($reports[1]) ? TickReport::lines($reports[1]) : []),
+        ...TickReport::notificationLines($notificationReconciliation, $names),
     ];
     $failed = false;
 

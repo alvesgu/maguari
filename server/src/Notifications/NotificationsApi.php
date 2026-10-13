@@ -13,6 +13,7 @@ use Maguari\Server\Notifications\Exception\EmailNotSent;
 use Maguari\Server\Notifications\Exception\EmailNotSetUp;
 use Maguari\Server\Notifications\Exception\InvalidSmtpSettings;
 use Maguari\Server\Notifications\Exception\NotificationNotFound;
+use Maguari\Server\Remediation\RemediationApi;
 
 /**
  * The Notifications context's public interface (design section 2.1): the
@@ -29,6 +30,8 @@ final class NotificationsApi
 
     /** Notifications per page of the Logs screen. */
     public const LOG_PAGE_SIZE = 100;
+
+    public const RECONCILE_EVERY_SECONDS = 86_400;
 
     private readonly SmtpSettingsRepository $smtpSettings;
     private readonly NotificationRepository $notifications;
@@ -106,6 +109,62 @@ final class NotificationsApi
             $newer !== [],
             $newer[self::LOG_PAGE_SIZE] ?? null,
         );
+    }
+
+    /**
+     * Notifications are a projection of Remediation's incidents, kept by
+     * events. When the last comparison is more than a day old (or none ran),
+     * compares the unresolved notifications with Remediation's open
+     * incidents, so an event lost to a bug, or delivered before Notifications
+     * subscribed, cannot leave them disagreeing for good: an open incident
+     * without a notification gets one, and a notification whose incident is
+     * no longer open is resolved now. One transaction. Run by the tick when
+     * no event is pending.
+     *
+     * @return ?NotificationReconciliation null when not due
+     */
+    public function reconcileIfDue(RemediationApi $remediation): ?NotificationReconciliation
+    {
+        $at = $this->clock->now();
+
+        return $this->database->transaction(function () use ($remediation, $at): ?NotificationReconciliation {
+            $last = $this->notifications->lastReconciledAt();
+
+            if ($last !== null && $at - $last <= self::RECONCILE_EVERY_SECONDS) {
+                return null;
+            }
+
+            $open = [];
+
+            foreach (array_reverse($remediation->openIncidents()) as $incident) {
+                $open[(int) $incident->id] = $incident;
+            }
+
+            $created = [];
+            $resolved = [];
+            $known = $this->notifications->incidentsWithNotification(array_keys($open));
+
+            foreach ($open as $incidentId => $incident) {
+                if (in_array($incidentId, $known, true)) {
+                    continue;
+                }
+
+                $key = $incident->key;
+                $id = $this->notifications->add($incidentId, $key->instanceId, $key->checkName, $key->subject, $incident->openedAt);
+                $created[] = $this->notifications->find((int) $id) ?? throw new \LogicException('The notification just added is missing.');
+            }
+
+            foreach ($this->notifications->unresolved() as $notification) {
+                if (!isset($open[$notification->incidentId])) {
+                    $this->notifications->resolve($notification->incidentId, $at);
+                    $resolved[] = $this->notifications->find($notification->id) ?? $notification;
+                }
+            }
+
+            $this->notifications->recordReconciliation($at, count($created), count($resolved));
+
+            return new NotificationReconciliation($at, $created, $resolved);
+        });
     }
 
     /**

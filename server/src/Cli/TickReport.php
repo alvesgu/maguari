@@ -6,6 +6,8 @@ namespace Maguari\Server\Cli;
 
 use Maguari\Server\Kernel\Events\DeliveryReport;
 use Maguari\Server\Kernel\Events\EventDelivery;
+use Maguari\Server\Notifications\Notification;
+use Maguari\Server\Notifications\NotificationReconciliation;
 use Maguari\Server\Remediation\Domain\Incident;
 use Maguari\Server\Remediation\Domain\Reconciliation;
 use Maguari\Server\Remediation\Domain\ResolutionRule;
@@ -65,6 +67,43 @@ final class TickReport
         }
 
         return $lines;
+    }
+
+    /**
+     * One line per notification Notifications' daily reconciliation created
+     * or resolved.
+     *
+     * @param array<int, string> $names instance names by ID
+     * @return list<string> without line endings
+     */
+    public static function notificationLines(?NotificationReconciliation $reconciliation, array $names): array
+    {
+        $lines = [];
+
+        foreach ($reconciliation->created ?? [] as $notification) {
+            $lines[] = sprintf('Reconciliation created notification %s: its incident is open but had none.', self::notification($notification, $names));
+        }
+
+        foreach ($reconciliation->resolved ?? [] as $notification) {
+            $lines[] = sprintf('Reconciliation resolved notification %s: its incident is no longer open.', self::notification($notification, $names));
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param array<int, string> $names
+     */
+    private static function notification(Notification $notification, array $names): string
+    {
+        return sprintf(
+            '%d of incident %d on %s (%s%s)',
+            $notification->id,
+            $notification->incidentId,
+            $names[$notification->instanceId] ?? 'instance ' . $notification->instanceId,
+            $notification->checkName,
+            $notification->subject === '' ? '' : ' ' . $notification->subject,
+        );
     }
 
     /**

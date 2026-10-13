@@ -8,6 +8,8 @@ use Maguari\Server\Cli\TickReport;
 use Maguari\Server\Kernel\Events\DeliveredEvent;
 use Maguari\Server\Kernel\Events\DeliveryReport;
 use Maguari\Server\Kernel\Events\FailedDelivery;
+use Maguari\Server\Notifications\Notification;
+use Maguari\Server\Notifications\NotificationReconciliation;
 use Maguari\Server\Remediation\Domain\Incident;
 use Maguari\Server\Remediation\Domain\IncidentKey;
 use Maguari\Server\Remediation\Domain\Reconciliation;
@@ -62,6 +64,18 @@ final class TickReportTest extends TestCase
             'The event 9 (monitoring.check_passed) failed: LogicException: Another bug. '
                 . 'Delivery stops here until the next tick (failed 1 of 3 times before it is skipped).',
         ], TickReport::errorLines($report));
+    }
+
+    public function testOneLinePerNotificationReconciled(): void
+    {
+        $created = new Notification(5, 3, 1, 'local_certificate', 'example.com', 100, null, false);
+        $resolved = new Notification(4, 2, 9, 'disk_size', '', 100, 600, false);
+
+        $this->assertSame([
+            'Reconciliation created notification 5 of incident 3 on my-project/us-east1-b/web (local_certificate example.com): its incident is open but had none.',
+            'Reconciliation resolved notification 4 of incident 2 on instance 9 (disk_size): its incident is no longer open.',
+        ], TickReport::notificationLines(new NotificationReconciliation(600, [$created], [$resolved]), [1 => 'my-project/us-east1-b/web']));
+        $this->assertSame([], TickReport::notificationLines(null, []));
     }
 
     public function testOneLinePerIncidentTheTickResolvedOrReconciled(): void

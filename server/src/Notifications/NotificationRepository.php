@@ -13,12 +13,61 @@ final class NotificationRepository
     ) {
     }
 
-    public function add(int $incidentId, int $instanceId, string $checkName, string $subject, int $openedAt): void
+    /**
+     * @return ?int the new notification's ID, null when the incident already had one
+     */
+    public function add(int $incidentId, int $instanceId, string $checkName, string $subject, int $openedAt): ?int
     {
-        $this->database->pdo()->prepare(
+        $statement = $this->database->pdo()->prepare(
             'INSERT INTO notifications_notifications (incident_id, instance_id, check_name, subject, opened_at) VALUES (?, ?, ?, ?, ?) '
                 . 'ON CONFLICT (incident_id) DO NOTHING',
-        )->execute([$incidentId, $instanceId, $checkName, $subject, $openedAt]);
+        );
+        $statement->execute([$incidentId, $instanceId, $checkName, $subject, $openedAt]);
+
+        return $statement->rowCount() === 1 ? (int) $this->database->pdo()->lastInsertId() : null;
+    }
+
+    /**
+     * @return list<Notification> every unresolved notification, oldest first,
+     *         read without an administrator (hidden is false)
+     */
+    public function unresolved(): array
+    {
+        return $this->select(0, 'WHERE n.resolved_at IS NULL ORDER BY n.id', []);
+    }
+
+    public function find(int $id): ?Notification
+    {
+        return $this->select(0, 'WHERE n.id = ?', [$id])[0] ?? null;
+    }
+
+    /**
+     * @return list<int> the incidents that have a notification, among $incidentIds
+     */
+    public function incidentsWithNotification(array $incidentIds): array
+    {
+        if ($incidentIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($incidentIds), '?'));
+        $statement = $this->database->pdo()->prepare("SELECT incident_id FROM notifications_notifications WHERE incident_id IN ({$placeholders})");
+        $statement->execute(array_values($incidentIds));
+
+        return array_map('intval', $statement->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    public function lastReconciledAt(): ?int
+    {
+        $ranAt = $this->database->pdo()->query('SELECT MAX(ran_at) FROM notifications_reconciliations')->fetchColumn();
+
+        return $ranAt === null || $ranAt === false ? null : (int) $ranAt;
+    }
+
+    public function recordReconciliation(int $at, int $created, int $resolved): void
+    {
+        $this->database->pdo()->prepare('INSERT INTO notifications_reconciliations (ran_at, created, resolved) VALUES (?, ?, ?)')
+            ->execute([$at, $created, $resolved]);
     }
 
     /**

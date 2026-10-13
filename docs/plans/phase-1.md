@@ -375,10 +375,12 @@ while true; do server/bin/maguari-server tick; sleep 60; done
 
 - The tick now reads the secret key file, because it builds `NotificationsApi`, which needs it for the SMTP password (step 1.5 sends with it). A tick without the key fails with one line on stderr naming the file, like the web app treats itself as not set up. The CLI tests create the key for the tick.
 - `Notifications/CheckLabels` repeats the four check names that `MonitoringApi::checkLabel()` has, because P8 item 2 gives Notifications its own labels. The alert emails of step 1.5 can then use them without depending on Monitoring.
-- Incidents opened before this step (while testing step 1.3) have no notification: their `incident_opened` events were delivered to nobody. Remediation's reconciliation only reopens incidents, not notifications, so they never appear. Resolved ones are simply ignored.
+- Incidents opened before this step (while testing step 1.3) had no notification: their `incident_opened` events were delivered to nobody, and resolving one without a notification is simply ignored. Notifications' own reconciliation, added after review (below), now creates the missing ones.
 - A second delivery of the same `incident_opened` adds nothing (`incident_id` is unique), so the subscriber is safe to replay.
 - The dashboard names instances `project/name`, linked to their page, and "Instance 12" without a link for one that is no longer picked. The Logs screen does the same.
 - Design section 10.2 has no list of routes; the two new routes are described in section 10.4 with the rest of the feature.
+- Added after review: Notifications is a projection of Remediation's incidents, so it gets a daily reconciliation like Remediation's (`NotificationsApi::reconcileIfDue()`, design 10.4 item 8). It compares unresolved notifications with `RemediationApi::openIncidents()`, which returns every open incident when called without instance IDs, creating missing notifications and resolving stale ones. It runs after the tick's last delivery, only when no event is left pending. This also covers incidents opened before step 1.4: the first tick after the migration creates their notifications. In step 1.5, a notification it creates sends the "incident opened" email only if the incident opened within the last 60 minutes.
+- Added after review: a check Notifications does not know yet gets a generic label that still names it, "Other check (http_status)", never an error.
 
 #### Manual check (step 1.4)
 

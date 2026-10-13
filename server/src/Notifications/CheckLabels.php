@@ -19,10 +19,18 @@ final class CheckLabels
     ];
 
     /**
-     * The check's own name when it has no label, so a newer check still shows.
+     * A check Notifications does not know yet (phase 2 adds checks) gets a
+     * generic label that still names it, for example "Other check
+     * (http_status)", so a notification or email never fails on it.
      */
     public static function of(string $checkName): string
     {
-        return self::LABELS[$checkName] ?? $checkName;
+        if (isset(self::LABELS[$checkName])) {
+            return self::LABELS[$checkName];
+        }
+
+        $name = preg_replace('/[^a-z0-9_]/', '', strtolower($checkName)) ?? '';
+
+        return $name === '' ? 'Other check' : "Other check ({$name})";
     }
 }

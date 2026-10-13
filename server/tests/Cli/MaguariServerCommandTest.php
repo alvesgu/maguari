@@ -554,6 +554,26 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('', $stdout, 'Once a day.');
     }
 
+    public function testTickReconcilesNotificationsWithOpenIncidents(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->prepareForTick($path);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
+        $pdo->exec("INSERT INTO fleet_instances (id, project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, 1, '1', 'us-east1-b', 'web', 0)");
+        // An incident Notifications never heard of, which Monitoring agrees is failing.
+        $pdo->exec("INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since) VALUES (1, 'disk_size', '', 'fail', 2)");
+        $pdo->exec("INSERT INTO remediation_incidents (instance_id, check_name, subject, opened_at) VALUES (1, 'disk_size', '', 2)");
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame(
+            "Reconciliation created notification 1 of incident 1 on my-project/us-east1-b/web (disk_size): its incident is open but had none.\n",
+            $stdout,
+        );
+    }
+
     public function testTickDeliversPendingEventsAndPrunesOldOnes(): void
     {
         $path = $this->directory . '/maguari.sqlite';
@@ -589,6 +609,7 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('', $stdout);
         $this->assertStringStartsWith('The event 1 (monitoring.check_failed) failed: JsonException: ', $stderr);
         $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
+        $this->assertFalse($pdo->query('SELECT 1 FROM notifications_reconciliations')->fetchColumn(), 'Not while an event is pending.');
     }
 
     public function testASecondTickWhileOneIsRunningDoesNothing(): void

@@ -197,6 +197,7 @@ final class IncidentsTest extends TestCase
         $this->assertCount(3, $this->open(7));
         $this->assertCount(1, $this->open(8));
         $this->assertCount(4, $this->environment->remediation->openIncidents([7, 8]));
+        $this->assertSame([4, 3, 2, 1], array_map(static fn (Incident $incident): ?int => $incident->id, $this->environment->remediation->openIncidents()), 'Every instance, newest first.');
         $this->assertSame([], $this->environment->remediation->openIncidents([]));
     }
 
