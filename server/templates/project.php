@@ -1,5 +1,5 @@
 <?php declare(strict_types=1);
-/** @var \Closure $e @var \Maguari\Server\Fleet\Project $project @var ?\Maguari\Server\Fleet\InstanceList $instances @var array<string, \Maguari\Server\Clients\EnrollmentState> $enrollmentStates @var array<string, \Maguari\Server\Clients\HeartbeatStatus> $heartbeats @var array<string, int> $instanceIds picked instances' IDs @var ?string $error @var string $csrf @var \Closure $partial */ ?>
+/** @var \Closure $e @var \Maguari\Server\Fleet\Project $project @var ?\Maguari\Server\Fleet\InstanceList $instances @var array<string, \Maguari\Server\Clients\EnrollmentState> $enrollmentStates @var array<string, \Maguari\Server\Monitoring\Domain\HeartbeatStatus> $heartbeats @var array<string, int> $instanceIds picked instances' IDs @var ?string $error @var string $csrf @var \Closure $partial */ ?>
 <h1><?= $e($project->gcpProjectId) ?></h1>
 <p><a href="/admin/projects">Back to projects</a></p>
 <h2>Instances</h2>

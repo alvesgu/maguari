@@ -493,6 +493,28 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame(0600, fileperms($path . '.tick-lock') & 0777);
     }
 
+    public function testTickJudgesHeartbeatAgesBeforeDeliveringEvents(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
+        $pdo->exec("INSERT INTO fleet_instances (id, project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, 1, '1', 'us-east1-b', 'web', 0)");
+        $pdo->exec('INSERT INTO monitoring_heartbeats (instance_id, last_at) VALUES (1, ' . time() . ')');
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame("Delivered event 1 (monitoring.check_passed).\n", $stdout);
+        $this->assertSame('', $stderr);
+        $this->assertSame('pass', $pdo->query("SELECT outcome FROM monitoring_check_states WHERE check_name = 'heartbeat_age'")->fetchColumn());
+
+        [$status, $stdout] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(0, $status);
+        $this->assertSame('', $stdout, 'An unchanged outcome writes no event.');
+    }
+
     public function testTickDeliversPendingEventsAndPrunesOldOnes(): void
     {
         $path = $this->directory . '/maguari.sqlite';

@@ -1,0 +1,83 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Maguari\Server\Monitoring\Application;
+
+use Maguari\Server\Kernel\Events\EventOutbox;
+use Maguari\Server\Monitoring\Domain\CheckOutcome;
+use Maguari\Server\Monitoring\Domain\CheckResult;
+use Maguari\Server\Monitoring\Domain\CheckState;
+use Maguari\Server\Monitoring\Domain\HeartbeatAgeRule;
+use Maguari\Server\Monitoring\Event\CheckFailed;
+use Maguari\Server\Monitoring\Event\CheckPassed;
+use Maguari\Server\Monitoring\Event\CheckWithdrawn;
+use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
+
+/**
+ * Keeps each check's current outcome and writes an event when it changes
+ * (design section 6.3), never for a repeat or "not checked". Every method
+ * must run inside the transaction that stores the change, which the outbox
+ * enforces. Nothing is delivered here: the tick does that.
+ */
+final class CheckStates
+{
+    public function __construct(
+        private readonly CheckStateRepository $states,
+        private readonly EventOutbox $outbox,
+    ) {
+    }
+
+    public function record(CheckResult $result): void
+    {
+        $state = CheckState::after($this->states->find($result->instanceId, $result->checkName, $result->subject), $result);
+
+        if ($state === null) {
+            return;
+        }
+
+        $this->states->save($state);
+        $event = $state->outcome === CheckOutcome::Fail ? CheckFailed::fromResult($result) : CheckPassed::fromResult($result);
+        $this->outbox->record($event->toEvent());
+    }
+
+    /**
+     * Forgets a subject that is gone, writing check_withdrawn if it had an
+     * outcome.
+     */
+    public function withdraw(int $instanceId, string $checkName, string $subject, int $at): void
+    {
+        if ($this->states->delete($instanceId, $checkName, $subject)) {
+            $this->outbox->record((new CheckWithdrawn($instanceId, $checkName, $subject, $at))->toEvent());
+        }
+    }
+
+    /**
+     * After a successful daily run: withdraws the subjects of $checkNames
+     * that have an outcome but got no result for the instance in this run,
+     * because the instance no longer reports them. Only while the instance's
+     * heartbeat-age check passes: a silent instance reports nothing, and its
+     * missing results count as not checked.
+     *
+     * @param string[] $checkNames
+     * @param CheckResult[] $results the instance's results in the run
+     */
+    public function withdrawMissing(int $instanceId, array $checkNames, array $results, int $at): void
+    {
+        if ($this->states->find($instanceId, HeartbeatAgeRule::CHECK_NAME, '')?->outcome !== CheckOutcome::Pass) {
+            return;
+        }
+
+        $present = [];
+
+        foreach ($results as $result) {
+            $present[$result->checkName][$result->subject] = true;
+        }
+
+        foreach ($this->states->forInstance($instanceId, $checkNames) as $state) {
+            if (!isset($present[$state->checkName][$state->subject])) {
+                $this->withdraw($instanceId, $state->checkName, $state->subject, $at);
+            }
+        }
+    }
+}

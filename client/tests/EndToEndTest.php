@@ -13,7 +13,7 @@ use Maguari\Client\Tests\Support\FakeFilesystemStats;
 use Maguari\Client\Tests\Support\TemporaryDirectory;
 use Maguari\Client\Transport;
 use Maguari\Client\TransportResponse;
-use Maguari\Server\Clients\HeartbeatState;
+use Maguari\Server\Monitoring\Domain\HeartbeatState;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
 use Slim\Psr7\Factory\ServerRequestFactory;
@@ -108,17 +108,17 @@ final class EndToEndTest extends TestCase
 
         [$status, $stderr] = $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $token]);
         $this->assertSame(0, $status, $stderr);
-        $this->assertSame(HeartbeatState::NoHeartbeatYet, $this->server->clients->heartbeatStatuses([7])[7]->state);
+        $this->assertSame(HeartbeatState::NoHeartbeatYet, $this->server->monitoring->heartbeatStatuses([7])[7]->state);
 
         [$status, $stderr] = $this->client(['heartbeat']);
         $this->assertSame(0, $status, $stderr);
-        $this->assertSame(HeartbeatState::OnTime, $this->server->clients->heartbeatStatuses([7])[7]->state);
+        $this->assertSame(HeartbeatState::OnTime, $this->server->monitoring->heartbeatStatuses([7])[7]->state);
 
         // A second heartbeat with a new nonce is accepted too.
         $this->server->clock->advance(60);
         [$status, $stderr] = $this->client(['heartbeat']);
         $this->assertSame(0, $status, $stderr);
-        $this->assertSame(0, $this->server->clients->heartbeatStatuses([7])[7]->ageSeconds);
+        $this->assertSame(0, $this->server->monitoring->heartbeatStatuses([7])[7]->ageSeconds);
 
         // Both heartbeats' readings went into one run per metric.
         $now = $this->server->clock->now();

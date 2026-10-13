@@ -6,6 +6,7 @@ namespace Maguari\Server\Http\Controller;
 
 use Maguari\Server\Access\Administrator;
 use Maguari\Server\Clients\ClientsApi;
+use Maguari\Server\Clients\EnrollmentState;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Http\Session;
@@ -40,13 +41,16 @@ final class AdminController
     {
         $instances = $this->fleet->pickedInstances();
         $ids = array_map(static fn (Instance $instance): int => $instance->id, $instances);
+        $enrollmentStates = $this->clients->enrollmentStates($ids);
+        $enrolled = array_keys(array_filter($enrollmentStates, static fn (EnrollmentState $state): bool => $state === EnrollmentState::Enrolled));
 
         return $this->view->render($request, $response, 'admin', [
             'title' => 'Dashboard',
             'administrator' => $request->getAttribute(Administrator::class),
             'instances' => $instances,
-            'enrollmentStates' => $this->clients->enrollmentStates($ids),
-            'heartbeats' => $this->clients->heartbeatStatuses($ids),
+            'enrollmentStates' => $enrollmentStates,
+            'heartbeats' => $this->monitoring->heartbeatStatuses($enrolled),
+            'clientVersions' => $this->clients->clientVersions($ids),
             'dailyJob' => $this->monitoring->dailyJobSummary($ids),
         ]);
     }

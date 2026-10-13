@@ -35,6 +35,17 @@ final class CertificateHostnameRepository
         );
     }
 
+    public function find(int $instanceId, int $hostnameId): ?CertificateHostname
+    {
+        foreach ($this->forInstance($instanceId) as $hostname) {
+            if ($hostname->id === $hostnameId) {
+                return $hostname;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * @return int the new row's ID
      */

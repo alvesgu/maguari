@@ -7,7 +7,6 @@ namespace Maguari\Server\Tests\Clients;
 use Maguari\Server\Clients\EnrollmentState;
 use Maguari\Server\Clients\EnrollmentTokens;
 use Maguari\Server\Clients\Exception\InvalidClientRequest;
-use Maguari\Server\Clients\HeartbeatState;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
 
@@ -132,7 +131,7 @@ final class ClientsApiTest extends TestCase
         }
 
         $this->assertSame([], $this->runs());
-        $this->assertNull($this->environment->clients->heartbeatStatuses([7])[7]->lastHeartbeatAt);
+        $this->assertNull($this->environment->monitoring->heartbeatStatuses([7])[7]->lastHeartbeatAt);
     }
 
     public function testReEnrollingKeepsTheInstancesRuns(): void
@@ -148,31 +147,26 @@ final class ClientsApiTest extends TestCase
         $this->assertSame([['instance_id' => 7, 'start_at' => $now - 60, 'end_at' => $now]], $this->runs());
     }
 
-    public function testHeartbeatStatuses(): void
+    public function testClientVersions(): void
     {
         $this->environment->clients->issueEnrollmentToken(6);
         $client = $this->environment->enrollClient(7);
 
-        $statuses = $this->environment->clients->heartbeatStatuses([5, 6, 7]);
-
-        $this->assertSame([7], array_keys($statuses), 'Only enrolled instances have a heartbeat status.');
-        $this->assertSame(HeartbeatState::NoHeartbeatYet, $statuses[7]->state);
-        $this->assertNull($statuses[7]->lastHeartbeatAt);
-        $this->assertSame('0.1.0', $statuses[7]->clientVersion);
+        $this->assertSame([7 => '0.1.0'], $this->environment->clients->clientVersions([5, 6, 7]), 'Only enrolled instances have a version.');
 
         $this->heartbeat($client->clientId);
-        $heartbeatAt = $this->environment->clock->now();
-        $this->environment->clock->advance(90);
-        $onTime = $this->environment->clients->heartbeatStatuses([7])[7];
 
-        $this->assertSame(HeartbeatState::OnTime, $onTime->state);
-        $this->assertSame($heartbeatAt, $onTime->lastHeartbeatAt);
-        $this->assertSame(90, $onTime->ageSeconds);
-        $this->assertSame('0.3.0', $onTime->clientVersion);
+        $this->assertSame([7 => '0.3.0'], $this->environment->clients->clientVersions([7]));
+        $this->assertSame([], $this->environment->clients->clientVersions([]));
+    }
 
-        $this->environment->clock->advance(1);
+    public function testAHeartbeatWithoutReadingsIsRecordedInMonitoring(): void
+    {
+        $client = $this->environment->enrollClient(7);
 
-        $this->assertSame(HeartbeatState::Late, $this->environment->clients->heartbeatStatuses([7])[7]->state);
-        $this->assertSame([], $this->environment->clients->heartbeatStatuses([]));
+        $this->heartbeat($client->clientId);
+
+        $this->assertSame($this->environment->clock->now(), $this->environment->monitoring->heartbeatStatuses([7])[7]->lastHeartbeatAt);
+        $this->assertSame([], $this->runs());
     }
 }

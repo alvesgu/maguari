@@ -108,4 +108,21 @@ final class AdminDashboardTest extends TestCase
         $this->assertStringContainsString("<td>Late</td>\n", $body);
         $this->assertStringContainsString('UTC (10 min ago)', $body);
     }
+
+    public function testAReEnrolledInstanceShowsItsLastHeartbeatUntilTheNewClientReports(): void
+    {
+        $instanceId = $this->pick('alpha-project', 'db');
+        $client = $this->environment->enrollClient($instanceId);
+        $this->environment->clients->recordHeartbeat($client->clientId, json_encode([
+            'protocol_version' => 1, 'client_version' => '0.1.0', 'client_id' => $client->clientId, 'sent_at' => 0,
+        ]));
+        $this->environment->clock->advance(600);
+        $this->environment->enrollClient($instanceId);
+
+        $body = (string) $this->signedInBrowser()->get('/admin')->getBody();
+
+        // The same heartbeat the heartbeat-age check judges: nothing is reporting.
+        $this->assertStringContainsString("<td>Enrolled</td>\n<td>Late</td>\n", $body);
+        $this->assertStringContainsString('UTC (10 min ago)', $body);
+    }
 }

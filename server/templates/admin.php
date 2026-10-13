@@ -3,14 +3,15 @@
  * @var \Closure $e @var string $csrf @var \Maguari\Server\Access\Administrator $administrator
  * @var \Maguari\Server\Fleet\Instance[] $instances
  * @var array<int, \Maguari\Server\Clients\EnrollmentState> $enrollmentStates
- * @var array<int, \Maguari\Server\Clients\HeartbeatStatus> $heartbeats
+ * @var array<int, \Maguari\Server\Monitoring\Domain\HeartbeatStatus> $heartbeats enrolled instances only
+ * @var array<int, string> $clientVersions
  * @var \Maguari\Server\Monitoring\Domain\DailyJobSummary $dailyJob
  * @var \Closure $partial
  */
-use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
-use Maguari\Shared\Protocol;
+use Maguari\Server\Monitoring\Domain\HeartbeatAgeRule;
+use Maguari\Server\Monitoring\MonitoringApi;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 $lastRun = $dailyJob->lastRun;
@@ -56,14 +57,13 @@ foreach ($certificates as $certificate) {
 ?>
 <tr><td><a href="/admin/projects/<?= $instance->projectId ?>"><?= $e($instance->gcpProjectId) ?></a></td><td><a href="/admin/instances/<?= $instance->id ?>"><?= $e($instance->name) ?></a></td><td><?= $e($instance->zone) ?></td>
 <?= $partial('heartbeat', ['enrollment' => $enrollmentStates[$instance->id], 'heartbeat' => $heartbeat]) ?>
-<td><?= $e($heartbeat?->clientVersion ?? '') ?></td>
+<td><?= $e($clientVersions[$instance->id] ?? '') ?></td>
 <td><?php if ($diskSize !== null): ?><?= $e($diskSize->outcome->label()) ?><?= $partial('info', ['text' => $diskSize->detail]) ?><?php endif; ?></td>
 <td><?php if ($certificates !== []): ?><?= $e($worst === CheckOutcome::Pass ? sprintf('Pass (%d)', count($certificates)) : $worst->label()) ?><?= $partial('info', ['text' => implode("\n", array_map(static fn ($certificate) => $certificate->subject . ($certificate->checkName === CertificateExpiryRule::REMOTE_CHECK_NAME ? ', served: ' : ', on the instance: ') . $certificate->detail, $certificates))]) ?><?php endif; ?></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>
-<?php /* TEMPORARY (MVP): a fixed limit until Monitoring's heartbeat-age check (ClientsApi::LATE_AFTER_SECONDS). */ ?>
-<p>Heartbeats are expected every <?= Protocol::HEARTBEAT_INTERVAL_SECONDS ?> seconds. A heartbeat older than <?= ClientsApi::LATE_AFTER_SECONDS ?> seconds is late. Reload the page to update.</p>
+<p>Heartbeats are expected every <?= MonitoringApi::EXPECTED_INTERVAL_SECONDS ?> seconds. A heartbeat older than <?= HeartbeatAgeRule::maxAgeSeconds(MonitoringApi::EXPECTED_INTERVAL_SECONDS) ?> seconds is late. Reload the page to update.</p>
 <p>Disk size compares each instance's boot disk with the filesystems its client reports on it. Certificates shows the worst result among the Let's Encrypt certificates each client reports and the certificates its hostnames serve (set on the instance's page), with the number checked when all pass; a certificate fails with fewer than <?= CertificateExpiryRule::MIN_DAYS_LEFT ?> days left. Hover over or tab to the i next to a result for details.</p>
 <?php if ($failures !== []): ?>
 <h3>Disk size failures</h3>

@@ -6,7 +6,7 @@ namespace Maguari\Server\Tests\Http;
 
 use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Clients\EnrolledClient;
-use Maguari\Server\Clients\HeartbeatState;
+use Maguari\Server\Monitoring\Domain\HeartbeatState;
 use Maguari\Server\Tests\Support\TestEnvironment;
 use Maguari\Shared\Signature;
 use PHPUnit\Framework\TestCase;
@@ -150,9 +150,10 @@ final class HeartbeatFlowTest extends TestCase
         $this->assertSame('no-store', $response->getHeaderLine('Cache-Control'));
         // The server's clock, not the client's sent_at.
         $this->assertSame($this->environment->clock->now(), $this->lastHeartbeatAt());
-        $status = $this->environment->clients->heartbeatStatuses([7])[7];
+        $status = $this->environment->monitoring->heartbeatStatuses([7])[7];
         $this->assertSame(HeartbeatState::OnTime, $status->state);
-        $this->assertSame('0.2.0', $status->clientVersion);
+        $this->assertSame($this->environment->clock->now(), $status->lastHeartbeatAt);
+        $this->assertSame([7 => '0.2.0'], $this->environment->clients->clientVersions([7]));
         $this->assertSame(1, $this->nonceCount());
     }
 

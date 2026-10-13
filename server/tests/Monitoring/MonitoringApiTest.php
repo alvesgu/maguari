@@ -37,7 +37,7 @@ final class MonitoringApiTest extends TestCase
             $items[] = ['metric' => $metric, 'value' => $value];
         }
 
-        $this->monitoring->recordReadings($instanceId, $at, $this->monitoring->parseReadings($items));
+        $this->monitoring->recordHeartbeat($instanceId, $at, $this->monitoring->parseReadings($items));
     }
 
     /**

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Clients;
+namespace Maguari\Server\Monitoring\Domain;
 
 /**
- * An enrolled instance's last contact, as of when it was read.
+ * An instance's last heartbeat, as of when it was read.
  */
 final class HeartbeatStatus
 {
@@ -13,7 +13,6 @@ final class HeartbeatStatus
         public readonly HeartbeatState $state,
         public readonly ?int $lastHeartbeatAt,
         public readonly ?int $ageSeconds,
-        public readonly ?string $clientVersion,
     ) {
     }
 }

@@ -2,14 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Maguari\Server\Clients;
+namespace Maguari\Server\Monitoring\Domain;
 
 /**
- * How recent an enrolled client's last heartbeat is. Display only.
- *
- * TEMPORARY (MVP): to be replaced by Monitoring's heartbeat-age check, based
- * on each instance's interval (design sections 5.2 and 6.2). See
- * ClientsApi::LATE_AFTER_SECONDS.
+ * How recent an instance's last heartbeat is, for display (design section
+ * 5.2).
  */
 enum HeartbeatState
 {

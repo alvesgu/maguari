@@ -180,7 +180,7 @@ final class App
             $rateLimit = new RateLimitMiddleware($access, $responseFactory);
             $view = new View();
             $adminController = new AdminController($fleet, $clients, $monitoring, $view, $logErrors);
-            $projectsController = new ProjectsController($fleet, $clients, $access, $view);
+            $projectsController = new ProjectsController($fleet, $clients, $access, $monitoring, $view);
             $instancesController = new InstancesController($fleet, $monitoring, $view);
             $runsController = new RunsController($fleet, $monitoring);
             $emailController = new EmailController($access, $notifications, $view, $logErrors);

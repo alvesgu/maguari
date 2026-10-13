@@ -7,14 +7,18 @@ namespace Maguari\Server\Monitoring;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Kernel\Events\EventOutbox;
 use Maguari\Server\Kernel\Tls\TlsCertificateReader;
 use Maguari\Server\Monitoring\Application\CertificateHostnames;
+use Maguari\Server\Monitoring\Application\CheckStates;
 use Maguari\Server\Monitoring\Application\DailyJob;
+use Maguari\Server\Monitoring\Application\HeartbeatAges;
 use Maguari\Server\Monitoring\Application\ServedCertificates;
 use Maguari\Server\Monitoring\Domain\CertificateHostname;
 use Maguari\Server\Monitoring\Domain\CheckResult;
 use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
+use Maguari\Server\Monitoring\Domain\HeartbeatStatus;
 use Maguari\Server\Monitoring\Domain\Readings;
 use Maguari\Server\Monitoring\Domain\RunDecision;
 use Maguari\Server\Monitoring\Domain\RunQuery;
@@ -26,14 +30,17 @@ use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
 use Maguari\Server\Monitoring\Exception\InvalidRunQuery;
 use Maguari\Server\Monitoring\Infrastructure\CertificateHostnameRepository;
+use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
+use Maguari\Server\Monitoring\Infrastructure\HeartbeatRepository;
 use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
 use Maguari\Shared\Protocol;
 
 /**
- * The Monitoring context's public interface: readings stored as runs, and the
- * daily job with its checks. Instances are referred to by their Fleet ID.
- * Monitoring does not know where readings come from. It asks Fleet for the
- * picked instances and their disks.
+ * The Monitoring context's public interface: readings stored as runs, the
+ * heartbeat-age check, and the daily job with its checks. Instances are
+ * referred to by their Fleet ID. Monitoring does not know where heartbeats
+ * come from. It asks Fleet for the picked instances and their disks, and
+ * writes an event when a check's outcome changes (design section 6.3).
  */
 final class MonitoringApi
 {
@@ -53,6 +60,8 @@ final class MonitoringApi
     private readonly RunRule $runRule;
     private readonly DailyJob $dailyJob;
     private readonly CertificateHostnames $certificateHostnames;
+    private readonly HeartbeatRepository $heartbeats;
+    private readonly HeartbeatAges $heartbeatAges;
 
     /**
      * @param TlsCertificateReader $tls reads the certificates hostnames serve
@@ -66,8 +75,11 @@ final class MonitoringApi
         $this->runs = new MetricRunRepository($database);
         $this->runRule = new RunRule(self::EXPECTED_INTERVAL_SECONDS);
         $hostnames = new CertificateHostnameRepository($database);
-        $this->dailyJob = new DailyJob($database, $clock, $fleet, $this->runs, $hostnames, new ServedCertificates($tls));
-        $this->certificateHostnames = new CertificateHostnames($database, $clock, $hostnames, $this->runs);
+        $checkStates = new CheckStates(new CheckStateRepository($database), new EventOutbox($database));
+        $this->dailyJob = new DailyJob($database, $clock, $fleet, $this->runs, $hostnames, new ServedCertificates($tls), $checkStates);
+        $this->certificateHostnames = new CertificateHostnames($database, $clock, $hostnames, $this->runs, $checkStates);
+        $this->heartbeats = new HeartbeatRepository($database);
+        $this->heartbeatAges = new HeartbeatAges($database, $clock, $fleet, $this->heartbeats, $checkStates);
     }
 
     /**
@@ -93,6 +105,30 @@ final class MonitoringApi
     public function dailyJobSummary(array $instanceIds): DailyJobSummary
     {
         return $this->dailyJob->summary($instanceIds);
+    }
+
+    /**
+     * Judges every picked instance's heartbeat age (design section 6.2) and
+     * writes the outcome changes as events, without delivering them. Run by
+     * the tick, never inside a request.
+     *
+     * @return list<CheckResult> one per picked instance that has sent a heartbeat
+     */
+    public function judgeHeartbeatAges(): array
+    {
+        return $this->heartbeatAges->judge();
+    }
+
+    /**
+     * Each instance's last heartbeat and whether it is on time, computed now,
+     * for pages. Reads only SQLite.
+     *
+     * @param int[] $instanceIds
+     * @return array<int, HeartbeatStatus> one per ID
+     */
+    public function heartbeatStatuses(array $instanceIds): array
+    {
+        return $this->heartbeatAges->statuses($instanceIds);
     }
 
     /**
@@ -171,19 +207,18 @@ final class MonitoringApi
     }
 
     /**
-     * Applies the run rule (design section 9.1) to each reading, all in one
+     * Records a heartbeat's time, which the heartbeat-age check judges, and
+     * applies the run rule (design section 9.1) to each reading, all in one
      * transaction, so concurrent heartbeats of one instance cannot both
-     * extend or both insert.
+     * extend or both insert. The time is recorded even without readings.
      *
      * @param int $at the server's receive time
      */
-    public function recordReadings(int $instanceId, int $at, Readings $readings): void
+    public function recordHeartbeat(int $instanceId, int $at, Readings $readings): void
     {
-        if ($readings->readings === []) {
-            return;
-        }
-
         $this->database->transaction(function () use ($instanceId, $at, $readings): void {
+            $this->heartbeats->record($instanceId, $at);
+
             foreach ($readings->readings as $reading) {
                 $current = $this->runs->current($instanceId, $reading->metric);
 

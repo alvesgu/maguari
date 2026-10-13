@@ -176,7 +176,7 @@ final class InstancePageFlowTest extends TestCase
     {
         $monitoring = $this->environment->monitoring;
         $now = $this->environment->clock->now();
-        $monitoring->recordReadings($this->instanceId, $now, $monitoring->parseReadings([
+        $monitoring->recordHeartbeat($this->instanceId, $now, $monitoring->parseReadings([
             ['metric' => 'certificate_expires_at:example.com', 'value' => $now + 60 * self::DAY],
         ]));
         $browser = $this->signedInBrowser();
@@ -192,7 +192,7 @@ final class InstancePageFlowTest extends TestCase
     {
         $monitoring = $this->environment->monitoring;
         $now = $this->environment->clock->now();
-        $monitoring->recordReadings($this->instanceId, $now, $monitoring->parseReadings([
+        $monitoring->recordHeartbeat($this->instanceId, $now, $monitoring->parseReadings([
             ['metric' => 'certificate_expires_at:www.example.com', 'value' => $now + 60 * self::DAY],
         ]));
         $monitoring->addCertificateHostname($this->instanceId, 'www.example.com');

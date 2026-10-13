@@ -84,10 +84,10 @@ final class ClientRepository
 
     /**
      * @param int[] $instanceIds
-     * @return array<int, array{last_heartbeat_at: ?int, client_version: ?string}> keyed by
-     *         instance ID, for those of $instanceIds that have a client
+     * @return array<int, string> client version by instance ID, for those of
+     *         $instanceIds that have a client
      */
-    public function heartbeatsAmong(array $instanceIds): array
+    public function clientVersionsAmong(array $instanceIds): array
     {
         if ($instanceIds === []) {
             return [];
@@ -95,18 +95,15 @@ final class ClientRepository
 
         $placeholders = implode(', ', array_fill(0, count($instanceIds), '?'));
         $statement = $this->database->pdo()->prepare(
-            "SELECT instance_id, last_heartbeat_at, client_version FROM clients_clients WHERE instance_id IN ({$placeholders})",
+            "SELECT instance_id, client_version FROM clients_clients WHERE instance_id IN ({$placeholders})",
         );
         $statement->execute(array_values($instanceIds));
-        $heartbeats = [];
+        $versions = [];
 
         foreach ($statement->fetchAll() as $row) {
-            $heartbeats[(int) $row['instance_id']] = [
-                'last_heartbeat_at' => $row['last_heartbeat_at'] === null ? null : (int) $row['last_heartbeat_at'],
-                'client_version' => $row['client_version'],
-            ];
+            $versions[(int) $row['instance_id']] = (string) $row['client_version'];
         }
 
-        return $heartbeats;
+        return $versions;
     }
 }

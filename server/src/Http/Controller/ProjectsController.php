@@ -7,7 +7,6 @@ namespace Maguari\Server\Http\Controller;
 use Maguari\Server\Access\AccessApi;
 use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Clients\EnrollmentState;
-use Maguari\Server\Clients\HeartbeatStatus;
 use Maguari\Server\Fleet\Exception\InstanceNotFound;
 use Maguari\Server\Fleet\Exception\InvalidInstanceName;
 use Maguari\Server\Fleet\Exception\InvalidProjectId;
@@ -17,6 +16,8 @@ use Maguari\Server\Fleet\Exception\ProjectNotFound;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Project;
 use Maguari\Server\Http\View;
+use Maguari\Server\Monitoring\Domain\HeartbeatStatus;
+use Maguari\Server\Monitoring\MonitoringApi;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Slim\Exception\HttpNotFoundException;
@@ -31,6 +32,7 @@ final class ProjectsController
         private readonly FleetApi $fleet,
         private readonly ClientsApi $clients,
         private readonly AccessApi $access,
+        private readonly MonitoringApi $monitoring,
         private readonly View $view,
     ) {
     }
@@ -156,7 +158,8 @@ final class ProjectsController
         $picked = $this->fleet->pickedInstances($project->id);
         $ids = array_map(static fn ($instance): int => $instance->id, $picked);
         $states = $this->clients->enrollmentStates($ids);
-        $heartbeats = $this->clients->heartbeatStatuses($ids);
+        $enrolled = array_keys(array_filter($states, static fn (EnrollmentState $state): bool => $state === EnrollmentState::Enrolled));
+        $heartbeats = $this->monitoring->heartbeatStatuses($enrolled);
         $statuses = ['instanceIds' => [], 'enrollmentStates' => [], 'heartbeats' => []];
 
         foreach ($picked as $instance) {

@@ -6,6 +6,7 @@ namespace Maguari\Server\Monitoring\Application;
 
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CertificateHostname;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
 use Maguari\Server\Monitoring\Infrastructure\CertificateHostnameRepository;
@@ -23,6 +24,7 @@ final class CertificateHostnames
         private readonly Clock $clock,
         private readonly CertificateHostnameRepository $hostnames,
         private readonly MetricRunRepository $metricRuns,
+        private readonly CheckStates $checkStates,
     ) {
     }
 
@@ -61,11 +63,28 @@ final class CertificateHostnames
     }
 
     /**
+     * Withdraws the hostname's remote certificate check at once, whether or
+     * not the instance is reporting: removing it is the administrator's
+     * decision (design section 6.3).
+     *
      * @return bool whether it existed
      */
     public function remove(int $instanceId, int $hostnameId): bool
     {
-        return $this->hostnames->remove($instanceId, $hostnameId);
+        $at = $this->clock->now();
+
+        return $this->database->transaction(function () use ($instanceId, $hostnameId, $at): bool {
+            $hostname = $this->hostnames->find($instanceId, $hostnameId);
+
+            if ($hostname === null) {
+                return false;
+            }
+
+            $this->hostnames->remove($instanceId, $hostnameId);
+            $this->checkStates->withdraw($instanceId, CertificateExpiryRule::REMOTE_CHECK_NAME, $hostname->hostname, $at);
+
+            return true;
+        });
     }
 
     /**

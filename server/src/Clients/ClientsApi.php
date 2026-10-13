@@ -35,17 +35,6 @@ final class ClientsApi
     public const RATE_LIMIT_REQUESTS = 20;
     public const RATE_LIMIT_WINDOW_SECONDS = 60;
 
-    /**
-     * A heartbeat older than 1.5 times the interval is late, the same factor
-     * as for gaps in runs (design section 9.1 item 3).
-     *
-     * TEMPORARY (MVP): judging heartbeat age is Monitoring's job, and a fixed
-     * 90 seconds will be wrong once the interval is configurable per instance.
-     * Replace it with Monitoring's heartbeat-age check, based on each
-     * instance's interval (design sections 5.2 and 6.2).
-     */
-    public const LATE_AFTER_SECONDS = Protocol::HEARTBEAT_INTERVAL_SECONDS * 3 / 2;
-
     private const SECRET_BYTES = 32;
     private const CLIENT_ID_PATTERN = '/^[0-9a-f]{32}$/D';
     private const TIMESTAMP_PATTERN = '/^[0-9]{1,12}$/D';
@@ -174,9 +163,10 @@ final class ClientsApi
     }
 
     /**
-     * Records a heartbeat from an authenticated client and hands its readings
-     * to Monitoring (design section 2.1). The time stored is the server's, not
-     * the client's sent_at, and the readings get the same time. Everything is
+     * Records a heartbeat from an authenticated client and hands it, with its
+     * readings, to Monitoring (design section 2.1), which judges heartbeat
+     * ages. The time stored is the server's, not the client's sent_at, and
+     * Monitoring gets the same time. Everything is
      * validated before anything is written, so a rejected heartbeat writes
      * nothing.
      *
@@ -200,36 +190,20 @@ final class ClientsApi
         // Two writes, not one transaction, because transactions do not nest.
         // Null only if the client was replaced since it was authenticated.
         if ($instanceId !== null) {
-            $this->monitoring->recordReadings($instanceId, $now, $readings);
+            $this->monitoring->recordHeartbeat($instanceId, $now, $readings);
         }
     }
 
     /**
-     * TEMPORARY (MVP): the On time / Late judgment here belongs to
-     * Monitoring's heartbeat-age check (see LATE_AFTER_SECONDS). Clients will
-     * keep providing the last heartbeat time.
+     * The version each enrolled client last reported, for display.
      *
      * @param int[] $instanceIds
-     * @return array<int, HeartbeatStatus> keyed by instance ID, for those of
+     * @return array<int, string> keyed by instance ID, for those of
      *         $instanceIds that are enrolled
      */
-    public function heartbeatStatuses(array $instanceIds): array
+    public function clientVersions(array $instanceIds): array
     {
-        $now = $this->clock->now();
-        $statuses = [];
-
-        foreach ($this->clients->heartbeatsAmong($instanceIds) as $instanceId => $heartbeat) {
-            $lastAt = $heartbeat['last_heartbeat_at'];
-            $age = $lastAt === null ? null : max(0, $now - $lastAt);
-            $state = match (true) {
-                $age === null => HeartbeatState::NoHeartbeatYet,
-                $age <= self::LATE_AFTER_SECONDS => HeartbeatState::OnTime,
-                default => HeartbeatState::Late,
-            };
-            $statuses[$instanceId] = new HeartbeatStatus($state, $lastAt, $age, $heartbeat['client_version']);
-        }
-
-        return $statuses;
+        return $this->clients->clientVersionsAmong($instanceIds);
     }
 
     /**

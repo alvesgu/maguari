@@ -60,7 +60,7 @@ final class DailyJobTest extends TestCase
     private function recordRootTotal(int $instanceId, int $bytes): void
     {
         $monitoring = $this->environment->monitoring;
-        $monitoring->recordReadings($instanceId, $this->environment->clock->now(), $monitoring->parseReadings([
+        $monitoring->recordHeartbeat($instanceId, $this->environment->clock->now(), $monitoring->parseReadings([
             ['metric' => 'disk_used_bytes:/', 'value' => intdiv($bytes, 2)],
             ['metric' => 'disk_total_bytes:/', 'value' => $bytes],
         ]));
@@ -123,7 +123,7 @@ final class DailyJobTest extends TestCase
         }
 
         $monitoring = $this->environment->monitoring;
-        $monitoring->recordReadings($instanceId, $this->environment->clock->now(), $monitoring->parseReadings($readings));
+        $monitoring->recordHeartbeat($instanceId, $this->environment->clock->now(), $monitoring->parseReadings($readings));
     }
 
     public function testChecksEachRecentlyReportedCertificate(): void

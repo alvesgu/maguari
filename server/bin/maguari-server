@@ -297,8 +297,8 @@ function runDailyJobCommand(array $args): int
 
 /**
  * The per-minute tick (design section 10.1), run by a systemd timer in
- * production and by hand in development: delivers pending domain events and
- * deletes old delivered ones. One tick at a time, through a lock file next to
+ * production and by hand in development: judges heartbeat ages, delivers
+ * pending domain events and deletes old delivered ones. One tick at a time, through a lock file next to
  * the database. Prints nothing when nothing happened. Exits with 1 when an
  * event failed, so systemd shows the failure.
  *
@@ -329,7 +329,12 @@ function tickCommand(array $args): int
     }
 
     $clock = new SystemClock();
-    // No context subscribes to events yet (phase 1, step 1.1).
+    $http = new StreamHttpClient();
+    $fleet = new FleetApi($database, $clock, AccessTokenSourceFactory::fromEnvironment($http, $clock), $http);
+    $monitoring = new MonitoringApi($database, $clock, $fleet, new StreamTlsCertificateReader());
+    // (a) Heartbeat ages, whose outcome changes are delivered right after.
+    $monitoring->judgeHeartbeatAges();
+    // (b) No context subscribes to events yet (phase 1, step 1.2).
     $delivery = new EventDelivery($database, $clock, []);
     $report = $delivery->deliver();
     $delivery->pruneDelivered();

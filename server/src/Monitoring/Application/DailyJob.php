@@ -36,6 +36,9 @@ final class DailyJob
     /** The timer runs daily, so a scheduled run older than this is overdue. */
     public const OVERDUE_AFTER_SECONDS = 25 * 3600;
 
+    /** The checks the job runs, whose subjects it can withdraw. */
+    public const CHECK_NAMES = [DiskSizeRule::CHECK_NAME, CertificateExpiryRule::LOCAL_CHECK_NAME, CertificateExpiryRule::REMOTE_CHECK_NAME];
+
     private readonly DailyJobRepository $runs;
     private readonly DiskSizeRule $diskSizeRule;
     private readonly CertificateExpiryRule $certificateRule;
@@ -47,6 +50,7 @@ final class DailyJob
         private readonly MetricRunRepository $metricRuns,
         private readonly CertificateHostnameRepository $hostnames,
         private readonly ServedCertificates $servedCertificates,
+        private readonly CheckStates $checkStates,
     ) {
         $this->runs = new DailyJobRepository($database);
         $this->diskSizeRule = new DiskSizeRule();
@@ -122,8 +126,10 @@ final class DailyJob
         $diskSizes = $this->fleet->diskSizes();
         $at = $this->clock->now();
         $results = [];
+        $instanceIds = [];
 
         foreach ($this->fleet->pickedInstances() as $instance) {
+            $instanceIds[] = $instance->id;
             $disks = $diskSizes[$instance->id] ?? null;
             $results[] = $this->diskSizeRule->check(
                 $instance->id,
@@ -147,12 +153,22 @@ final class DailyJob
             }
         }
 
-        $this->database->transaction(function () use ($runId, $results): void {
+        // The results, the outcome changes and their events are written
+        // together, so a failed run changes no outcome and withdraws nothing.
+        $this->database->transaction(function () use ($runId, $results, $instanceIds): void {
             foreach ($results as $result) {
                 $this->runs->addResult($runId, $result);
+                $this->checkStates->record($result);
             }
 
-            $this->runs->finish($runId, $this->clock->now());
+            $finishedAt = $this->clock->now();
+
+            foreach ($instanceIds as $instanceId) {
+                $instanceResults = array_filter($results, static fn (CheckResult $result): bool => $result->instanceId === $instanceId);
+                $this->checkStates->withdrawMissing($instanceId, self::CHECK_NAMES, $instanceResults, $finishedAt);
+            }
+
+            $this->runs->finish($runId, $finishedAt);
         });
 
         return $results;

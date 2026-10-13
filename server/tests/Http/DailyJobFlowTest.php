@@ -69,7 +69,7 @@ final class DailyJobFlowTest extends TestCase
     private function recordRootTotal(int $instanceId, int $bytes): void
     {
         $monitoring = $this->environment->monitoring;
-        $monitoring->recordReadings($instanceId, $this->environment->clock->now(), $monitoring->parseReadings([
+        $monitoring->recordHeartbeat($instanceId, $this->environment->clock->now(), $monitoring->parseReadings([
             ['metric' => 'disk_used_bytes:/', 'value' => intdiv($bytes, 2)],
             ['metric' => 'disk_total_bytes:/', 'value' => $bytes],
         ]));
@@ -150,11 +150,11 @@ final class DailyJobFlowTest extends TestCase
         $now = $this->environment->clock->now();
         $day = 86_400;
         $monitoring = $this->environment->monitoring;
-        $monitoring->recordReadings($web, $now, $monitoring->parseReadings([
+        $monitoring->recordHeartbeat($web, $now, $monitoring->parseReadings([
             ['metric' => 'certificate_expires_at:example.com', 'value' => $now + 60 * $day],
             ['metric' => 'certificate_expires_at:www.example.com', 'value' => $now + 30 * $day],
         ]));
-        $monitoring->recordReadings($mixed, $now, $monitoring->parseReadings([
+        $monitoring->recordHeartbeat($mixed, $now, $monitoring->parseReadings([
             ['metric' => 'certificate_expires_at:good.example', 'value' => $now + 60 * $day],
             ['metric' => 'certificate_expires_at:stale.example', 'value' => $now + 8 * $day + 3600],
         ]));

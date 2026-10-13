@@ -3,7 +3,7 @@
  * One instance's enrollment and heartbeat cells, shared by the dashboard and
  * the project page.
  *
- * @var \Closure $e @var \Maguari\Server\Clients\EnrollmentState $enrollment @var ?\Maguari\Server\Clients\HeartbeatStatus $heartbeat
+ * @var \Closure $e @var \Maguari\Server\Clients\EnrollmentState $enrollment @var ?\Maguari\Server\Monitoring\Domain\HeartbeatStatus $heartbeat null unless enrolled
  */ ?>
 <td><?= $e($enrollment->label()) ?></td>
 <td><?= $heartbeat === null ? '' : $e($heartbeat->state->label()) ?></td>

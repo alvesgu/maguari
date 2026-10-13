@@ -74,7 +74,7 @@ final class RemoteCertificatesTest extends TestCase
         $web = $this->pick('web');
         $monitoring = $this->environment->monitoring;
         $now = $this->environment->clock->now();
-        $monitoring->recordReadings($web->id, $now, $monitoring->parseReadings([
+        $monitoring->recordHeartbeat($web->id, $now, $monitoring->parseReadings([
             ['metric' => 'certificate_expires_at:www.example.com', 'value' => $now + 80 * self::DAY],
         ]));
         $monitoring->addCertificateHostname($web->id, 'www.example.com');
@@ -155,12 +155,12 @@ final class RemoteCertificatesTest extends TestCase
     {
         $monitoring = $this->environment->monitoring;
         $now = $this->environment->clock->now();
-        $monitoring->recordReadings(7, $now, $monitoring->parseReadings([
+        $monitoring->recordHeartbeat(7, $now, $monitoring->parseReadings([
             ['metric' => 'certificate_expires_at:gone.example.com', 'value' => $now + 60 * self::DAY],
         ]));
         $this->environment->clock->advance(2 * self::DAY);
         $now = $this->environment->clock->now();
-        $monitoring->recordReadings(7, $now, $monitoring->parseReadings([
+        $monitoring->recordHeartbeat(7, $now, $monitoring->parseReadings([
             ['metric' => 'certificate_expires_at:example.com', 'value' => $now + 60 * self::DAY],
             ['metric' => 'certificate_expires_at:www.example.com', 'value' => $now + 60 * self::DAY],
             ['metric' => 'certificate_expires_at:*.example.org', 'value' => $now + 60 * self::DAY],

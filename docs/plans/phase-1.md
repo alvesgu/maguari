@@ -264,6 +264,61 @@ Start the tick loop, which every later step's manual check needs running (Fix C)
 while true; do server/bin/maguari-server tick; sleep 60; done
 ```
 
+### Step 1.2
+
+- The last tick time needs a home, so Monitoring has a third new table, `monitoring_ticks` (one row: the last tick and when ticks last resumed). Design 9.2 lists it.
+- The event's time is its `occurred_at`, not repeated in the payload, so the two cannot disagree. The payload is the instance ID, the check name, the subject and the sentence.
+- `CheckFailed` and `CheckPassed` share a base class, `CheckOutcomeChanged`, with the same payload. Subscribers in step 1.3 read them with `fromEvent()`.
+- Pages judge the heartbeat's own age at view time and ignore the downtime rule (P5 item 3), which only protects the check. Right after the server comes back, the page can say "Late" for an instance whose check still passes, for at most 90 seconds.
+- A re-enrolled instance whose new client has not reported yet now shows "Late" with the old client's last heartbeat, not "No heartbeat yet", the same heartbeat the check judges (P5 item 2). Every other state on the dashboard and the project page is unchanged.
+- Withdrawing a missing subject (Fix B) needs a heartbeat-age outcome of pass. An instance the tick has never judged counts as silent, so with no tick running nothing is withdrawn.
+- The tick prints nothing new for heartbeat ages: their outcome changes are events, which the same tick delivers and prints (`Delivered event 4 (monitoring.check_failed).`).
+- The client version on the dashboard now comes from `ClientsApi::clientVersions()`, since `HeartbeatStatus` moved to Monitoring.
+
+#### Manual check (step 1.2)
+
+In each terminal, from the repository root:
+
+```
+source scripts/dev-env.sh
+```
+
+Apply the new migration:
+
+```
+server/bin/maguari-server migrate
+```
+
+In the first terminal, run the app from `server/`:
+
+```
+php -S localhost:8080 -t public
+```
+
+In the second terminal, run the client of an enrolled instance:
+
+```
+client/bin/maguari-client run
+```
+
+In the third terminal, start the tick loop and keep it running (Fix C):
+
+```
+while true; do server/bin/maguari-server tick; sleep 60; done
+```
+
+1. The first tick prints `Delivered event <id> (monitoring.check_passed).` for the instance's heartbeat age. Later ticks print nothing.
+2. The dashboard shows "On time" as before.
+3. Stop the client with Ctrl+C. After 90 seconds the dashboard shows "Late", and within two minutes a tick prints `Delivered event <id> (monitoring.check_failed).`
+4. Start the client again. The next tick prints `Delivered event <id> (monitoring.check_passed).`
+5. On the instance page, add a hostname and press "Run now". The next tick prints `Delivered event <id> (monitoring.check_failed).` or `(monitoring.check_passed).` for it (a hostname that cannot be reached is "Not checked" and writes nothing). Remove the hostname: the next tick prints `Delivered event <id> (monitoring.check_withdrawn).`
+
+The current outcomes and the latest events can be read with:
+
+```
+sqlite3 server/var/dev.sqlite "SELECT * FROM monitoring_check_states; SELECT id, type, payload FROM kernel_events ORDER BY id DESC LIMIT 10"
+```
+
 ## Status
 
-Approved. Step 1.1 implemented, waiting for review.
+Approved. Steps 1.1 and 1.2 implemented; step 1.2 is waiting for review.
