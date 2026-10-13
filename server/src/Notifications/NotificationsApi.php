@@ -6,16 +6,19 @@ namespace Maguari\Server\Notifications;
 
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Kernel\Events\Subscriber;
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretDecryptionFailed;
 use Maguari\Server\Notifications\Exception\EmailNotSent;
 use Maguari\Server\Notifications\Exception\EmailNotSetUp;
 use Maguari\Server\Notifications\Exception\InvalidSmtpSettings;
+use Maguari\Server\Notifications\Exception\NotificationNotFound;
 
 /**
- * The Notifications context's public interface (design section 2.1). So far it
- * owns the SMTP settings and sends the test email (design section 13); the
- * SMTP password is encrypted at rest (design section 9.3).
+ * The Notifications context's public interface (design section 2.1): the
+ * notifications of incidents (design section 10.4), the SMTP settings and the
+ * test email (design section 13). The SMTP password is encrypted at rest
+ * (design section 9.3).
  */
 final class NotificationsApi
 {
@@ -24,7 +27,11 @@ final class NotificationsApi
     public const NOT_SET_UP = 'Email is not set up yet. Fill in the SMTP settings and save them first.';
     public const TEST_EMAIL_SUBJECT = 'Maguari test email';
 
+    /** Notifications per page of the Logs screen. */
+    public const LOG_PAGE_SIZE = 100;
+
     private readonly SmtpSettingsRepository $smtpSettings;
+    private readonly NotificationRepository $notifications;
 
     public function __construct(
         private readonly Database $database,
@@ -33,6 +40,80 @@ final class NotificationsApi
         private readonly Mailer $mailer = new SmtpMailer(),
     ) {
         $this->smtpSettings = new SmtpSettingsRepository($database);
+        $this->notifications = new NotificationRepository($database);
+    }
+
+    /**
+     * What Notifications subscribes to, for the tick's event delivery.
+     *
+     * @return list<Subscriber>
+     */
+    public function subscribers(): array
+    {
+        return [new IncidentEventSubscriber($this->notifications)];
+    }
+
+    /**
+     * The notifications of open incidents that this administrator has not
+     * hidden, newest first, for the dashboard.
+     *
+     * @return list<Notification>
+     */
+    public function openNotifications(int $administratorId): array
+    {
+        return $this->notifications->visibleTo($administratorId);
+    }
+
+    /**
+     * Hides the notification from this administrator only. Hiding it again
+     * changes nothing.
+     *
+     * @throws NotificationNotFound
+     */
+    public function hide(int $notificationId, int $administratorId): void
+    {
+        $at = $this->clock->now();
+
+        $this->database->transaction(function () use ($notificationId, $administratorId, $at): void {
+            if (!$this->notifications->exists($notificationId)) {
+                throw new NotificationNotFound(sprintf('There is no notification %d.', $notificationId));
+            }
+
+            $this->notifications->hide($notificationId, $administratorId, $at);
+        });
+    }
+
+    /**
+     * One page of every notification, hidden or not, resolved or not, newest
+     * first, for the Logs screen.
+     *
+     * @param ?int $before only notifications with a lower ID; null for the newest page
+     */
+    public function logPage(int $administratorId, ?int $before): LogPage
+    {
+        // One more than a page, only to tell whether an older page exists.
+        $notifications = $this->notifications->page($administratorId, $before, self::LOG_PAGE_SIZE + 1);
+        $older = count($notifications) > self::LOG_PAGE_SIZE;
+        $notifications = array_slice($notifications, 0, self::LOG_PAGE_SIZE);
+        $last = $notifications[count($notifications) - 1] ?? null;
+        // The newer page shows the LOG_PAGE_SIZE notifications just above
+        // this one: it starts before the one after those, or is the first page.
+        $newer = $before === null ? [] : $this->notifications->idsFrom($before, self::LOG_PAGE_SIZE + 1);
+
+        return new LogPage(
+            $notifications,
+            $older && $last !== null ? $last->id : null,
+            $newer !== [],
+            $newer[self::LOG_PAGE_SIZE] ?? null,
+        );
+    }
+
+    /**
+     * A check's name for people, for example "Disk size".
+     */
+    public static function checkLabel(string $checkName): string
+    {
+        return CheckLabels::of($checkName);
     }
 
     /**

@@ -2,6 +2,7 @@
 /**
  * @var \Closure $e @var string $csrf @var \Maguari\Server\Access\Administrator $administrator
  * @var \Maguari\Server\Fleet\Instance[] $instances
+ * @var \Maguari\Server\Notifications\Notification[] $notifications unresolved and not hidden by this administrator
  * @var array<int, \Maguari\Server\Clients\EnrollmentState> $enrollmentStates
  * @var array<int, \Maguari\Server\Monitoring\Domain\HeartbeatStatus> $heartbeats enrolled instances only
  * @var array<int, string> $clientVersions
@@ -12,6 +13,7 @@ use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\HeartbeatAgeRule;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Notifications\NotificationsApi;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 $lastRun = $dailyJob->lastRun;
@@ -20,7 +22,32 @@ $certificateFailures = [];
 ?>
 <h1>Maguari</h1>
 <p>Signed in as <?= $e($administrator->name) ?> (<?= $e($administrator->email) ?>).</p>
-<p><a href="/admin/projects">Projects</a> · <a href="/admin/email">Email</a></p>
+<p><a href="/admin/projects">Projects</a> · <a href="/admin/email">Email</a> · <a href="/admin/logs">Logs</a></p>
+<h2>Open incidents</h2>
+<?php
+$picked = [];
+
+foreach ($instances as $instance) {
+    $picked[$instance->id] = $instance;
+}
+?>
+<?php if ($notifications === []): ?>
+<p>None. Hidden ones and all past incidents are on the <a href="/admin/logs">Logs</a> screen.</p>
+<?php else: ?>
+<table>
+<thead><tr><th>Opened</th><th>Instance</th><th>Check</th><th>Subject</th><th></th></tr></thead>
+<tbody>
+<?php foreach ($notifications as $notification): ?>
+<?php $instance = $picked[$notification->instanceId] ?? null; ?>
+<tr><td><?= $e($utc($notification->openedAt)) ?></td><td><?php if ($instance !== null): ?><a href="/admin/instances/<?= $instance->id ?>"><?= $e($instance->gcpProjectId . '/' . $instance->name) ?></a><?php else: ?>Instance <?= $notification->instanceId ?><?php endif; ?></td><td><?= $e(NotificationsApi::checkLabel($notification->checkName)) ?></td><td><?= $e($notification->subject) ?></td><td><form method="post" action="/admin/notifications/<?= $notification->id ?>/hide">
+<?= $csrf ?>
+<button type="submit">Hide</button>
+</form></td></tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+<p>An incident leaves this list when it resolves, or for you when you hide it. Details are on each instance's page.</p>
+<?php endif; ?>
 <h2>Daily job</h2>
 <?= $partial('daily-job-status', ['run' => $lastRun]) ?><?php if ($dailyJob->lastScheduledRun === null): ?>
 <p>No scheduled run yet. On the server, the maguari-server-daily-job timer runs the job every day at 06:00 UTC.</p>

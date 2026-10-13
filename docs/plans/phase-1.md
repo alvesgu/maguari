@@ -371,6 +371,53 @@ while true; do server/bin/maguari-server tick; sleep 60; done
 5. Leave the client running. Five minutes after the pass, a tick prints `Resolved incident <id> on <project/zone/name> (heartbeat_age): it passed for 5 minutes.` and `Delivered event <id> (remediation.incident_resolved).` The page lists it under Resolved incidents as "Passed".
 6. On the instance page, add the hostname `expired.badssl.com` (a public test site whose certificate is expired) and press "Run now". The next tick prints a `check_failed` and an `incident_opened` line, and the page lists a "Served certificate" incident for it. Remove the hostname: the next tick prints `check_withdrawn` and `incident_resolved` lines, and the page lists it as "Withdrawn".
 
+### Step 1.4
+
+- The tick now reads the secret key file, because it builds `NotificationsApi`, which needs it for the SMTP password (step 1.5 sends with it). A tick without the key fails with one line on stderr naming the file, like the web app treats itself as not set up. The CLI tests create the key for the tick.
+- `Notifications/CheckLabels` repeats the four check names that `MonitoringApi::checkLabel()` has, because P8 item 2 gives Notifications its own labels. The alert emails of step 1.5 can then use them without depending on Monitoring.
+- Incidents opened before this step (while testing step 1.3) have no notification: their `incident_opened` events were delivered to nobody. Remediation's reconciliation only reopens incidents, not notifications, so they never appear. Resolved ones are simply ignored.
+- A second delivery of the same `incident_opened` adds nothing (`incident_id` is unique), so the subscriber is safe to replay.
+- The dashboard names instances `project/name`, linked to their page, and "Instance 12" without a link for one that is no longer picked. The Logs screen does the same.
+- Design section 10.2 has no list of routes; the two new routes are described in section 10.4 with the rest of the feature.
+
+#### Manual check (step 1.4)
+
+In each terminal, from the repository root:
+
+```
+source scripts/dev-env.sh
+```
+
+Apply the new migration:
+
+```
+server/bin/maguari-server migrate
+```
+
+In the first terminal, run the app from `server/`:
+
+```
+php -S localhost:8080 -t public
+```
+
+In the second terminal, run the client:
+
+```
+client/bin/maguari-client run
+```
+
+In the third terminal, start the tick loop and keep it running (Fix C):
+
+```
+while true; do server/bin/maguari-server tick; sleep 60; done
+```
+
+1. The dashboard has "Open incidents" at the top, saying "None.", and a "Logs" link next to "Projects" and "Email".
+2. Stop the client with Ctrl+C. Within two or three minutes the tick prints the `check_failed` and `incident_opened` lines, and after a reload the dashboard lists the incident: when it opened, the instance (linked), "Heartbeat age" and a "Hide" button.
+3. Press "Hide". The dashboard says "None." again. The Logs screen lists the notification as "Open" and "Hidden by you".
+4. Start the client again and wait about six minutes. The tick prints the `Resolved incident` and `incident_resolved` lines, and the Logs screen shows the time it resolved.
+5. Stop the client again until a new incident opens, then start it and wait for it to resolve without hiding it: it leaves the dashboard by itself when it resolves.
+
 ## Status
 
-Approved. Steps 1.1 to 1.3 implemented; step 1.3 is waiting for review.
+Approved. Steps 1.1 to 1.4 implemented; step 1.4 is waiting for review.

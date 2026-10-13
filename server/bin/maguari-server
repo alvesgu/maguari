@@ -20,6 +20,7 @@ use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\Events\EventDelivery;
 use Maguari\Server\Kernel\FileLock;
 use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
+use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Kernel\SystemClock;
 use Maguari\Server\Kernel\Tls\StreamTlsCertificateReader;
@@ -27,6 +28,7 @@ use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Notifications\NotificationsApi;
 use Maguari\Server\Remediation\RemediationApi;
 use Maguari\Shared\ServerUrl;
 
@@ -335,10 +337,13 @@ function tickCommand(array $args): int
     $fleet = new FleetApi($database, $clock, AccessTokenSourceFactory::fromEnvironment($http, $clock), $http);
     $monitoring = new MonitoringApi($database, $clock, $fleet, new StreamTlsCertificateReader());
     $remediation = new RemediationApi($database, $clock, $monitoring);
-    $delivery = new EventDelivery($database, $clock, $remediation->subscribers());
+    // The key decrypts the SMTP password, for the alert emails of step 1.5.
+    $notifications = new NotificationsApi($database, $clock, new SecretBox(SecretKeyFile::fromEnvironment()->read()));
+    $delivery = new EventDelivery($database, $clock, [...$remediation->subscribers(), ...$notifications->subscribers()]);
     // (a) Heartbeat ages, whose outcome changes are delivered right after.
     $monitoring->judgeHeartbeatAges();
-    // (b) Remediation opens and updates incidents from Monitoring's events.
+    // (b) Remediation opens and updates incidents from Monitoring's events,
+    // and Notifications keeps one notification per incident.
     $reports = [$delivery->deliver()];
     // (c) Incidents whose check passed long enough, and the daily reconciliation.
     $resolved = $remediation->resolveDue();

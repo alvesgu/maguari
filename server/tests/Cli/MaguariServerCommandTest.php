@@ -107,6 +107,15 @@ final class MaguariServerCommandTest extends TestCase
         return $this->scriptIn($this->directory . '/install', false);
     }
 
+    /**
+     * A migrated database and a secret key, as the tick needs.
+     */
+    private function prepareForTick(string $database): void
+    {
+        $this->runCommand($database, ['migrate']);
+        $this->runCommand($database, ['create-secret-key']);
+    }
+
     private function assertOneCleanLine(string $stderr, string $path): void
     {
         $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
@@ -483,7 +492,7 @@ final class MaguariServerCommandTest extends TestCase
     public function testTickPrintsNothingWhenThereIsNothingToDo(): void
     {
         $path = $this->directory . '/maguari.sqlite';
-        $this->runCommand($path, ['migrate']);
+        $this->prepareForTick($path);
 
         [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
 
@@ -496,7 +505,7 @@ final class MaguariServerCommandTest extends TestCase
     public function testTickJudgesHeartbeatAgesBeforeDeliveringEvents(): void
     {
         $path = $this->directory . '/maguari.sqlite';
-        $this->runCommand($path, ['migrate']);
+        $this->prepareForTick($path);
         $pdo = new \PDO('sqlite:' . $path);
         $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
         $pdo->exec("INSERT INTO fleet_instances (id, project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, 1, '1', 'us-east1-b', 'web', 0)");
@@ -518,7 +527,7 @@ final class MaguariServerCommandTest extends TestCase
     public function testTickReconcilesOnceADayAndPrintsWhatItFound(): void
     {
         $path = $this->directory . '/maguari.sqlite';
-        $this->runCommand($path, ['migrate']);
+        $this->prepareForTick($path);
         $pdo = new \PDO('sqlite:' . $path);
         $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
         $pdo->exec("INSERT INTO fleet_instances (id, project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, 1, '1', 'us-east1-b', 'web', 0)");
@@ -534,6 +543,12 @@ final class MaguariServerCommandTest extends TestCase
             $stdout,
         );
 
+        $this->assertSame(
+            [['incident_id' => 1, 'check_name' => 'disk_size', 'resolved_at' => null]],
+            $pdo->query('SELECT incident_id, check_name, resolved_at FROM notifications_notifications')->fetchAll(\PDO::FETCH_ASSOC),
+            'Notifications subscribes in the same tick.',
+        );
+
         [, $stdout] = $this->runCommand($path, ['tick']);
 
         $this->assertSame('', $stdout, 'Once a day.');
@@ -542,7 +557,7 @@ final class MaguariServerCommandTest extends TestCase
     public function testTickDeliversPendingEventsAndPrunesOldOnes(): void
     {
         $path = $this->directory . '/maguari.sqlite';
-        $this->runCommand($path, ['migrate']);
+        $this->prepareForTick($path);
         $pdo = new \PDO('sqlite:' . $path);
         $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at, delivered_at) VALUES ('monitoring.check_passed', '{}', 1, 1)");
         $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', "
@@ -564,7 +579,7 @@ final class MaguariServerCommandTest extends TestCase
     public function testTickReportsAFailedEventOnStderr(): void
     {
         $path = $this->directory . '/maguari.sqlite';
-        $this->runCommand($path, ['migrate']);
+        $this->prepareForTick($path);
         $pdo = new \PDO('sqlite:' . $path);
         $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', 'not json', 2)");
 
@@ -579,7 +594,7 @@ final class MaguariServerCommandTest extends TestCase
     public function testASecondTickWhileOneIsRunningDoesNothing(): void
     {
         $path = $this->directory . '/maguari.sqlite';
-        $this->runCommand($path, ['migrate']);
+        $this->prepareForTick($path);
         $pdo = new \PDO('sqlite:' . $path);
         $pdo->exec("INSERT INTO kernel_events (type, payload, occurred_at) VALUES ('monitoring.check_failed', '{}', 2)");
         $lock = fopen($path . '.tick-lock', 'c');
@@ -594,6 +609,18 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('', $stdout);
         $this->assertSame("Another tick is still running, so this one did nothing.\n", $stderr);
         $this->assertNull($pdo->query('SELECT delivered_at FROM kernel_events')->fetchColumn());
+    }
+
+    public function testTickNeedsTheSecretKey(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['tick']);
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame("maguari-server failed: The secret key file {$this->directory}/secret.key does not exist.\n", $stderr);
     }
 
     public function testTickRejectsArguments(): void

@@ -15,6 +15,7 @@ use Maguari\Server\Http\Controller\EnrollController;
 use Maguari\Server\Http\Controller\HeartbeatController;
 use Maguari\Server\Http\Controller\LoginController;
 use Maguari\Server\Http\Controller\InstancesController;
+use Maguari\Server\Http\Controller\NotificationsController;
 use Maguari\Server\Http\Controller\ProjectsController;
 use Maguari\Server\Http\Controller\RunsController;
 use Maguari\Server\Http\Controller\SetupController;
@@ -183,7 +184,8 @@ final class App
             $csrf = new CsrfMiddleware($responseFactory);
             $rateLimit = new RateLimitMiddleware($access, $responseFactory);
             $view = new View();
-            $adminController = new AdminController($fleet, $clients, $monitoring, $view, $logErrors);
+            $adminController = new AdminController($fleet, $clients, $monitoring, $notifications, $view, $logErrors);
+            $notificationsController = new NotificationsController($notifications, $fleet, $view);
             $projectsController = new ProjectsController($fleet, $clients, $access, $monitoring, $view);
             $instancesController = new InstancesController($fleet, $monitoring, $remediation, $view);
             $runsController = new RunsController($fleet, $monitoring);
@@ -194,10 +196,12 @@ final class App
             $setupController = new SetupController($access, $view);
             $loginController = new LoginController($access, $view);
 
-            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController, $emailController, $runsController): void {
+            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController, $emailController, $runsController, $notificationsController): void {
                 $group->get('', [$adminController, 'show']);
                 $group->post('/logout', [$adminController, 'logout']);
                 $group->post('/daily-job', [$adminController, 'runDailyJob']);
+                $group->post('/notifications/{id:[0-9]+}/hide', [$notificationsController, 'hide']);
+                $group->get('/logs', [$notificationsController, 'logs']);
                 $group->get('/projects', [$projectsController, 'show']);
                 $group->post('/projects', [$projectsController, 'add']);
                 $group->get('/projects/{id:[0-9]+}', [$projectsController, 'instances']);

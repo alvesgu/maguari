@@ -15,12 +15,14 @@ use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Notifications\NotificationsApi;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
- * The dashboard: every picked instance with its heartbeat status (design
- * section 15 step 6) and the daily job with its latest results (step 8). It
+ * The dashboard: the notifications of open incidents (design section 10.4),
+ * every picked instance with its heartbeat status (design section 15 step
+ * 6) and the daily job with its latest results (step 8). It
  * reads only SQLite, so it works while Google Cloud's API does not.
  */
 final class AdminController
@@ -32,6 +34,7 @@ final class AdminController
         private readonly FleetApi $fleet,
         private readonly ClientsApi $clients,
         private readonly MonitoringApi $monitoring,
+        private readonly NotificationsApi $notifications,
         private readonly View $view,
         private readonly bool $logErrors = true,
     ) {
@@ -43,10 +46,13 @@ final class AdminController
         $ids = array_map(static fn (Instance $instance): int => $instance->id, $instances);
         $enrollmentStates = $this->clients->enrollmentStates($ids);
         $enrolled = array_keys(array_filter($enrollmentStates, static fn (EnrollmentState $state): bool => $state === EnrollmentState::Enrolled));
+        $administrator = $request->getAttribute(Administrator::class);
+        assert($administrator instanceof Administrator);
 
         return $this->view->render($request, $response, 'admin', [
             'title' => 'Dashboard',
-            'administrator' => $request->getAttribute(Administrator::class),
+            'administrator' => $administrator,
+            'notifications' => $this->notifications->openNotifications($administrator->id),
             'instances' => $instances,
             'enrollmentStates' => $enrollmentStates,
             'heartbeats' => $this->monitoring->heartbeatStatuses($enrolled),
