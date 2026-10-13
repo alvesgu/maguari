@@ -837,7 +837,7 @@ Prerequisites for step 2: the domain's DNS record points at the instance in DNS-
 
 `--base-url` follows one rule everywhere, shared with the client's `--server` (`shared/src/ServerUrl.php`): `https://`, or `http://` only when the host is exactly `localhost` (case-insensitive); no user, password, path, query or fragment.
 
-No command ends with a PHP stack trace. Any error is printed as one line on stderr with exit code 1. When the database cannot be created or opened, the line names its path and mentions `MAGUARI_DATABASE`.
+No command ends with a PHP stack trace. Any error is printed as one line on stderr with exit code 1. When the database is missing, not up to date or cannot be created or opened, the line names its path and how to fix it. From a source checkout (one with `scripts/dev-env.sh`), it says to load the development environment with `source scripts/dev-env.sh` and run `server/bin/maguari-server migrate`. Anywhere else it says `sudo -u maguari-server maguari-server migrate` and never gives a development hint.
 
 `migrate`, `issue-setup-token`, `set-base-url`, `create-secret-key`, `run-daily-job` and `tick` refuse to run as root, so neither the database nor the key file is ever owned by root. They run as the app's user: `sudo -u maguari-server maguari-server <command>`. `check-seed-config` may run as root, because the seed config file can be readable only by root. `setup` runs as root (for certbot) and will do its database step as the app's user.
 

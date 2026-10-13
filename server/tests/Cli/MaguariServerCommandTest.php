@@ -13,7 +13,14 @@ use PHPUnit\Framework\TestCase;
  */
 final class MaguariServerCommandTest extends TestCase
 {
+    private const CHECKOUT_HINT = 'In a source checkout, load the development environment with source scripts/dev-env.sh, '
+        . 'then run server/bin/maguari-server migrate.';
+
+    private const INSTALLED_HINT = 'Run sudo -u maguari-server maguari-server migrate.';
+
     private string $directory;
+
+    private string $checkoutScript;
 
     protected function setUp(): void
     {
@@ -23,25 +30,23 @@ final class MaguariServerCommandTest extends TestCase
 
         $this->directory = sys_get_temp_dir() . '/maguari-cli-test-' . bin2hex(random_bytes(8));
         mkdir($this->directory, 0700);
+        $this->checkoutScript = $this->scriptIn($this->directory . '/checkout', true);
     }
 
     protected function tearDown(): void
     {
-        foreach (glob($this->directory . '/*') ?: [] as $file) {
-            unlink($file);
-        }
-
-        rmdir($this->directory);
+        $this->removeTree($this->directory);
     }
 
     /**
      * @param string[] $args
      * @param array<string, string> $extraEnvironment
+     * @param string|null $script the command to run, from a source checkout by default
      * @return array{int, string, string} exit code, stdout and stderr
      */
-    private function runCommand(string $database, array $args, array $extraEnvironment = []): array
+    private function runCommand(string $database, array $args, array $extraEnvironment = [], ?string $script = null): array
     {
-        $command = array_merge([PHP_BINARY, dirname(__DIR__, 2) . '/bin/maguari-server'], $args);
+        $command = array_merge([PHP_BINARY, $script ?? $this->checkoutScript], $args);
         $environment = $extraEnvironment + getenv();
         $environment['MAGUARI_DATABASE'] = $database;
         $environment['MAGUARI_SECRET_KEY_FILE'] = $this->directory . '/secret.key';
@@ -55,12 +60,59 @@ final class MaguariServerCommandTest extends TestCase
         return [proc_close($process), $stdout, $stderr];
     }
 
+    private function removeTree(string $path): void
+    {
+        if (is_link($path) || is_file($path)) {
+            unlink($path);
+
+            return;
+        }
+
+        foreach (scandir($path) ?: [] as $entry) {
+            if ($entry !== '.' && $entry !== '..') {
+                $this->removeTree($path . '/' . $entry);
+            }
+        }
+
+        rmdir($path);
+    }
+
+    /**
+     * A copy of bin/maguari-server in $root/server/bin, using this checkout's
+     * vendor/. The command gives development hints only when
+     * $root/scripts/dev-env.sh exists, so the tests build both layouts instead
+     * of depending on where they run (the Ubuntu 22.04 container copies only
+     * server/, shared/ and client/).
+     */
+    private function scriptIn(string $root, bool $checkout): string
+    {
+        mkdir($root . '/server/bin', 0700, true);
+        copy(dirname(__DIR__, 2) . '/bin/maguari-server', $root . '/server/bin/maguari-server');
+        symlink(dirname(__DIR__, 2) . '/vendor', $root . '/server/vendor');
+
+        if ($checkout) {
+            mkdir($root . '/scripts', 0700);
+            touch($root . '/scripts/dev-env.sh');
+        }
+
+        return $root . '/server/bin/maguari-server';
+    }
+
+    /**
+     * The command as an installed package would have it: no
+     * scripts/dev-env.sh two levels up.
+     */
+    private function installedScript(): string
+    {
+        return $this->scriptIn($this->directory . '/install', false);
+    }
+
     private function assertOneCleanLine(string $stderr, string $path): void
     {
         $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
         $this->assertStringEndsWith("\n", $stderr);
         $this->assertStringContainsString($path, $stderr);
-        $this->assertStringContainsString('MAGUARI_DATABASE', $stderr);
+        $this->assertStringContainsString(self::CHECKOUT_HINT, $stderr);
         $this->assertStringNotContainsString('Stack trace', $stderr);
         $this->assertStringNotContainsString('Warning', $stderr);
         $this->assertStringNotContainsString('.php', $stderr);
@@ -256,7 +308,7 @@ final class MaguariServerCommandTest extends TestCase
 
         $this->assertSame(1, $status);
         $this->assertSame('', $stdout);
-        $this->assertSame("The database {$path} is missing or not up to date. Run maguari-server migrate first.\n", $stderr);
+        $this->assertSame("The database {$path} is missing or not up to date. " . self::CHECKOUT_HINT . "\n", $stderr);
         $this->assertFileDoesNotExist($path);
     }
 
@@ -362,6 +414,60 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame('The daily job is already running, started at ' . gmdate('Y-m-d H:i', $startedAt) . " UTC.\n", $stderr);
     }
 
+    /**
+     * @return array<string, array{string[]}>
+     */
+    public static function commandsNeedingAMigratedDatabase(): array
+    {
+        return [
+            'run-daily-job' => [['run-daily-job']],
+            'tick' => [['tick']],
+        ];
+    }
+
+    /**
+     * @dataProvider commandsNeedingAMigratedDatabase
+     * @param string[] $args
+     */
+    public function testAnInstalledCommandSuggestsMigratingAsTheAppUser(array $args): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, $args, [], $this->installedScript());
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertSame("The database {$path} is missing or not up to date. " . self::INSTALLED_HINT . "\n", $stderr);
+    }
+
+    public function testAnInstalledCommandNeverGivesADevelopmentHintWhenTheDatabaseCannotBeCreated(): void
+    {
+        file_put_contents($this->directory . '/not-a-directory', '');
+        $path = $this->directory . '/not-a-directory/maguari.sqlite';
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['migrate'], [], $this->installedScript());
+
+        $this->assertSame(1, $status);
+        $this->assertSame('', $stdout);
+        $this->assertStringStartsWith("Cannot use the database at {$path}: could not create directory", $stderr);
+        $this->assertStringEndsWith(' ' . self::INSTALLED_HINT . "\n", $stderr);
+        $this->assertStringNotContainsString('dev-env', $stderr);
+        $this->assertStringNotContainsString('MAGUARI_DATABASE', $stderr);
+    }
+
+    public function testAnInstalledCommandNeverGivesADevelopmentHintOnADatabaseError(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        file_put_contents($path, str_repeat('not a database ', 100));
+
+        [$status, , $stderr] = $this->runCommand($path, ['migrate'], [], $this->installedScript());
+
+        $this->assertSame(1, $status);
+        $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
+        $this->assertStringEndsWith(' ' . self::INSTALLED_HINT . "\n", $stderr);
+        $this->assertStringNotContainsString('dev-env', $stderr);
+    }
+
     public function testTickNeedsAMigratedDatabase(): void
     {
         $path = $this->directory . '/maguari.sqlite';
@@ -370,7 +476,7 @@ final class MaguariServerCommandTest extends TestCase
 
         $this->assertSame(1, $status);
         $this->assertSame('', $stdout);
-        $this->assertSame("The database {$path} is missing or not up to date. Run maguari-server migrate first.\n", $stderr);
+        $this->assertSame("The database {$path} is missing or not up to date. " . self::CHECKOUT_HINT . "\n", $stderr);
         $this->assertFileDoesNotExist($path);
     }
 

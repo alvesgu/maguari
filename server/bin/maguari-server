@@ -99,6 +99,23 @@ function refuseRoot(array $commandArgs, string $consequence = 'the database woul
 }
 
 /**
+ * How to fix a database that is missing, not up to date or cannot be created.
+ * A source checkout (it has scripts/dev-env.sh) gets the development variables,
+ * without which the default production path is used. Anywhere else the
+ * command most likely ran as the wrong user or before migrate, and the
+ * development hint is never shown.
+ */
+function databaseFixHint(): string
+{
+    if (is_file(dirname(__DIR__, 2) . '/scripts/dev-env.sh')) {
+        return 'In a source checkout, load the development environment with source scripts/dev-env.sh, '
+            . 'then run server/bin/maguari-server migrate.';
+    }
+
+    return 'Run sudo -u maguari-server maguari-server migrate.';
+}
+
+/**
  * Creates the database if needed and applies pending migrations.
  */
 function migrateDatabase(Database $database): void
@@ -246,7 +263,7 @@ function runDailyJobCommand(array $args): int
     $database = Database::fromEnvironment();
 
     if (!(new Migrator($database))->isUpToDate()) {
-        fwrite(STDERR, "The database {$database->path()} is missing or not up to date. Run maguari-server migrate first.\n");
+        fwrite(STDERR, "The database {$database->path()} is missing or not up to date. " . databaseFixHint() . "\n");
 
         return 1;
     }
@@ -298,7 +315,7 @@ function tickCommand(array $args): int
     $database = Database::fromEnvironment();
 
     if (!(new Migrator($database))->isUpToDate()) {
-        fwrite(STDERR, "The database {$database->path()} is missing or not up to date. Run maguari-server migrate first.\n");
+        fwrite(STDERR, "The database {$database->path()} is missing or not up to date. " . databaseFixHint() . "\n");
 
         return 1;
     }
@@ -381,16 +398,13 @@ function checkSeedConfigCommand(array $args): int
  */
 function runMaguariServer(array $args): int
 {
-    $databaseHint = 'Check that this user can create and write it, or set MAGUARI_DATABASE to another path '
-        . '(development and tests only).';
-
     try {
         return maguariServerMain($args);
     } catch (DatabaseUnavailable $exception) {
-        $message = $exception->getMessage() . ' ' . $databaseHint;
+        $message = $exception->getMessage() . ' ' . databaseFixHint();
     } catch (PDOException $exception) {
         // A database that opened but failed later, for example a read-only file.
-        $message = sprintf('Database error at %s: %s. %s', Database::fromEnvironment()->path(), $exception->getMessage(), $databaseHint);
+        $message = sprintf('Database error at %s: %s. %s', Database::fromEnvironment()->path(), $exception->getMessage(), databaseFixHint());
     } catch (Throwable $exception) {
         $message = sprintf('maguari-server failed: %s', $exception->getMessage());
     }
