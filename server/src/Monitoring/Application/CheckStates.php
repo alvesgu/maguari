@@ -28,15 +28,25 @@ final class CheckStates
     ) {
     }
 
+    /**
+     * A repeat of the same outcome only keeps its sentence, the latest, and
+     * writes no event.
+     */
     public function record(CheckResult $result): void
     {
-        $state = CheckState::after($this->states->find($result->instanceId, $result->checkName, $result->subject), $result);
+        $current = $this->states->find($result->instanceId, $result->checkName, $result->subject);
+        $state = CheckState::after($current, $result);
 
-        if ($state === null) {
+        if ($state === null || $state == $current) {
             return;
         }
 
         $this->states->save($state);
+
+        if (!$state->changedFrom($current)) {
+            return;
+        }
+
         $event = $state->outcome === CheckOutcome::Fail ? CheckFailed::fromResult($result) : CheckPassed::fromResult($result);
         $this->outbox->record($event->toEvent());
     }

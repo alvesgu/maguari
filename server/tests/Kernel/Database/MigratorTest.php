@@ -59,6 +59,7 @@ final class MigratorTest extends TestCase
             'Monitoring/0004_monitoring_check_results_subject.sql',
             'Monitoring/0005_monitoring_certificate_hostnames.sql',
             'Monitoring/0006_monitoring_heartbeats_and_check_states.sql',
+            'Monitoring/0007_monitoring_check_states_detail.sql',
             'Notifications/0001_notifications_smtp_settings.sql',
             'Remediation/0001_remediation_incidents.sql',
         ], $migrator->migrate());

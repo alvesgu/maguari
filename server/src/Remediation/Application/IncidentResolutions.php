@@ -25,6 +25,9 @@ final class IncidentResolutions
 {
     public const RECONCILE_EVERY_SECONDS = 86_400;
 
+    /** The sentence of an incident reconciliation opens when Monitoring stored none. */
+    public const RECONCILED_DETAIL = 'Opened by reconciliation; see the instance page for details.';
+
     public function __construct(
         private readonly Database $database,
         private readonly Clock $clock,
@@ -87,9 +90,9 @@ final class IncidentResolutions
                 $incident = self::find($open, $key);
 
                 if ($incident === null) {
-                    // Opened as check_failed would have, but without the sentence.
+                    // Opened as check_failed would have, with the latest sentence.
                     $incident = $this->incidents->save(Incident::open($key, $state->since));
-                    $this->outbox->record(IncidentOpened::of($incident, '')->toEvent());
+                    $this->outbox->record(IncidentOpened::of($incident, $state->detail ?? self::RECONCILED_DETAIL)->toEvent());
                     $opened[] = $incident;
                 } elseif ($incident->passingSince !== null) {
                     // A lost check_failed: it is failing, not passing.

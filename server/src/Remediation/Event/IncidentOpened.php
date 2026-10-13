@@ -17,7 +17,8 @@ final class IncidentOpened
 
     /**
      * @param string $detail the failed result's sentence, from Monitoring;
-     *        empty when the daily reconciliation opened the incident
+     *        the latest one, or a fixed sentence, when the daily
+     *        reconciliation opened the incident
      */
     public function __construct(
         public readonly int $incidentId,

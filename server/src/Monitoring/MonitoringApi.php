@@ -137,8 +137,9 @@ final class MonitoringApi
     }
 
     /**
-     * Every check currently failing, with the time it started failing, for
-     * Remediation's daily reconciliation (design section 7.4). Reads only
+     * Every check currently failing, with the time it started failing and
+     * its latest sentence where one was stored, for Remediation's daily
+     * reconciliation (design section 7.4). Reads only
      * SQLite, so it can run inside the caller's transaction.
      *
      * @return list<CheckState> in instance, check name and subject order

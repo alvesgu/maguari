@@ -18,16 +18,25 @@ final class CheckStateTest extends TestCase
 
     public function testAFirstPassOrFailIsAChange(): void
     {
-        $this->assertEquals(new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Pass, 100), CheckState::after(null, self::checkResult(CheckOutcome::Pass)));
-        $this->assertEquals(new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Fail, 100), CheckState::after(null, self::checkResult(CheckOutcome::Fail)));
+        $pass = CheckState::after(null, self::checkResult(CheckOutcome::Pass));
+        $fail = CheckState::after(null, self::checkResult(CheckOutcome::Fail));
+
+        $this->assertEquals(new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Pass, 100, 'A sentence.'), $pass);
+        $this->assertEquals(new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Fail, 100, 'A sentence.'), $fail);
+        $this->assertTrue($pass?->changedFrom(null));
     }
 
-    public function testAFlipIsAChangeAndARepeatIsNot(): void
+    public function testAFlipIsAChangeAndARepeatOnlyTakesTheNewSentence(): void
     {
-        $passing = new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Pass, 50);
+        $passing = new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Pass, 50, 'An older sentence.');
 
-        $this->assertEquals(new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Fail, 100), CheckState::after($passing, self::checkResult(CheckOutcome::Fail)));
-        $this->assertNull(CheckState::after($passing, self::checkResult(CheckOutcome::Pass)));
+        $failing = CheckState::after($passing, self::checkResult(CheckOutcome::Fail));
+        $repeat = CheckState::after($passing, self::checkResult(CheckOutcome::Pass));
+
+        $this->assertEquals(new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Fail, 100, 'A sentence.'), $failing);
+        $this->assertTrue($failing?->changedFrom($passing));
+        $this->assertEquals(new CheckState(7, 'local_certificate', 'example.com', CheckOutcome::Pass, 50, 'A sentence.'), $repeat);
+        $this->assertFalse($repeat?->changedFrom($passing));
     }
 
     public function testNotCheckedChangesNothing(): void

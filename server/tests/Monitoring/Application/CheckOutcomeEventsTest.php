@@ -163,6 +163,30 @@ final class CheckOutcomeEventsTest extends TestCase
         );
     }
 
+    public function testARepeatKeepsTheLatestSentenceWithoutAnEvent(): void
+    {
+        $web = $this->pick('web');
+        $firstAt = $this->environment->clock->now();
+        $this->heartbeat($web->id);
+        $this->tick();
+        $this->environment->clock->advance(60);
+        $this->heartbeat($web->id);
+
+        $this->assertSame([CheckOutcome::Pass], $this->tick());
+
+        $detail = $this->environment->database->pdo()->query('SELECT detail FROM monitoring_check_states')->fetchColumn();
+        $this->assertSame('The last heartbeat arrived at ' . gmdate('Y-m-d H:i:s', $firstAt + 60) . ' UTC.', $detail);
+        $this->assertSame($firstAt, $this->states()[0]['since'], 'The time of the change, not of the latest result.');
+        $this->assertSame(['monitoring.check_passed heartbeat_age'], $this->eventSummaries());
+        $this->assertSame([], $this->environment->monitoring->failingChecks());
+
+        $this->ticksEveryMinute(2);
+
+        [$failing] = $this->environment->monitoring->failingChecks();
+        $this->assertSame($this->environment->clock->now(), $failing->since);
+        $this->assertSame('No heartbeat since ' . gmdate('Y-m-d H:i:s', $firstAt + 60) . ' UTC. Heartbeats are expected every 60 seconds and are late after 90.', $failing->detail);
+    }
+
     public function testATickAfterAGapJudgesNothingLate(): void
     {
         $web = $this->pick('web');

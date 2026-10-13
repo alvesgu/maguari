@@ -215,12 +215,12 @@ final class IncidentsTest extends TestCase
         $this->assertSame(21, $resolved[0]->id, 'Newest first.');
     }
 
-    private function setState(int $instanceId, string $checkName, string $subject, string $outcome, int $since): void
+    private function setState(int $instanceId, string $checkName, string $subject, string $outcome, int $since, ?string $detail = null): void
     {
         $this->environment->database->pdo()->prepare(
-            'INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since) VALUES (?, ?, ?, ?, ?) '
-                . 'ON CONFLICT (instance_id, check_name, subject) DO UPDATE SET outcome = excluded.outcome, since = excluded.since',
-        )->execute([$instanceId, $checkName, $subject, $outcome, $since]);
+            'INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since, detail) VALUES (?, ?, ?, ?, ?, ?) '
+                . 'ON CONFLICT (instance_id, check_name, subject) DO UPDATE SET outcome = excluded.outcome, since = excluded.since, detail = excluded.detail',
+        )->execute([$instanceId, $checkName, $subject, $outcome, $since, $detail]);
     }
 
     private function forgetReconciliations(): void
@@ -244,11 +244,11 @@ final class IncidentsTest extends TestCase
         $this->assertNull($remediation->reconcileIfDue());
     }
 
-    public function testReconciliationOpensAMissingIncident(): void
+    public function testReconciliationOpensAMissingIncidentWithTheLatestSentence(): void
     {
         $since = $this->environment->clock->now() - 600;
         // A failure whose event was lost: Monitoring has it, Remediation does not.
-        $this->setState(7, 'disk_size', '', 'fail', $since);
+        $this->setState(7, 'disk_size', '', 'fail', $since, 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB.');
         $this->forgetReconciliations();
 
         $reconciliation = $this->environment->remediation->reconcileIfDue();
@@ -259,9 +259,19 @@ final class IncidentsTest extends TestCase
         $this->assertSame($since, $incident->openedAt);
         $this->assertSame([[
             'remediation.incident_opened',
-            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'disk_size', 'subject' => '', 'detail' => ''],
+            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'disk_size', 'subject' => '', 'detail' => 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB.'],
             $since,
         ]], $this->remediationEvents());
+    }
+
+    public function testReconciliationUsesAFixedSentenceWhenMonitoringStoredNone(): void
+    {
+        $this->setState(7, 'heartbeat_age', '', 'fail', $this->environment->clock->now());
+        $this->forgetReconciliations();
+
+        $this->environment->remediation->reconcileIfDue();
+
+        $this->assertSame('Opened by reconciliation; see the instance page for details.', $this->remediationEvents()[0][1]['detail']);
     }
 
     public function testReconciliationResolvesStaleIncidentsAndWaitsForARecentPass(): void

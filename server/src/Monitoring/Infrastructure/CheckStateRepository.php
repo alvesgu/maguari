@@ -18,7 +18,7 @@ final class CheckStateRepository
     public function find(int $instanceId, string $checkName, string $subject): ?CheckState
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT instance_id, check_name, subject, outcome, since FROM monitoring_check_states '
+            'SELECT instance_id, check_name, subject, outcome, since, detail FROM monitoring_check_states '
                 . 'WHERE instance_id = ? AND check_name = ? AND subject = ?',
         );
         $statement->execute([$instanceId, $checkName, $subject]);
@@ -39,7 +39,7 @@ final class CheckStateRepository
 
         $placeholders = implode(', ', array_fill(0, count($checkNames), '?'));
         $statement = $this->database->pdo()->prepare(
-            'SELECT instance_id, check_name, subject, outcome, since FROM monitoring_check_states '
+            'SELECT instance_id, check_name, subject, outcome, since, detail FROM monitoring_check_states '
                 . "WHERE instance_id = ? AND check_name IN ({$placeholders}) ORDER BY check_name, subject",
         );
         $statement->execute([$instanceId, ...array_values($checkNames)]);
@@ -53,7 +53,7 @@ final class CheckStateRepository
     public function failing(): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT instance_id, check_name, subject, outcome, since FROM monitoring_check_states '
+            'SELECT instance_id, check_name, subject, outcome, since, detail FROM monitoring_check_states '
                 . 'WHERE outcome = ? ORDER BY instance_id, check_name, subject',
         );
         $statement->execute([CheckOutcome::Fail->value]);
@@ -64,9 +64,9 @@ final class CheckStateRepository
     public function save(CheckState $state): void
     {
         $this->database->pdo()->prepare(
-            'INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since) VALUES (?, ?, ?, ?, ?) '
-                . 'ON CONFLICT (instance_id, check_name, subject) DO UPDATE SET outcome = excluded.outcome, since = excluded.since',
-        )->execute([$state->instanceId, $state->checkName, $state->subject, $state->outcome->value, $state->since]);
+            'INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since, detail) VALUES (?, ?, ?, ?, ?, ?) '
+                . 'ON CONFLICT (instance_id, check_name, subject) DO UPDATE SET outcome = excluded.outcome, since = excluded.since, detail = excluded.detail',
+        )->execute([$state->instanceId, $state->checkName, $state->subject, $state->outcome->value, $state->since, $state->detail]);
     }
 
     /**
@@ -93,6 +93,7 @@ final class CheckStateRepository
             $row['subject'],
             CheckOutcome::from($row['outcome']),
             (int) $row['since'],
+            $row['detail'],
         );
     }
 }
