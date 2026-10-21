@@ -13,6 +13,7 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Http\App;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Database\Migrator;
+use Maguari\Server\Kernel\Events\EventDelivery;
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretKeyFile;
 use Maguari\Server\Monitoring\MonitoringApi;
@@ -88,7 +89,26 @@ final class TestEnvironment
 
     public function app(): SlimApp
     {
-        return App::create($this->access, $this->fleet, $this->clients, $this->monitoring, $this->remediation, $this->notifications, MAGUARI_TEST_SESSION_PATH, $this->clock, false);
+        return App::create(
+            $this->access,
+            $this->fleet,
+            $this->clients,
+            $this->monitoring,
+            $this->remediation,
+            $this->notifications,
+            MAGUARI_TEST_SESSION_PATH,
+            $this->clock,
+            false,
+            events: $this->eventDelivery(),
+        );
+    }
+
+    /**
+     * Delivery to every context that subscribes, as the tick and the web app wire it.
+     */
+    public function eventDelivery(): EventDelivery
+    {
+        return new EventDelivery($this->database, $this->clock, [...$this->remediation->subscribers(), ...$this->notifications->subscribers()]);
     }
 
     public function browser(string $ip = '192.0.2.10'): Browser

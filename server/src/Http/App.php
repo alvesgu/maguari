@@ -21,12 +21,14 @@ use Maguari\Server\Http\Controller\RunsController;
 use Maguari\Server\Http\Controller\SetupController;
 use Maguari\Server\Http\Middleware\ClientSignatureMiddleware;
 use Maguari\Server\Http\Middleware\CsrfMiddleware;
+use Maguari\Server\Http\Middleware\DeliverEventsMiddleware;
 use Maguari\Server\Http\Middleware\RateLimitMiddleware;
 use Maguari\Server\Http\Middleware\RequireAdministratorMiddleware;
 use Maguari\Server\Http\Middleware\SecurityHeadersMiddleware;
 use Maguari\Server\Http\Middleware\SessionMiddleware;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
+use Maguari\Server\Kernel\Events\EventDelivery;
 use Maguari\Server\Kernel\Database\Migrator;
 use Maguari\Server\Kernel\HttpClient\StreamHttpClient;
 use Maguari\Server\Kernel\Secrets\SecretBox;
@@ -99,16 +101,19 @@ final class App
 
         $fleet = new FleetApi($database, $clock, $tokens, $http);
         $monitoring = new MonitoringApi($database, $clock, $fleet, new StreamTlsCertificateReader());
+        $remediation = new RemediationApi($database, $clock, $monitoring);
+        $notifications = new NotificationsApi($database, $clock, $secretBox);
 
         return self::create(
             new AccessApi($database, $clock, SeedConfigReader::fromEnvironment()),
             $fleet,
             new ClientsApi($database, $clock, $secretBox, $monitoring),
             $monitoring,
-            new RemediationApi($database, $clock, $monitoring),
-            new NotificationsApi($database, $clock, $secretBox),
+            $remediation,
+            $notifications,
             $sessionPath,
             $clock,
+            events: new EventDelivery($database, $clock, [...$remediation->subscribers(), ...$notifications->subscribers()]),
         );
     }
 
@@ -123,6 +128,9 @@ final class App
      * @param NotificationsApi|null $notifications null in the same case as $access
      * @param bool $logErrors log uncaught errors to PHP's error log. Tests pass false.
      * @param string $notReadyMessage what /admin and /auth say while not ready
+     * @param ?EventDelivery $events delivers pending events after each
+     *        state-changing /admin request (design section 2.1 rule 5); null
+     *        leaves them to the tick
      */
     public static function create(
         ?AccessApi $access,
@@ -135,6 +143,7 @@ final class App
         Clock $clock = new SystemClock(),
         bool $logErrors = true,
         string $notReadyMessage = self::NOT_SET_UP_MESSAGE,
+        ?EventDelivery $events = null,
     ): SlimApp {
         $app = AppFactory::create();
         $responseFactory = $app->getResponseFactory();
@@ -196,7 +205,7 @@ final class App
             $setupController = new SetupController($access, $view);
             $loginController = new LoginController($access, $view);
 
-            $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController, $emailController, $runsController, $notificationsController): void {
+            $admin = $app->group('/admin', function (RouteCollectorProxy $group) use ($adminController, $projectsController, $instancesController, $emailController, $runsController, $notificationsController): void {
                 $group->get('', [$adminController, 'show']);
                 $group->post('/logout', [$adminController, 'logout']);
                 $group->post('/daily-job', [$adminController, 'runDailyJob']);
@@ -222,7 +231,15 @@ final class App
                 $group->group('/api', function (RouteCollectorProxy $api) use ($runsController): void {
                     $api->get('/instances/{id:[0-9]+}/runs', [$runsController, 'show']);
                 });
-            })->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
+            });
+
+            // Innermost, so events are delivered only after a signed-in
+            // administrator's request was handled.
+            if ($events !== null) {
+                $admin->add(new DeliverEventsMiddleware($events, $logErrors));
+            }
+
+            $admin->add(new RequireAdministratorMiddleware($access, $responseFactory))->add($csrf)->add($session);
 
             // CSRF protects the forms under /auth. The future OAuth callback is
             // protected by its state parameter instead (design section 10.2).

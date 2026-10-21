@@ -9,9 +9,11 @@ use Maguari\Server\Kernel\Database\Database;
 
 /**
  * Delivers pending events to their subscribers (design section 2.1 rule 5),
- * run only by the tick. Each event is delivered in its own transaction: every
+ * run by the tick and after an administrator's state-changing request, never
+ * inside a heartbeat. Each event is delivered in its own transaction: every
  * subscriber that handles its type runs and the event is marked delivered,
- * so its effects happen exactly once. Events go in ID order, and delivery
+ * so its effects happen exactly once, even when two deliveries run at once
+ * (the second finds it delivered and does nothing). Events go in ID order, and delivery
  * stops at an event whose subscribers fail, so the order holds. An event that
  * failed on MAX_FAILED_ATTEMPTS ticks is skipped, so one bug cannot stop every
  * later event for good.
@@ -59,8 +61,10 @@ final class EventDelivery
             $type = (string) $row['type'];
 
             try {
-                $this->deliverOne($id, $type, (string) $row['payload'], (int) $row['occurred_at']);
-                $delivered[] = new DeliveredEvent($id, $type);
+                // Another delivery (the tick, or a request) may have delivered it meanwhile.
+                if ($this->deliverOne($id, $type, (string) $row['payload'], (int) $row['occurred_at'])) {
+                    $delivered[] = new DeliveredEvent($id, $type);
+                }
             } catch (\Throwable $exception) {
                 $attempts = $this->recordFailure($id);
                 $failure = new FailedDelivery($id, $type, $exception, $attempts, $attempts >= self::MAX_FAILED_ATTEMPTS);
@@ -104,16 +108,18 @@ final class EventDelivery
         return $row === false ? null : $row;
     }
 
-    private function deliverOne(int $id, string $type, string $payload, int $occurredAt): void
+    /**
+     * @return bool false when another delivery had delivered it first
+     */
+    private function deliverOne(int $id, string $type, string $payload, int $occurredAt): bool
     {
-        $this->database->transaction(function (\PDO $pdo) use ($id, $type, $payload, $occurredAt): void {
-            // Marked first, so a second delivery of the same event (which the
-            // tick lock already prevents) would change nothing.
+        return $this->database->transaction(function (\PDO $pdo) use ($id, $type, $payload, $occurredAt): bool {
+            // Marked first, so a second delivery of the same event changes nothing.
             $mark = $pdo->prepare('UPDATE kernel_events SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL');
             $mark->execute([$this->clock->now(), $id]);
 
             if ($mark->rowCount() !== 1) {
-                return;
+                return false;
             }
 
             $decoded = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
@@ -129,6 +135,8 @@ final class EventDelivery
                     $subscriber->handle($event);
                 }
             }
+
+            return true;
         });
     }
 
