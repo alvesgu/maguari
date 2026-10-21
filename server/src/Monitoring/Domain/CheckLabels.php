@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Monitoring\Domain;
 
+use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\ServiceCheck;
 
@@ -20,6 +21,7 @@ final class CheckLabels
         HttpCheck::CHECK_NAME => 'Web app',
         ServiceCheck::TYPE => 'Service',
         LocalHttpCheck::TYPE => 'Local HTTP',
+        DatabaseCheck::TYPE => 'Database',
     ];
 
     /**

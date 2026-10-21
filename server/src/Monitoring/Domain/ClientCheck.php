@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Monitoring\Domain;
 
+use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\ServiceCheck;
 
@@ -20,10 +21,14 @@ final class ClientCheck
     /** Each can take up to 10 seconds, within the client's 20 for all checks. */
     public const MAX_LOCAL_HTTP_PER_INSTANCE = 5;
 
+    /** Each can take up to 10 seconds, like local HTTP checks. */
+    public const MAX_DATABASES_PER_INSTANCE = 5;
+
     /**
      * @param int $instanceId Fleet's instance ID
-     * @param string $type ServiceCheck::TYPE or LocalHttpCheck::TYPE (later database)
-     * @param string $target the unit name for a service check, the URL for a local HTTP check
+     * @param string $type ServiceCheck::TYPE, LocalHttpCheck::TYPE or DatabaseCheck::TYPE
+     * @param string $target the unit name for a service check, the URL for a
+     *        local HTTP check, the database's name for a database check
      * @param string $hostName only for local HTTP checks; '' otherwise
      */
     public function __construct(
@@ -56,6 +61,7 @@ final class ClientCheck
         return match ($this->type) {
             ServiceCheck::TYPE => ['type' => ServiceCheck::TYPE, 'unit' => $this->target],
             LocalHttpCheck::TYPE => ['type' => LocalHttpCheck::TYPE, 'url' => $this->target, 'host_name' => $this->hostName],
+            DatabaseCheck::TYPE => ['type' => DatabaseCheck::TYPE, 'name' => $this->target],
             default => throw new \LogicException(sprintf('Unknown client check type %s.', $this->type)),
         };
     }

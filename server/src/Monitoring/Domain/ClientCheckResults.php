@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Maguari\Server\Monitoring\Domain;
 
 use Maguari\Server\Monitoring\Exception\InvalidCheckResults;
+use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\Protocol;
 use Maguari\Shared\ServiceCheck;
@@ -53,6 +54,7 @@ final class ClientCheckResults
             $result = match ($check['type']) {
                 ServiceCheck::TYPE => self::service($check),
                 LocalHttpCheck::TYPE => self::localHttp($check),
+                DatabaseCheck::TYPE => self::database($check),
                 default => null,
             };
 
@@ -104,6 +106,38 @@ final class ClientCheckResults
         }
 
         return new ClientCheckResult(LocalHttpCheck::TYPE, $subject, $outcome, is_string($reason) ? $reason : null, null, $answered ? $status : null, $answered ? $ms : null);
+    }
+
+    /**
+     * A database driver that is missing names its kind in `db_type`, kept
+     * as the result's state, so the sentence names the package to install.
+     *
+     * @param array<string, mixed> $check
+     */
+    private static function database(array $check): ClientCheckResult
+    {
+        $subject = $check['subject'] ?? null;
+        $outcome = is_string($check['outcome'] ?? null) ? CheckOutcome::tryFrom($check['outcome']) : null;
+        $reason = $check['reason'] ?? null;
+        $ms = $check['ms'] ?? null;
+        $type = $check['db_type'] ?? null;
+
+        if (!is_string($subject) || !DatabaseCheck::isValidName($subject) || $outcome === null) {
+            throw new InvalidCheckResults('A database result needs a valid database name as its subject and an outcome.');
+        }
+
+        $valid = match ($outcome) {
+            CheckOutcome::Pass => $reason === null && is_int($ms) && $ms >= 0,
+            CheckOutcome::Fail => $ms === null && in_array($reason, DatabaseCheck::FAIL_REASONS, true),
+            CheckOutcome::NotChecked => $ms === null && (in_array($reason, [DatabaseCheck::REASON_NOT_SET_UP, DatabaseCheck::REASON_FILE_UNUSABLE, Protocol::CHECK_REASON_TIME_LIMIT], true)
+                || ($reason === DatabaseCheck::REASON_DRIVER_MISSING && isset(DatabaseCheck::DRIVERS[is_string($type) ? $type : '']))),
+        };
+
+        if (!$valid || ($type !== null && $reason !== DatabaseCheck::REASON_DRIVER_MISSING)) {
+            throw new InvalidCheckResults(sprintf('The database result for %s has an outcome, time and reason that do not go together.', $subject));
+        }
+
+        return new ClientCheckResult(DatabaseCheck::TYPE, $subject, $outcome, is_string($reason) ? $reason : null, is_string($type) ? $type : null, null, is_int($ms) ? $ms : null);
     }
 
     /**

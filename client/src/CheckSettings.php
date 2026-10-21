@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Client;
 
+use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\Protocol;
 use Maguari\Shared\ServiceCheck;
@@ -19,7 +20,8 @@ final class CheckSettings
 {
     /**
      * @param list<array<string, string>> $checks each with its type and its
-     *        fields: unit for a service, url and host_name for local HTTP
+     *        fields: unit for a service, url and host_name for local HTTP,
+     *        name for a database
      * @param int $skipped checks left out because this client cannot run them
      */
     private function __construct(
@@ -52,6 +54,8 @@ final class CheckSettings
 
             if ($type === ServiceCheck::TYPE && is_string($check['unit'] ?? null) && UnitName::isValid($check['unit'])) {
                 $valid[] = ['type' => ServiceCheck::TYPE, 'unit' => $check['unit']];
+            } elseif ($type === DatabaseCheck::TYPE && is_string($check['name'] ?? null) && DatabaseCheck::isValidName($check['name'])) {
+                $valid[] = ['type' => DatabaseCheck::TYPE, 'name' => $check['name']];
             } elseif ($type === LocalHttpCheck::TYPE && is_string($check['url'] ?? null) && is_string($check['host_name'] ?? null) && LocalHttpCheck::isValid($check['url'], $check['host_name'])) {
                 $valid[] = ['type' => LocalHttpCheck::TYPE, 'url' => $check['url'], 'host_name' => $check['host_name']];
             }

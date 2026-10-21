@@ -166,4 +166,22 @@ final class ServiceChecksFlowTest extends TestCase
         $this->heartbeat($client, ['client_version' => '0.5.0', 'check_settings_version' => null]);
         $this->assertStringNotContainsString('skips local HTTP checks', (string) $browser->get($this->page())->getBody());
     }
+
+    public function testAddADatabaseByName(): void
+    {
+        $client = $this->environment->enrollClient($this->instanceId);
+        $browser = $this->signedInBrowser();
+
+        $refused = $this->post($browser, '/databases', ['database' => 'host=db password=x']);
+        $this->assertSame(422, $refused->getStatusCode());
+        $this->assertStringContainsString('value="host=db password=x"', (string) $refused->getBody());
+
+        $this->assertSame(303, $this->post($browser, '/databases', ['database' => 'geonode'])->getStatusCode());
+        $page = (string) $browser->get($this->page())->getBody();
+        $this->assertStringContainsString('<tr><td>geonode</td><td>Not checked', $page);
+        $this->assertStringContainsString('maguari-client set-database &lt;name&gt; --type=postgresql', $page);
+
+        $this->heartbeat($client, ['client_version' => '0.5.0', 'check_settings_version' => null]);
+        $this->assertStringContainsString('<p>This client (version 0.5.0) skips database checks. It needs version 0.6.0 or later.</p>', (string) $browser->get($this->page())->getBody());
+    }
 }

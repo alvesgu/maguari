@@ -172,6 +172,23 @@ final class InstancesController
     }
 
     /**
+     * @param array{id: string} $args
+     */
+    public function addDatabase(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $name = FormInput::string((array) $request->getParsedBody(), 'database');
+
+        try {
+            $this->monitoring->addDatabaseCheck($instance->id, $name);
+        } catch (InvalidClientCheck $invalid) {
+            return $this->page($request, $response, $instance, ['database' => $name, 'databaseError' => $invalid->getMessage()], 422);
+        }
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
      * A check that is already gone just shows the page again.
      *
      * @param array{id: string, checkId: string} $args
@@ -206,7 +223,7 @@ final class InstancesController
     }
 
     /**
-     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string, unit?: string, unitError?: string, localUrl?: string, hostName?: string, localHttpError?: string} $form
+     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string, unit?: string, unitError?: string, localUrl?: string, hostName?: string, localHttpError?: string, database?: string, databaseError?: string} $form
      *        what was typed in a refused form and why it was refused, or the
      *        warning of the last change
      */
@@ -246,6 +263,8 @@ final class InstancesController
             'localUrl' => $form['localUrl'] ?? '',
             'hostName' => $form['hostName'] ?? '',
             'localHttpError' => $form['localHttpError'] ?? null,
+            'database' => $form['database'] ?? '',
+            'databaseError' => $form['databaseError'] ?? null,
             'now' => $this->clock->now(),
         ], $status);
     }

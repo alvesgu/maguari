@@ -248,6 +248,27 @@ On the instance page of the enrolled development instance, add `cron` under "Ser
 
 With the web app (`php -S localhost:8080 -t public`), the tick loop and `client/bin/maguari-client run` going, add under "Local HTTP" on the development instance's page `http://127.0.0.1:8080/admin`: within two heartbeats it shows Pass ("Answered 303"). Add `http://127.0.0.1:8099/` (nothing listens there): two minutes later it fails, the tick opens the incident, and removing it resolves the incident at once. Try `https://www.example.com/` to see the refusal.
 
+### Step 2.4
+
+- **Tested against real servers** on PHP 8.1: PostgreSQL 16 and MariaDB 11 in Podman containers, with a throwaway Ubuntu 22.04 image that adds `php-pgsql` and `php-mysql` (none of it in the repository). `client/tests/DatabaseServersTest.php` checks a pass, a wrong password, a missing database and a refused connection against each, and is skipped unless `MAGUARI_TEST_POSTGRESQL` or `MAGUARI_TEST_MYSQL` names a server (`host:port:database:user:password`). The official PostgreSQL image trusts 127.0.0.1 without a password (initdb's default), so the test server's `pg_hba.conf` had to require one first; a real GeoNode's settings decide that on each instance.
+- **Two findings from those servers:** PostgreSQL's reasons arrive only in the message (PDO's code is 7 for all of them), and MariaDB answers 1044 alike for a missing database and one the user may not use, so 1044 is `no_database` and the sentence says "does not exist on its server, or its user may not use it".
+- **One more reason than P7 listed:** `no_database`, apart from `login_refused`, because a database missing after a restore is a different problem from a wrong password.
+- **A MySQL socket is the socket file itself** (`/var/run/mysqld/mysqld.sock`), a PostgreSQL socket its directory (P7 item 1 said a directory for both), as each driver expects.
+- **Host, database and user are restricted** to characters that cannot change a PDO DSN; the password never goes into it.
+- **`set-database` checks the values before asking for the password**, so a typo costs nothing, and says when the driver is missing; `check-database` exits with 0 only on a pass.
+- **The page names the client version per type** (`ReportedCheckSettings::TYPE_SINCE_CLIENT_VERSION`): 0.5.0 for local HTTP, 0.6.0 for databases. `client/VERSION` is 0.6.0.
+- **The end-to-end test searches every table on the server** after database checks ran and finds neither the password nor the user's name.
+
+#### Manual check (step 2.4)
+
+Without a database driver on the development machine, the check shows the missing driver. With the client's development directory loaded (`source scripts/dev-env.sh`):
+
+```
+client/bin/maguari-client set-database geonode --type=postgresql --host=127.0.0.1 --database=geonode --user=maguari_check
+```
+
+It asks for the password and says the driver is missing. Add `geonode` under "Databases" on the development instance's page: with `client/bin/maguari-client run` going, the check shows Not checked with "The PostgreSQL driver is not installed on the instance. Install it with: sudo apt install php-pgsql". With `php-pgsql` installed and a PostgreSQL server reachable, it passes, and a wrong password fails on the second heartbeat with the login sentence. Check `client/var/databases.json` has mode 0600, and that `client/bin/maguari-client list-databases` shows no password.
+
 ## Design changes once approved
 
 Sections 5.2 (the new request and response fields), 6.1 and 6.2 (the checks), 9.2 (the tables and `checked_at`), 10.1 (the new timer), 12.1 (`Suggests:`), 12.2.1 (`run-http-checks`), 14 (the egress budget) and 17 (phase 2's steps), each in the step that implements it.

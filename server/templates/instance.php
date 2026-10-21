@@ -18,6 +18,7 @@
  * @var ?\Maguari\Server\Clients\ReportedCheckSettings $reportedCheckSettings null before the client's first heartbeat
  * @var ?string $clientVersion @var string $unit @var ?string $unitError
  * @var string $localUrl @var string $hostName @var ?string $localHttpError
+ * @var string $database @var ?string $databaseError
  * @var int $now
  */
 use Maguari\Server\Clients\ReportedCheckSettings;
@@ -32,6 +33,7 @@ use Maguari\Server\Monitoring\Domain\HttpCheckRule;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Remediation\Domain\ResolutionRule;
 use Maguari\Server\Remediation\RemediationApi;
+use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\ServiceCheck;
 
@@ -121,6 +123,13 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <?php
 $services = array_values(array_filter($clientChecks, static fn ($status): bool => $status->check->type === ServiceCheck::TYPE));
 $localHttp = array_values(array_filter($clientChecks, static fn ($status): bool => $status->check->type === LocalHttpCheck::TYPE));
+$databases = array_values(array_filter($clientChecks, static fn ($status): bool => $status->check->type === DatabaseCheck::TYPE));
+// For clients that store a newer kind of check but skip it.
+$tooOld = static function (array $statuses, string $type, string $what) use ($e, $clientVersion): string {
+    $needed = $statuses === [] ? null : ReportedCheckSettings::versionNeeded($type, $clientVersion);
+
+    return $needed === null ? '' : '<p>This client (version ' . $e((string) $clientVersion) . ') skips ' . $what . '. It needs version ' . $needed . " or later.</p>\n";
+};
 $row = static function ($status, string $first) use ($e, $partial, $csrf, $instance, $now): string {
     $checkedAt = $status->state?->checkedAt;
 
@@ -158,9 +167,7 @@ $row = static function ($status, string $first) use ($e, $partial, $csrf, $insta
 <?php endif; ?>
 <h3>Local HTTP</h3>
 <p>The client requests each URL on the instance itself (127.0.0.1, [::1] or localhost) and reads only the status of the answer: 2xx and 3xx pass, redirects are not followed. A host name, when set, is sent as the Host header and is the name the certificate must match, so a site behind nginx's server_name is reached as visitors reach it. No egress: the results ride in the heartbeat.</p>
-<?php if ($clientVersion !== null && $localHttp !== [] && version_compare($clientVersion, ReportedCheckSettings::LOCAL_HTTP_SINCE_CLIENT_VERSION, '<')): ?>
-<p>This client (version <?= $e($clientVersion) ?>) skips local HTTP checks. It needs version <?= ReportedCheckSettings::LOCAL_HTTP_SINCE_CLIENT_VERSION ?> or later.</p>
-<?php endif; ?>
+<?= $tooOld($localHttp, LocalHttpCheck::TYPE, 'local HTTP checks') ?>
 <?php if ($localHttp === []): ?>
 <p>None yet.</p>
 <?php else: ?>
@@ -187,6 +194,34 @@ $row = static function ($status, string $first) use ($e, $partial, $csrf, $insta
 </form>
 <?php else: ?>
 <p>This instance has the most local HTTP checks allowed (<?= ClientCheck::MAX_LOCAL_HTTP_PER_INSTANCE ?>). Remove one to add another.</p>
+<?php endif; ?>
+<h3>Databases</h3>
+<p>The client logs in to each database and runs SELECT 1, with <?= DatabaseCheck::TIMEOUT_SECONDS ?> seconds to connect and <?= DatabaseCheck::TIMEOUT_SECONDS ?> for the query. Only its name is set here: how to log in is set up on the instance, in a file only the client's user can read, and never reaches this server. On the instance, run <code>sudo -u maguari-client maguari-client set-database &lt;name&gt; --type=postgresql --host=127.0.0.1 --database=&lt;database&gt; --user=&lt;user&gt;</code> (or <code>--type=mysql</code> for MySQL and MariaDB); it asks for the password. Use a user that can only log in, for example one created with <code>CREATE ROLE maguari_check LOGIN PASSWORD '...'</code> and <code>GRANT CONNECT ON DATABASE geonode TO maguari_check</code>.</p>
+<?= $tooOld($databases, DatabaseCheck::TYPE, 'database checks') ?>
+<?php if ($databases === []): ?>
+<p>None yet.</p>
+<?php else: ?>
+<table>
+<thead><tr><th>Database</th><th>Result</th><th>Checked</th><th></th></tr></thead>
+<tbody>
+<?php foreach ($databases as $status): ?>
+<?= $row($status, '<td>' . $e($status->check->target) . '</td>') ?>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
+<?php if (count($databases) < ClientCheck::MAX_DATABASES_PER_INSTANCE): ?>
+<?php if ($databaseError !== null): ?>
+<p><?= $e($databaseError) ?></p>
+<?php endif; ?>
+<form method="post" action="/admin/instances/<?= $instance->id ?>/databases">
+<?= $csrf ?>
+<p><label for="database">Name on the instance</label><br>
+<input id="database" name="database" type="text" value="<?= $e($database) ?>" placeholder="geonode" autocomplete="off" spellcheck="false" required></p>
+<p><button type="submit">Add database</button></p>
+</form>
+<?php else: ?>
+<p>This instance has the most database checks allowed (<?= ClientCheck::MAX_DATABASES_PER_INSTANCE ?>). Remove one to add another.</p>
 <?php endif; ?>
 <h2>Certificates</h2>
 <?= $partial('daily-job-status', ['run' => $lastRun]) ?>

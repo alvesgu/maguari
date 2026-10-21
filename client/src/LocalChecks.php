@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Client;
 
+use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\Protocol;
 use Maguari\Shared\ServiceCheck;
@@ -22,6 +23,8 @@ final class LocalChecks
         private readonly Systemctl $systemctl,
         private readonly Clock $clock,
         private readonly LocalHttp $localHttp = new StreamLocalHttp(),
+        private readonly ?DatabasesFile $databasesFile = null,
+        private readonly DatabaseConnector $databases = new PdoDatabaseConnector(),
     ) {
     }
 
@@ -32,12 +35,30 @@ final class LocalChecks
     {
         $start = $this->clock->now();
         $results = [];
+        // Read once per heartbeat, and only when a database is checked.
+        $connections = null;
+        $loaded = false;
 
         foreach ($settings?->checks ?? [] as $check) {
-            $subject = $check['type'] === LocalHttpCheck::TYPE ? LocalHttpCheck::subject($check['url'], $check['host_name']) : $check['unit'];
+            $subject = match ($check['type']) {
+                LocalHttpCheck::TYPE => LocalHttpCheck::subject($check['url'], $check['host_name']),
+                DatabaseCheck::TYPE => $check['name'],
+                default => $check['unit'],
+            };
 
             if ($this->clock->now() - $start >= self::TIME_LIMIT_SECONDS) {
                 $results[] = ['type' => $check['type'], 'subject' => $subject, 'outcome' => 'not_checked', 'reason' => Protocol::CHECK_REASON_TIME_LIMIT];
+
+                continue;
+            }
+
+            if ($check['type'] === DatabaseCheck::TYPE) {
+                if (!$loaded) {
+                    $connections = $this->connections();
+                    $loaded = true;
+                }
+
+                $results[] = $this->database($check['name'], $connections);
 
                 continue;
             }
@@ -46,6 +67,40 @@ final class LocalChecks
         }
 
         return $results;
+    }
+
+    /**
+     * @return array<string, DatabaseConnection>|null null when the file cannot be used
+     */
+    private function connections(): ?array
+    {
+        try {
+            return $this->databasesFile?->load() ?? [];
+        } catch (ClientFailure) {
+            return null;
+        }
+    }
+
+    /**
+     * @param array<string, DatabaseConnection>|null $connections
+     * @return array<string, string|int>
+     */
+    private function database(string $name, ?array $connections): array
+    {
+        $result = ['type' => DatabaseCheck::TYPE, 'subject' => $name];
+        $connection = $connections[$name] ?? null;
+
+        if ($connections === null || $connection === null) {
+            return $result + ['outcome' => 'not_checked', 'reason' => $connections === null ? DatabaseCheck::REASON_FILE_UNUSABLE : DatabaseCheck::REASON_NOT_SET_UP];
+        }
+
+        $answer = $this->databases->check($connection);
+
+        return $result + match (true) {
+            is_int($answer) => ['outcome' => 'pass', 'ms' => $answer],
+            $answer === DatabaseCheck::REASON_DRIVER_MISSING => ['outcome' => 'not_checked', 'reason' => $answer, 'db_type' => $connection->type],
+            default => ['outcome' => 'fail', 'reason' => $answer],
+        };
     }
 
     /**

@@ -301,6 +301,18 @@ final class MonitoringApi
     }
 
     /**
+     * The name of a database set up on the instance (maguari-client
+     * set-database); how to log in stays on the instance. The client gets it
+     * with its next heartbeat's response.
+     *
+     * @throws InvalidClientCheck with a sentence for the administrator
+     */
+    public function addDatabaseCheck(int $instanceId, string $name): ClientCheck
+    {
+        return $this->clientChecks->addDatabase($instanceId, $name);
+    }
+
+    /**
      * Withdraws its outcome at once, so its incident resolves.
      *
      * @return bool whether it existed for that instance

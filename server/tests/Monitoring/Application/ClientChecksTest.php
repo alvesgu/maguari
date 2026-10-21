@@ -187,4 +187,35 @@ final class ClientChecksTest extends TestCase
         $this->expectExceptionMessage('An instance can have at most 5 local HTTP checks.');
         $monitoring->addLocalHttpCheck(7, 'http://127.0.0.1:8009/', '');
     }
+
+    public function testAddsDatabaseChecksByNameOnly(): void
+    {
+        $monitoring = $this->environment->monitoring;
+        $check = $monitoring->addDatabaseCheck(7, ' geonode ');
+        $this->assertSame(['database', 'geonode', ''], [$check->type, $check->target, $check->hostName]);
+        $this->assertSame([['type' => 'database', 'name' => 'geonode']], $monitoring->clientCheckSettings(7)->checks);
+
+        foreach (['geonode' => 'The database geonode is already checked on this instance.', '' => 'Enter the name the database has on the instance, for example geonode.', 'GeoNode DB' => 'A database\'s name has 1 to 63 lowercase letters'] as $name => $sentence) {
+            try {
+                $monitoring->addDatabaseCheck(7, $name);
+                $this->fail("{$name} was added.");
+            } catch (InvalidClientCheck $invalid) {
+                $this->assertStringStartsWith($sentence, $invalid->getMessage());
+            }
+        }
+
+        // A setup problem on the instance is not checked: no incident, but it shows.
+        $monitoring->recordHeartbeat(7, $this->environment->clock->now(), Readings::parse([]), $monitoring->parseCheckResults([
+            ['type' => 'database', 'subject' => 'geonode', 'outcome' => 'not_checked', 'reason' => 'not_set_up'],
+        ]));
+        $this->assertSame(CheckOutcome::NotChecked, $monitoring->clientCheckStatuses([7])[7][0]->outcome());
+        $this->assertSame([], $this->events());
+
+        for ($i = 2; $i <= 5; $i++) {
+            $monitoring->addDatabaseCheck(7, "db{$i}");
+        }
+
+        $this->expectExceptionMessage('An instance can have at most 5 database checks.');
+        $monitoring->addDatabaseCheck(7, 'db6');
+    }
 }

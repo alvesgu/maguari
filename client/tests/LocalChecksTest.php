@@ -50,6 +50,8 @@ final class LocalChecksTest extends TestCase
             ['type' => 'service', 'unit' => 'nginx; reboot'],
             ['type' => 'service', 'unit' => '--root=/.service'],
             ['type' => 'database', 'name' => 'geonode'],
+            ['type' => 'database', 'name' => 'Geo Node'],
+            ['type' => 'from_the_future'],
             'not an object',
             ['type' => 'local_http', 'url' => 'http://127.0.0.1:8000/health', 'host_name' => ''],
             ['type' => 'local_http', 'url' => 'https://127.0.0.1/', 'host_name' => 'geonode.example.com'],
@@ -60,10 +62,11 @@ final class LocalChecksTest extends TestCase
 
         $this->assertSame([
             ['type' => 'service', 'unit' => 'nginx.service'],
+            ['type' => 'database', 'name' => 'geonode'],
             ['type' => 'local_http', 'url' => 'http://127.0.0.1:8000/health', 'host_name' => ''],
             ['type' => 'local_http', 'url' => 'https://127.0.0.1/', 'host_name' => 'geonode.example.com'],
         ], $settings?->checks);
-        $this->assertSame(7, $settings?->skipped);
+        $this->assertSame(8, $settings?->skipped);
         $this->assertNull(CheckSettings::fromArray(['version' => 'nope', 'checks' => []]));
         $this->assertNull(CheckSettings::fromArray(['version' => '0123456789abcdef', 'checks' => ['a' => 1]]));
         $this->assertNull(CheckSettings::fromArray('settings'));

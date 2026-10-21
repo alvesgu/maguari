@@ -10,6 +10,7 @@ use Maguari\Server\Monitoring\Domain\ClientCheck;
 use Maguari\Server\Monitoring\Domain\ClientCheckResults;
 use Maguari\Server\Monitoring\Domain\ClientCheckSettings;
 use Maguari\Server\Monitoring\Domain\ClientCheckStatus;
+use Maguari\Server\Monitoring\Domain\DatabaseCheckRule;
 use Maguari\Server\Monitoring\Domain\LocalHttpCheckRule;
 use Maguari\Server\Monitoring\Domain\LocalHttpTarget;
 use Maguari\Server\Monitoring\Domain\ServiceCheckRule;
@@ -18,6 +19,7 @@ use Maguari\Server\Monitoring\Exception\InvalidClientCheck;
 use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
 use Maguari\Server\Monitoring\Infrastructure\ClientCheckRepository;
 use Maguari\Server\Monitoring\Infrastructure\FailureStreakRepository;
+use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\ServiceCheck;
 
@@ -127,6 +129,41 @@ final class ClientChecks
     }
 
     /**
+     * Like addService(), for a database check: only the name of a database
+     * set up on the instance, never how to log in to it.
+     *
+     * @throws InvalidClientCheck
+     */
+    public function addDatabase(int $instanceId, string $name): ClientCheck
+    {
+        $name = trim($name);
+
+        if ($name === '') {
+            throw new InvalidClientCheck('Enter the name the database has on the instance, for example geonode.');
+        }
+
+        if (!DatabaseCheck::isValidName($name)) {
+            throw new InvalidClientCheck('A database\'s name has 1 to 63 lowercase letters, digits, _ and -, starting with a letter or digit, as in maguari-client set-database on the instance.');
+        }
+
+        $at = $this->clock->now();
+
+        return $this->database->transaction(function () use ($instanceId, $name, $at): ClientCheck {
+            $databases = array_filter($this->checks->forInstance($instanceId), static fn (ClientCheck $check): bool => $check->type === DatabaseCheck::TYPE);
+
+            if (in_array($name, array_map(static fn (ClientCheck $check): string => $check->target, $databases), true)) {
+                throw new InvalidClientCheck(sprintf('The database %s is already checked on this instance.', $name));
+            }
+
+            if (count($databases) >= ClientCheck::MAX_DATABASES_PER_INSTANCE) {
+                throw new InvalidClientCheck(sprintf('An instance can have at most %d database checks.', ClientCheck::MAX_DATABASES_PER_INSTANCE));
+            }
+
+            return new ClientCheck($this->checks->add($instanceId, DatabaseCheck::TYPE, $name, '', $at), $instanceId, DatabaseCheck::TYPE, $name, '', $at);
+        });
+    }
+
+    /**
      * Withdraws the check's outcome at once, so its incident resolves:
      * removing it is the administrator's decision.
      *
@@ -177,6 +214,7 @@ final class ClientChecks
             $this->checkStates->recordConfirmed(match ($result->type) {
                 ServiceCheck::TYPE => ServiceCheckRule::result($instanceId, $result, $at),
                 LocalHttpCheck::TYPE => LocalHttpCheckRule::result($check, $result, $at),
+                DatabaseCheck::TYPE => DatabaseCheckRule::result($instanceId, $result, $at),
             });
         }
     }

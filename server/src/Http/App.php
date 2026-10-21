@@ -223,6 +223,7 @@ final class App
                 $group->post('/instances/{id:[0-9]+}/http-checks/{checkId:[0-9]+}/remove', [$instancesController, 'removeHttpCheck']);
                 $group->post('/instances/{id:[0-9]+}/services', [$instancesController, 'addService']);
                 $group->post('/instances/{id:[0-9]+}/local-http', [$instancesController, 'addLocalHttp']);
+                $group->post('/instances/{id:[0-9]+}/databases', [$instancesController, 'addDatabase']);
                 $group->post('/instances/{id:[0-9]+}/client-checks/{checkId:[0-9]+}/remove', [$instancesController, 'removeClientCheck']);
                 $group->get('/email', [$emailController, 'show']);
                 $group->post('/email', [$emailController, 'save']);

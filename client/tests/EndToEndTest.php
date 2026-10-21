@@ -7,8 +7,11 @@ namespace Maguari\Client\Tests;
 use Maguari\Client\CertificateExpiry;
 use Maguari\Client\Cli;
 use Maguari\Client\CredentialsFile;
+use Maguari\Client\DatabaseConnection;
+use Maguari\Client\DatabasesFile;
 use Maguari\Client\DiskUsage;
 use Maguari\Client\Tests\Support\FakeClock;
+use Maguari\Client\Tests\Support\FakeDatabaseConnector;
 use Maguari\Client\Tests\Support\FakeFilesystemStats;
 use Maguari\Client\Tests\Support\FakeLocalHttp;
 use Maguari\Client\Tests\Support\FakeSystemctl;
@@ -32,6 +35,7 @@ final class EndToEndTest extends TestCase
     private Transport $transport;
     private FakeSystemctl $systemctl;
     private FakeLocalHttp $localHttp;
+    private FakeDatabaseConnector $databases;
     /** The last client command's standard output. */
     private string $stdout = '';
     /** @var array<string, array{int, int}> total and free bytes, by mount point */
@@ -43,6 +47,7 @@ final class EndToEndTest extends TestCase
         $this->directory = new TemporaryDirectory();
         $this->systemctl = new FakeSystemctl();
         $this->localHttp = new FakeLocalHttp();
+        $this->databases = new FakeDatabaseConnector();
         $server = $this->server;
         $this->transport = new class ($server) implements Transport {
             public function __construct(private readonly TestEnvironment $server)
@@ -104,7 +109,7 @@ final class EndToEndTest extends TestCase
         // The client's clock agrees with the server's.
         $clock = new FakeClock($this->server->clock->now());
         $stdout = fopen('php://memory', 'w+');
-        $cli = new Cli($this->transport, $clock, $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), $this->systemctl, 1000, $stdout, $stderr, $this->localHttp);
+        $cli = new Cli($this->transport, $clock, $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), $this->systemctl, 1000, $stdout, $stderr, $this->localHttp, $this->databases);
         $status = $cli->run(array_merge(['maguari-client'], $args));
         rewind($stderr);
         rewind($stdout);
@@ -264,5 +269,42 @@ final class EndToEndTest extends TestCase
         $state = $monitoring->clientCheckStatuses([7])[7][0];
         $this->assertSame(['fail', 'Nothing answered on port 443 of the instance: the connection was refused.'], [$state->outcome()->value, $state->detail()]);
         $this->assertSame([['https://127.0.0.1/health', 'geonode.example.com'], ['https://127.0.0.1/health', 'geonode.example.com']], $this->localHttp->requests);
+    }
+
+    public function testDatabaseChecksNameADatabaseWhoseLoginStaysOnTheInstance(): void
+    {
+        $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $this->server->clients->issueEnrollmentToken(7)->token]);
+        (new DatabasesFile($this->directory->path))->save(['geonode' => new DatabaseConnection('postgresql', '127.0.0.1', 5432, 'geonode', 'maguari_check', 'secret-password')]);
+        $monitoring = $this->server->monitoring;
+        $monitoring->addDatabaseCheck(7, 'geonode');
+        $monitoring->addDatabaseCheck(7, 'reports');
+        $this->databases->answer('geonode', 'unreachable');
+
+        foreach ([1, 2, 3] as $heartbeat) {
+            $this->server->clock->advance(60);
+            [$status, $stderr] = $this->client(['heartbeat']);
+            $this->assertSame(0, $status, $stderr);
+        }
+
+        $states = [];
+
+        foreach ($monitoring->clientCheckStatuses([7])[7] as $status) {
+            $states[$status->check->target] = [$status->outcome()->value, $status->detail()];
+        }
+
+        $this->assertSame([
+            'geonode' => ['fail', 'Could not connect to the database server of geonode, or it is not accepting connections.'],
+            'reports' => ['not_checked', 'Not checked yet.'],
+        ], $states, 'reports is not set up on the instance: not checked, never stored as an outcome.');
+        // Every row of every table on the server.
+        $pdo = $this->server->database->pdo();
+        $dump = '';
+
+        foreach ($pdo->query("SELECT name FROM sqlite_master WHERE type = 'table'")->fetchAll(\PDO::FETCH_COLUMN) as $table) {
+            $dump .= json_encode($pdo->query("SELECT * FROM \"{$table}\"")->fetchAll(), JSON_INVALID_UTF8_SUBSTITUTE);
+        }
+
+        $this->assertStringNotContainsString('secret-password', $dump);
+        $this->assertStringNotContainsString('maguari_check', $dump, 'Not even the user reaches the server.');
     }
 }

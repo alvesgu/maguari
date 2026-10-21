@@ -19,6 +19,7 @@ final class CheckLabels
         'remote_http' => 'Web app',
         'service' => 'Service',
         'local_http' => 'Local HTTP',
+        'database' => 'Database',
     ];
 
     /**
