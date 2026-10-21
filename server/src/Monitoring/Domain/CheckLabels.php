@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Monitoring\Domain;
 
+use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\ServiceCheck;
 
 /**
@@ -18,6 +19,7 @@ final class CheckLabels
         CertificateExpiryRule::REMOTE_CHECK_NAME => 'Served certificate',
         HttpCheck::CHECK_NAME => 'Web app',
         ServiceCheck::TYPE => 'Service',
+        LocalHttpCheck::TYPE => 'Local HTTP',
     ];
 
     /**

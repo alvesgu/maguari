@@ -233,6 +233,21 @@ client/bin/maguari-client run
 
 On the instance page of the enrolled development instance, add `cron` under "Services". The page says it is waiting for the client; within a minute the client logs `Received check settings ...: 1 check.` and on the following heartbeat the service shows Pass. Then add a service that does not exist, for example `maguari-test`: one minute later the page shows the first failure with its note, the minute after that it fails, the tick opens the incident and its notification, and the alert email arrives with the "Service" label. Remove it: the incident resolves at once.
 
+### Step 2.3
+
+- **The client has its own small probe, `StreamLocalHttp`**, the same approach as the server's `Kernel/HttpProbe` but connecting to the literal loopback address and sending the host name. The client cannot use server code, and `shared/` holds only protocol rules, so the roughly 150 lines are written twice.
+- **Two more failure reasons** than P6 listed: `connect_failed` and `bad_response`, matching the remote check's cases.
+- **The settings always carry `host_name`**, '' for none, so every check has the same fields and the version stays canonical.
+- **`shared/src/HostName.php`** holds the DNS name rules both sides need for the host name; the server's `CertificateHostname` keeps its own sentences.
+- **`client/VERSION` is 0.5.0**: a 0.4.0 client stores local HTTP settings but skips them, so the page names the version needed instead of showing "Not checked yet" forever.
+- **The instance page groups the client's checks** under "Checks on the instance", with the line about the client's settings once for both kinds.
+- **Smoke run** with the real client and server: a check of the development server's own `http://127.0.0.1:8092/admin` passed ("Answered 303 in 2 ms.") and one of a closed port failed on the second heartbeat in a row ("Nothing answered on port 8099 of the instance: the connection was refused.").
+- **Process (after review of 2.2):** the Ubuntu 22.04 suite now runs once per step, before its final push, and its image holds the Composer dependencies, rebuilt only when `composer.lock` changes.
+
+#### Manual check (step 2.3)
+
+With the web app (`php -S localhost:8080 -t public`), the tick loop and `client/bin/maguari-client run` going, add under "Local HTTP" on the development instance's page `http://127.0.0.1:8080/admin`: within two heartbeats it shows Pass ("Answered 303"). Add `http://127.0.0.1:8099/` (nothing listens there): two minutes later it fails, the tick opens the incident, and removing it resolves the incident at once. Try `https://www.example.com/` to see the refusal.
+
 ## Design changes once approved
 
 Sections 5.2 (the new request and response fields), 6.1 and 6.2 (the checks), 9.2 (the tables and `checked_at`), 10.1 (the new timer), 12.1 (`Suggests:`), 12.2.1 (`run-http-checks`), 14 (the egress budget) and 17 (phase 2's steps), each in the step that implements it.

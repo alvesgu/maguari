@@ -153,6 +153,25 @@ final class InstancesController
     }
 
     /**
+     * @param array{id: string} $args
+     */
+    public function addLocalHttp(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $input = (array) $request->getParsedBody();
+        $url = FormInput::string($input, 'local_url');
+        $hostName = FormInput::string($input, 'host_name');
+
+        try {
+            $this->monitoring->addLocalHttpCheck($instance->id, $url, $hostName);
+        } catch (InvalidClientCheck $invalid) {
+            return $this->page($request, $response, $instance, ['localUrl' => $url, 'hostName' => $hostName, 'localHttpError' => $invalid->getMessage()], 422);
+        }
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
      * A check that is already gone just shows the page again.
      *
      * @param array{id: string, checkId: string} $args
@@ -187,7 +206,7 @@ final class InstancesController
     }
 
     /**
-     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string, unit?: string, unitError?: string} $form
+     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string, unit?: string, unitError?: string, localUrl?: string, hostName?: string, localHttpError?: string} $form
      *        what was typed in a refused form and why it was refused, or the
      *        warning of the last change
      */
@@ -224,6 +243,9 @@ final class InstancesController
             'clientVersion' => $this->clients->clientVersions([$instance->id])[$instance->id] ?? null,
             'unit' => $form['unit'] ?? '',
             'unitError' => $form['unitError'] ?? null,
+            'localUrl' => $form['localUrl'] ?? '',
+            'hostName' => $form['hostName'] ?? '',
+            'localHttpError' => $form['localHttpError'] ?? null,
             'now' => $this->clock->now(),
         ], $status);
     }

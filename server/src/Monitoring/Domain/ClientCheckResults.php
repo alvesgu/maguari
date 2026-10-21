@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Maguari\Server\Monitoring\Domain;
 
 use Maguari\Server\Monitoring\Exception\InvalidCheckResults;
+use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\Protocol;
 use Maguari\Shared\ServiceCheck;
 use Maguari\Shared\UnitName;
@@ -51,6 +52,7 @@ final class ClientCheckResults
 
             $result = match ($check['type']) {
                 ServiceCheck::TYPE => self::service($check),
+                LocalHttpCheck::TYPE => self::localHttp($check),
                 default => null,
             };
 
@@ -69,6 +71,39 @@ final class ClientCheckResults
         }
 
         return new self($results);
+    }
+
+    /**
+     * The subject is matched against the configured checks later, so here it
+     * only has to look like one.
+     *
+     * @param array<string, mixed> $check
+     */
+    private static function localHttp(array $check): ClientCheckResult
+    {
+        $subject = $check['subject'] ?? null;
+        $outcome = is_string($check['outcome'] ?? null) ? CheckOutcome::tryFrom($check['outcome']) : null;
+        $reason = $check['reason'] ?? null;
+        $status = $check['status'] ?? null;
+        $ms = $check['ms'] ?? null;
+
+        if (!is_string($subject) || strlen($subject) > LocalHttpCheck::MAX_URL_BYTES + 260 || preg_match('/[^ -~]/', $subject) === 1 || $outcome === null) {
+            throw new InvalidCheckResults('A local HTTP result needs its check\'s URL as its subject and an outcome.');
+        }
+
+        $answered = is_int($status) && $status >= 100 && $status <= 599 && is_int($ms) && $ms >= 0 && $reason === null;
+        $passes = $answered && $status < 400 && $status >= 200;
+        $valid = match ($outcome) {
+            CheckOutcome::Pass => $passes,
+            CheckOutcome::Fail => ($answered && !$passes) || ($status === null && $ms === null && in_array($reason, LocalHttpCheck::REASONS, true)),
+            CheckOutcome::NotChecked => $status === null && $ms === null && $reason === Protocol::CHECK_REASON_TIME_LIMIT,
+        };
+
+        if (!$valid) {
+            throw new InvalidCheckResults(sprintf('The local HTTP result for %s has an outcome, status and reason that do not go together.', $subject));
+        }
+
+        return new ClientCheckResult(LocalHttpCheck::TYPE, $subject, $outcome, is_string($reason) ? $reason : null, null, $answered ? $status : null, $answered ? $ms : null);
     }
 
     /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Client;
 
+use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\Protocol;
 use Maguari\Shared\ServiceCheck;
 
@@ -20,11 +21,12 @@ final class LocalChecks
     public function __construct(
         private readonly Systemctl $systemctl,
         private readonly Clock $clock,
+        private readonly LocalHttp $localHttp = new StreamLocalHttp(),
     ) {
     }
 
     /**
-     * @return list<array<string, string>>
+     * @return list<array<string, string|int>>
      */
     public function run(?CheckSettings $settings): array
     {
@@ -32,16 +34,33 @@ final class LocalChecks
         $results = [];
 
         foreach ($settings?->checks ?? [] as $check) {
+            $subject = $check['type'] === LocalHttpCheck::TYPE ? LocalHttpCheck::subject($check['url'], $check['host_name']) : $check['unit'];
+
             if ($this->clock->now() - $start >= self::TIME_LIMIT_SECONDS) {
-                $results[] = ['type' => $check['type'], 'subject' => $check['unit'], 'outcome' => 'not_checked', 'reason' => Protocol::CHECK_REASON_TIME_LIMIT];
+                $results[] = ['type' => $check['type'], 'subject' => $subject, 'outcome' => 'not_checked', 'reason' => Protocol::CHECK_REASON_TIME_LIMIT];
 
                 continue;
             }
 
-            $results[] = $this->service($check['unit']);
+            $results[] = $check['type'] === LocalHttpCheck::TYPE ? $this->localHttp($check['url'], $check['host_name'], $subject) : $this->service($check['unit']);
         }
 
         return $results;
+    }
+
+    /**
+     * @return array<string, string|int>
+     */
+    private function localHttp(string $url, string $hostName, string $subject): array
+    {
+        $answer = $this->localHttp->request($url, $hostName);
+        $result = ['type' => LocalHttpCheck::TYPE, 'subject' => $subject];
+
+        if (is_string($answer)) {
+            return $result + ['outcome' => 'fail', 'reason' => $answer];
+        }
+
+        return $result + ['outcome' => $answer['status'] >= 200 && $answer['status'] < 400 ? 'pass' : 'fail', 'status' => $answer['status'], 'ms' => $answer['ms']];
     }
 
     /**

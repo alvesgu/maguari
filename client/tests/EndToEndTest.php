@@ -10,6 +10,7 @@ use Maguari\Client\CredentialsFile;
 use Maguari\Client\DiskUsage;
 use Maguari\Client\Tests\Support\FakeClock;
 use Maguari\Client\Tests\Support\FakeFilesystemStats;
+use Maguari\Client\Tests\Support\FakeLocalHttp;
 use Maguari\Client\Tests\Support\FakeSystemctl;
 use Maguari\Client\Tests\Support\TemporaryDirectory;
 use Maguari\Client\Transport;
@@ -30,6 +31,7 @@ final class EndToEndTest extends TestCase
     private TemporaryDirectory $directory;
     private Transport $transport;
     private FakeSystemctl $systemctl;
+    private FakeLocalHttp $localHttp;
     /** The last client command's standard output. */
     private string $stdout = '';
     /** @var array<string, array{int, int}> total and free bytes, by mount point */
@@ -40,6 +42,7 @@ final class EndToEndTest extends TestCase
         $this->server = new TestEnvironment();
         $this->directory = new TemporaryDirectory();
         $this->systemctl = new FakeSystemctl();
+        $this->localHttp = new FakeLocalHttp();
         $server = $this->server;
         $this->transport = new class ($server) implements Transport {
             public function __construct(private readonly TestEnvironment $server)
@@ -101,7 +104,7 @@ final class EndToEndTest extends TestCase
         // The client's clock agrees with the server's.
         $clock = new FakeClock($this->server->clock->now());
         $stdout = fopen('php://memory', 'w+');
-        $cli = new Cli($this->transport, $clock, $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), $this->systemctl, 1000, $stdout, $stderr);
+        $cli = new Cli($this->transport, $clock, $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), $this->systemctl, 1000, $stdout, $stderr, $this->localHttp);
         $status = $cli->run(array_merge(['maguari-client'], $args));
         rewind($stderr);
         rewind($stdout);
@@ -240,5 +243,26 @@ final class EndToEndTest extends TestCase
         $this->server->clock->advance(60);
         $this->client(['heartbeat']);
         $this->assertStringContainsString(': 2 checks.', $this->stdout);
+    }
+
+    public function testLocalHttpChecksTravelAndAreJudgedEndToEnd(): void
+    {
+        $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $this->server->clients->issueEnrollmentToken(7)->token]);
+        $monitoring = $this->server->monitoring;
+        $monitoring->addLocalHttpCheck(7, 'https://127.0.0.1/health', 'geonode.example.com');
+        $this->localHttp->answer('https://127.0.0.1/health', 'geonode.example.com', 'refused');
+
+        $this->client(['heartbeat']);
+        $this->assertStringContainsString(': 1 check.', $this->stdout);
+
+        foreach ([1, 2] as $heartbeat) {
+            $this->server->clock->advance(60);
+            [$status, $stderr] = $this->client(['heartbeat']);
+            $this->assertSame(0, $status, $stderr);
+        }
+
+        $state = $monitoring->clientCheckStatuses([7])[7][0];
+        $this->assertSame(['fail', 'Nothing answered on port 443 of the instance: the connection was refused.'], [$state->outcome()->value, $state->detail()]);
+        $this->assertSame([['https://127.0.0.1/health', 'geonode.example.com'], ['https://127.0.0.1/health', 'geonode.example.com']], $this->localHttp->requests);
     }
 }

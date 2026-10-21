@@ -17,6 +17,7 @@
  * @var \Maguari\Server\Monitoring\Domain\ClientCheckSettings $clientCheckSettings what the client should have
  * @var ?\Maguari\Server\Clients\ReportedCheckSettings $reportedCheckSettings null before the client's first heartbeat
  * @var ?string $clientVersion @var string $unit @var ?string $unitError
+ * @var string $localUrl @var string $hostName @var ?string $localHttpError
  * @var int $now
  */
 use Maguari\Server\Clients\ReportedCheckSettings;
@@ -31,6 +32,8 @@ use Maguari\Server\Monitoring\Domain\HttpCheckRule;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Remediation\Domain\ResolutionRule;
 use Maguari\Server\Remediation\RemediationApi;
+use Maguari\Shared\LocalHttpCheck;
+use Maguari\Shared\ServiceCheck;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 ?>
@@ -106,8 +109,8 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <?php else: ?>
 <p>This instance has the most web app checks allowed (<?= HttpCheck::MAX_PER_INSTANCE ?>). Remove one to add another.</p>
 <?php endif; ?>
-<h2>Services</h2>
-<p>The client checks each service with systemctl before every heartbeat and reports whether it is active. A service fails after <?= ConfirmedFailures::FAILURES_TO_FAIL ?> failed results in a row, so a restart in progress opens no incident. The client gets a change with the response to its next heartbeat.</p>
+<h2>Checks on the instance</h2>
+<p>The client runs these before every heartbeat and reports the results. A check fails after <?= ConfirmedFailures::FAILURES_TO_FAIL ?> failed results in a row, so a restart in progress opens no incident. The client gets a change with the response to its next heartbeat.</p>
 <?php if ($reportedCheckSettings === null): ?>
 <p>The client has not sent a heartbeat yet. It gets these checks with its first one.</p>
 <?php elseif (!$reportedCheckSettings->supported): ?>
@@ -115,23 +118,32 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <?php elseif ($reportedCheckSettings->version !== $clientCheckSettings->version): ?>
 <p>Waiting for the client to pick up the latest change with its next heartbeat.</p>
 <?php endif; ?>
-<?php if ($clientChecks === []): ?>
+<?php
+$services = array_values(array_filter($clientChecks, static fn ($status): bool => $status->check->type === ServiceCheck::TYPE));
+$localHttp = array_values(array_filter($clientChecks, static fn ($status): bool => $status->check->type === LocalHttpCheck::TYPE));
+$row = static function ($status, string $first) use ($e, $partial, $csrf, $instance, $now): string {
+    $checkedAt = $status->state?->checkedAt;
+
+    return '<tr>' . $first . '<td>' . $e($status->outcome()->label()) . $partial('info', ['text' => $status->detail()]) . '</td><td>'
+        . ($checkedAt === null ? '' : $e(TimeAgo::format(max(0, $now - $checkedAt)))) . '</td><td><form method="post" action="/admin/instances/' . $instance->id . '/client-checks/' . $status->check->id . "/remove\">\n"
+        . $csrf . "\n<button type=\"submit\">Remove</button>\n</form></td></tr>\n";
+};
+?>
+<h3>Services</h3>
+<p>The client asks systemd whether each service is active. A service that is not, or that systemd does not have, fails.</p>
+<?php if ($services === []): ?>
 <p>None yet.</p>
 <?php else: ?>
 <table>
 <thead><tr><th>Service</th><th>Result</th><th>Checked</th><th></th></tr></thead>
 <tbody>
-<?php foreach ($clientChecks as $status): ?>
-<?php $checkedAt = $status->state?->checkedAt; ?>
-<tr><td><?= $e($status->check->target) ?></td><td><?= $e($status->outcome()->label()) ?><?= $partial('info', ['text' => $status->detail()]) ?></td><td><?= $checkedAt === null ? '' : $e(TimeAgo::format(max(0, $now - $checkedAt))) ?></td><td><form method="post" action="/admin/instances/<?= $instance->id ?>/client-checks/<?= $status->check->id ?>/remove">
-<?= $csrf ?>
-<button type="submit">Remove</button>
-</form></td></tr>
+<?php foreach ($services as $status): ?>
+<?= $row($status, '<td>' . $e($status->check->target) . '</td>') ?>
 <?php endforeach; ?>
 </tbody>
 </table>
 <?php endif; ?>
-<?php if (count($clientChecks) < ClientCheck::MAX_SERVICES_PER_INSTANCE): ?>
+<?php if (count($services) < ClientCheck::MAX_SERVICES_PER_INSTANCE): ?>
 <?php if ($unitError !== null): ?>
 <p><?= $e($unitError) ?></p>
 <?php endif; ?>
@@ -143,6 +155,38 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 </form>
 <?php else: ?>
 <p>This instance has the most service checks allowed (<?= ClientCheck::MAX_SERVICES_PER_INSTANCE ?>). Remove one to add another.</p>
+<?php endif; ?>
+<h3>Local HTTP</h3>
+<p>The client requests each URL on the instance itself (127.0.0.1, [::1] or localhost) and reads only the status of the answer: 2xx and 3xx pass, redirects are not followed. A host name, when set, is sent as the Host header and is the name the certificate must match, so a site behind nginx's server_name is reached as visitors reach it. No egress: the results ride in the heartbeat.</p>
+<?php if ($clientVersion !== null && $localHttp !== [] && version_compare($clientVersion, ReportedCheckSettings::LOCAL_HTTP_SINCE_CLIENT_VERSION, '<')): ?>
+<p>This client (version <?= $e($clientVersion) ?>) skips local HTTP checks. It needs version <?= ReportedCheckSettings::LOCAL_HTTP_SINCE_CLIENT_VERSION ?> or later.</p>
+<?php endif; ?>
+<?php if ($localHttp === []): ?>
+<p>None yet.</p>
+<?php else: ?>
+<table>
+<thead><tr><th>URL</th><th>Host name</th><th>Result</th><th>Checked</th><th></th></tr></thead>
+<tbody>
+<?php foreach ($localHttp as $status): ?>
+<?= $row($status, '<td>' . $e($status->check->target) . '</td><td>' . $e($status->check->hostName) . '</td>') ?>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
+<?php if (count($localHttp) < ClientCheck::MAX_LOCAL_HTTP_PER_INSTANCE): ?>
+<?php if ($localHttpError !== null): ?>
+<p><?= $e($localHttpError) ?></p>
+<?php endif; ?>
+<form method="post" action="/admin/instances/<?= $instance->id ?>/local-http">
+<?= $csrf ?>
+<p><label for="local_url">URL</label><br>
+<input id="local_url" name="local_url" type="text" value="<?= $e($localUrl) ?>" placeholder="http://127.0.0.1:8000/health" autocomplete="off" spellcheck="false" required></p>
+<p><label for="host_name">Host name (optional; required for https://)</label><br>
+<input id="host_name" name="host_name" type="text" value="<?= $e($hostName) ?>" placeholder="geonode.example.com" autocomplete="off" spellcheck="false"></p>
+<p><button type="submit">Add local HTTP check</button></p>
+</form>
+<?php else: ?>
+<p>This instance has the most local HTTP checks allowed (<?= ClientCheck::MAX_LOCAL_HTTP_PER_INSTANCE ?>). Remove one to add another.</p>
 <?php endif; ?>
 <h2>Certificates</h2>
 <?= $partial('daily-job-status', ['run' => $lastRun]) ?>

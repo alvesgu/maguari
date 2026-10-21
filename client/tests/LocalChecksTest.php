@@ -9,6 +9,7 @@ use Maguari\Client\CheckSettingsFile;
 use Maguari\Client\LocalChecks;
 use Maguari\Client\ProcessSystemctl;
 use Maguari\Client\Tests\Support\FakeClock;
+use Maguari\Client\Tests\Support\FakeLocalHttp;
 use Maguari\Client\Tests\Support\FakeSystemctl;
 use Maguari\Client\Tests\Support\TemporaryDirectory;
 use PHPUnit\Framework\TestCase;
@@ -50,10 +51,19 @@ final class LocalChecksTest extends TestCase
             ['type' => 'service', 'unit' => '--root=/.service'],
             ['type' => 'database', 'name' => 'geonode'],
             'not an object',
+            ['type' => 'local_http', 'url' => 'http://127.0.0.1:8000/health', 'host_name' => ''],
+            ['type' => 'local_http', 'url' => 'https://127.0.0.1/', 'host_name' => 'geonode.example.com'],
+            ['type' => 'local_http', 'url' => 'http://10.0.0.5/', 'host_name' => ''],
+            ['type' => 'local_http', 'url' => 'https://127.0.0.1/', 'host_name' => ''],
+            ['type' => 'local_http', 'url' => 'http://127.0.0.1/'],
         ]]);
 
-        $this->assertSame([['type' => 'service', 'unit' => 'nginx.service']], $settings?->checks);
-        $this->assertSame(4, $settings?->skipped);
+        $this->assertSame([
+            ['type' => 'service', 'unit' => 'nginx.service'],
+            ['type' => 'local_http', 'url' => 'http://127.0.0.1:8000/health', 'host_name' => ''],
+            ['type' => 'local_http', 'url' => 'https://127.0.0.1/', 'host_name' => 'geonode.example.com'],
+        ], $settings?->checks);
+        $this->assertSame(7, $settings?->skipped);
         $this->assertNull(CheckSettings::fromArray(['version' => 'nope', 'checks' => []]));
         $this->assertNull(CheckSettings::fromArray(['version' => '0123456789abcdef', 'checks' => ['a' => 1]]));
         $this->assertNull(CheckSettings::fromArray('settings'));
@@ -142,5 +152,26 @@ final class LocalChecksTest extends TestCase
         $started = microtime(true);
         $this->assertNull((new ProcessSystemctl($this->fakeBinary('exec sleep 10'), 0.5))->show('nginx.service'));
         $this->assertLessThan(3.0, microtime(true) - $started);
+    }
+
+    public function testEachLocalHttpAnswerBecomesAResult(): void
+    {
+        $http = new FakeLocalHttp();
+        $http->answer('http://127.0.0.1:8000/health', '', 503);
+        $http->answer('https://127.0.0.1/', 'geonode.example.com', 'tls_failed');
+        $settings = CheckSettings::fromArray(['version' => '0123456789abcdef', 'checks' => [
+            ['type' => 'local_http', 'url' => 'http://127.0.0.1/', 'host_name' => ''],
+            ['type' => 'local_http', 'url' => 'http://127.0.0.1:8000/health', 'host_name' => ''],
+            ['type' => 'local_http', 'url' => 'https://127.0.0.1/', 'host_name' => 'geonode.example.com'],
+        ]]);
+
+        $results = (new LocalChecks(new FakeSystemctl(), new FakeClock(), $http))->run($settings);
+
+        $this->assertSame([
+            ['type' => 'local_http', 'subject' => 'http://127.0.0.1/', 'outcome' => 'pass', 'status' => 200, 'ms' => 12],
+            ['type' => 'local_http', 'subject' => 'http://127.0.0.1:8000/health', 'outcome' => 'fail', 'status' => 503, 'ms' => 12],
+            ['type' => 'local_http', 'subject' => 'https://127.0.0.1/ (geonode.example.com)', 'outcome' => 'fail', 'reason' => 'tls_failed'],
+        ], $results);
+        $this->assertSame([['http://127.0.0.1/', ''], ['http://127.0.0.1:8000/health', ''], ['https://127.0.0.1/', 'geonode.example.com']], $http->requests);
     }
 }

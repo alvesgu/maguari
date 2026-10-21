@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Client;
 
+use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\Protocol;
 use Maguari\Shared\ServiceCheck;
 use Maguari\Shared\UnitName;
@@ -17,7 +18,8 @@ use Maguari\Shared\UnitName;
 final class CheckSettings
 {
     /**
-     * @param list<array{type: string, unit: string}> $checks
+     * @param list<array<string, string>> $checks each with its type and its
+     *        fields: unit for a service, url and host_name for local HTTP
      * @param int $skipped checks left out because this client cannot run them
      */
     private function __construct(
@@ -46,8 +48,12 @@ final class CheckSettings
         $valid = [];
 
         foreach ($checks as $check) {
-            if (is_array($check) && ($check['type'] ?? null) === ServiceCheck::TYPE && is_string($check['unit'] ?? null) && UnitName::isValid($check['unit'])) {
+            $type = is_array($check) ? ($check['type'] ?? null) : null;
+
+            if ($type === ServiceCheck::TYPE && is_string($check['unit'] ?? null) && UnitName::isValid($check['unit'])) {
                 $valid[] = ['type' => ServiceCheck::TYPE, 'unit' => $check['unit']];
+            } elseif ($type === LocalHttpCheck::TYPE && is_string($check['url'] ?? null) && is_string($check['host_name'] ?? null) && LocalHttpCheck::isValid($check['url'], $check['host_name'])) {
+                $valid[] = ['type' => LocalHttpCheck::TYPE, 'url' => $check['url'], 'host_name' => $check['host_name']];
             }
         }
 
@@ -55,7 +61,7 @@ final class CheckSettings
     }
 
     /**
-     * @return array{version: string, checks: list<array{type: string, unit: string}>}
+     * @return array{version: string, checks: list<array<string, string>>}
      */
     public function toArray(): array
     {

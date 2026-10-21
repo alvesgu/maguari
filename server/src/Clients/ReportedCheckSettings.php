@@ -16,6 +16,12 @@ final class ReportedCheckSettings
     public const SINCE_CLIENT_VERSION = '0.4.0';
 
     /**
+     * The first client version that runs local HTTP checks; older ones skip
+     * them (design section 6.1.3).
+     */
+    public const LOCAL_HTTP_SINCE_CLIENT_VERSION = '0.5.0';
+
+    /**
      * @param bool $supported whether it sent check_settings_version at all
      * @param ?string $version the version it has; null for none
      */

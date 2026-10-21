@@ -9,6 +9,7 @@ declare(strict_types=1);
 //   silent    accepts connections and never answers
 //   garbage   answers with something that is not an HTTP status line
 //   close     closes each connection without answering
+//   host:<name>  answers 200 when the request's Host header is <name>, else 421
 // With a certificate file as the second argument it serves TLS with it.
 
 $mode = $argv[1] ?? '200';
@@ -47,7 +48,11 @@ while (true) {
         $request .= (string) fread($connection, 8192);
     }
 
-    if ($mode === 'garbage') {
+    if (str_starts_with($mode, 'host:')) {
+        $wanted = substr($mode, 5);
+        $status = preg_match('/^Host: (.*)\r$/mi', $request, $match) === 1 && $match[1] === $wanted ? '200' : '421';
+        @fwrite($connection, "HTTP/1.1 {$status} Something\r\nConnection: close\r\n\r\n");
+    } elseif ($mode === 'garbage') {
         @fwrite($connection, "SSH-2.0-OpenSSH_9.6\r\n");
     } elseif ($mode !== 'close') {
         @fwrite($connection, "HTTP/1.1 {$mode} Something\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n");

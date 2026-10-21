@@ -29,6 +29,7 @@ final class Cli
         private readonly int $effectiveUserId,
         private $stdout,
         private $stderr,
+        private readonly LocalHttp $localHttp = new StreamLocalHttp(),
     ) {
     }
 
@@ -141,7 +142,7 @@ final class Cli
             $this->diskUsage,
             $this->certificates,
             new CheckSettingsFile($this->credentialsFile->directory()),
-            new LocalChecks($this->systemctl, $this->clock),
+            new LocalChecks($this->systemctl, $this->clock, $this->localHttp),
         );
     }
 

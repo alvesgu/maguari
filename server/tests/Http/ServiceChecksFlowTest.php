@@ -133,4 +133,37 @@ final class ServiceChecksFlowTest extends TestCase
         $this->assertSame(405, $browser->get($this->page() . "/client-checks/{$check->id}/remove")->getStatusCode());
         $this->assertCount(1, $this->environment->monitoring->clientChecks($this->instanceId));
     }
+
+    public function testAddAndRemoveALocalHttpCheck(): void
+    {
+        $browser = $this->signedInBrowser();
+
+        $refused = $this->post($browser, '/local-http', ['local_url' => 'https://geonode.example.com/', 'host_name' => '']);
+        $this->assertSame(422, $refused->getStatusCode());
+        $this->assertStringContainsString('The URL must point at the instance itself', (string) $refused->getBody());
+        $this->assertStringContainsString('value="https://geonode.example.com/"', (string) $refused->getBody());
+
+        $response = $this->post($browser, '/local-http', ['local_url' => 'https://127.0.0.1/health', 'host_name' => 'GeoNode.example.com']);
+
+        $this->assertSame(303, $response->getStatusCode());
+        $checks = $this->environment->monitoring->clientChecks($this->instanceId);
+        $this->assertSame([['local_http', 'https://127.0.0.1/health', 'geonode.example.com']], array_map(static fn ($check): array => [$check->type, $check->target, $check->hostName], $checks));
+        $this->assertStringContainsString('<tr><td>https://127.0.0.1/health</td><td>geonode.example.com</td><td>Not checked', (string) $browser->get($this->page())->getBody());
+
+        $this->assertSame(303, $this->post($browser, "/client-checks/{$checks[0]->id}/remove")->getStatusCode());
+        $this->assertSame([], $this->environment->monitoring->clientChecks($this->instanceId));
+    }
+
+    public function testSaysWhenTheClientIsTooOldForLocalHttp(): void
+    {
+        $client = $this->environment->enrollClient($this->instanceId);
+        $this->environment->monitoring->addLocalHttpCheck($this->instanceId, 'http://127.0.0.1/', '');
+        $browser = $this->signedInBrowser();
+
+        $this->heartbeat($client, ['client_version' => '0.4.0', 'check_settings_version' => null]);
+        $this->assertStringContainsString('<p>This client (version 0.4.0) skips local HTTP checks. It needs version 0.5.0 or later.</p>', (string) $browser->get($this->page())->getBody());
+
+        $this->heartbeat($client, ['client_version' => '0.5.0', 'check_settings_version' => null]);
+        $this->assertStringNotContainsString('skips local HTTP checks', (string) $browser->get($this->page())->getBody());
+    }
 }

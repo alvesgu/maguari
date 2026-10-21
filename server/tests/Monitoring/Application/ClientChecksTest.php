@@ -154,4 +154,37 @@ final class ClientChecksTest extends TestCase
         $monitoring->removeClientCheck(7, $check->id);
         $this->assertSame($empty, $monitoring->clientCheckSettings(7)->version);
     }
+
+    public function testAddsLocalHttpChecksAndJudgesThemLikeServices(): void
+    {
+        $monitoring = $this->environment->monitoring;
+        $check = $monitoring->addLocalHttpCheck(7, 'http://127.0.0.1:8000/health', '');
+        $monitoring->addLocalHttpCheck(7, 'http://127.0.0.1:8000/health', 'geonode.example.com');
+
+        try {
+            $monitoring->addLocalHttpCheck(7, 'HTTP://127.0.0.1:8000/health', '');
+            $this->fail('A duplicate was added.');
+        } catch (InvalidClientCheck $invalid) {
+            $this->assertSame('http://127.0.0.1:8000/health is already checked on this instance.', $invalid->getMessage());
+        }
+
+        $result = static fn (string $outcome, int $status): array => ['type' => 'local_http', 'subject' => 'http://127.0.0.1:8000/health', 'outcome' => $outcome, 'status' => $status, 'ms' => 7];
+        $record = function (array $checks) use ($monitoring): void {
+            $monitoring->recordHeartbeat(7, $this->environment->clock->now(), Readings::parse([]), $monitoring->parseCheckResults($checks));
+        };
+
+        $record([$result('fail', 502)]);
+        $record([$result('fail', 502)]);
+        $status = $monitoring->clientCheckStatuses([7])[7][0];
+        $this->assertSame($check->id, $status->check->id);
+        $this->assertSame([CheckOutcome::Fail, 'Answered 502 in 7 ms.'], [$status->outcome(), $status->detail()]);
+        $this->assertSame(CheckOutcome::NotChecked, $monitoring->clientCheckStatuses([7])[7][1]->outcome(), 'The one with a host name is another check.');
+
+        for ($i = 3; $i <= 5; $i++) {
+            $monitoring->addLocalHttpCheck(7, "http://127.0.0.1:800{$i}/", '');
+        }
+
+        $this->expectExceptionMessage('An instance can have at most 5 local HTTP checks.');
+        $monitoring->addLocalHttpCheck(7, 'http://127.0.0.1:8009/', '');
+    }
 }

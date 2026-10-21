@@ -290,6 +290,17 @@ final class MonitoringApi
     }
 
     /**
+     * A URL on the instance itself, with an optional host name for the Host
+     * header and TLS. The client gets it with its next heartbeat's response.
+     *
+     * @throws InvalidClientCheck with a sentence for the administrator
+     */
+    public function addLocalHttpCheck(int $instanceId, string $url, string $hostName): ClientCheck
+    {
+        return $this->clientChecks->addLocalHttp($instanceId, $url, $hostName);
+    }
+
+    /**
      * Withdraws its outcome at once, so its incident resolves.
      *
      * @return bool whether it existed for that instance

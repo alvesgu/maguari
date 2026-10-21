@@ -10,12 +10,15 @@ use Maguari\Server\Monitoring\Domain\ClientCheck;
 use Maguari\Server\Monitoring\Domain\ClientCheckResults;
 use Maguari\Server\Monitoring\Domain\ClientCheckSettings;
 use Maguari\Server\Monitoring\Domain\ClientCheckStatus;
+use Maguari\Server\Monitoring\Domain\LocalHttpCheckRule;
+use Maguari\Server\Monitoring\Domain\LocalHttpTarget;
 use Maguari\Server\Monitoring\Domain\ServiceCheckRule;
 use Maguari\Server\Monitoring\Domain\ServiceUnit;
 use Maguari\Server\Monitoring\Exception\InvalidClientCheck;
 use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
 use Maguari\Server\Monitoring\Infrastructure\ClientCheckRepository;
 use Maguari\Server\Monitoring\Infrastructure\FailureStreakRepository;
+use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\ServiceCheck;
 
 /**
@@ -97,6 +100,33 @@ final class ClientChecks
     }
 
     /**
+     * Like addService(), for a local HTTP check.
+     *
+     * @throws InvalidClientCheck
+     */
+    public function addLocalHttp(int $instanceId, string $url, string $hostName): ClientCheck
+    {
+        [$url, $hostName] = LocalHttpTarget::normalize($url, $hostName);
+        $at = $this->clock->now();
+
+        return $this->database->transaction(function () use ($instanceId, $url, $hostName, $at): ClientCheck {
+            $checks = array_filter($this->checks->forInstance($instanceId), static fn (ClientCheck $check): bool => $check->type === LocalHttpCheck::TYPE);
+
+            foreach ($checks as $check) {
+                if ($check->target === $url && $check->hostName === $hostName) {
+                    throw new InvalidClientCheck(sprintf('%s is already checked on this instance.', $check->subject()));
+                }
+            }
+
+            if (count($checks) >= ClientCheck::MAX_LOCAL_HTTP_PER_INSTANCE) {
+                throw new InvalidClientCheck(sprintf('An instance can have at most %d local HTTP checks.', ClientCheck::MAX_LOCAL_HTTP_PER_INSTANCE));
+            }
+
+            return new ClientCheck($this->checks->add($instanceId, LocalHttpCheck::TYPE, $url, $hostName, $at), $instanceId, LocalHttpCheck::TYPE, $url, $hostName, $at);
+        });
+    }
+
+    /**
      * Withdraws the check's outcome at once, so its incident resolves:
      * removing it is the administrator's decision.
      *
@@ -134,16 +164,19 @@ final class ClientChecks
         $configured = [];
 
         foreach ($this->checks->forInstance($instanceId) as $check) {
-            $configured[$check->checkName() . "\n" . $check->subject()] = true;
+            $configured[$check->checkName() . "\n" . $check->subject()] = $check;
         }
 
         foreach ($results->results as $result) {
-            if (!isset($configured[$result->type . "\n" . $result->subject])) {
+            $check = $configured[$result->type . "\n" . $result->subject] ?? null;
+
+            if ($check === null) {
                 continue;
             }
 
             $this->checkStates->recordConfirmed(match ($result->type) {
                 ServiceCheck::TYPE => ServiceCheckRule::result($instanceId, $result, $at),
+                LocalHttpCheck::TYPE => LocalHttpCheckRule::result($check, $result, $at),
             });
         }
     }
