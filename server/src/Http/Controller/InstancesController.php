@@ -7,7 +7,10 @@ namespace Maguari\Server\Http\Controller;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Http\View;
+use Maguari\Server\Kernel\Clock;
+use Maguari\Server\Monitoring\Domain\HttpCheck;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
+use Maguari\Server\Monitoring\Exception\InvalidHttpCheck;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Remediation\RemediationApi;
 use Psr\Http\Message\ResponseInterface;
@@ -16,8 +19,9 @@ use Slim\Exception\HttpNotFoundException;
 
 /**
  * One picked instance's page (design section 8.1 item 4): its incidents, its
- * certificate results and the hostnames its remote certificate check connects to. Reads
- * only SQLite; adding a hostname connects to nothing.
+ * certificate results, the hostnames its remote certificate check connects
+ * to and its remote HTTP checks. Reads only SQLite; adding a hostname or a
+ * web app connects to nothing.
  */
 final class InstancesController
 {
@@ -26,6 +30,7 @@ final class InstancesController
         private readonly MonitoringApi $monitoring,
         private readonly RemediationApi $remediation,
         private readonly View $view,
+        private readonly Clock $clock,
     ) {
     }
 
@@ -34,7 +39,7 @@ final class InstancesController
      */
     public function show(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
     {
-        return $this->page($request, $response, $this->instance($request, $args), '', null);
+        return $this->page($request, $response, $this->instance($request, $args));
     }
 
     /**
@@ -48,7 +53,7 @@ final class InstancesController
         try {
             $this->monitoring->addCertificateHostname($instance->id, $hostname);
         } catch (InvalidCertificateHostname $invalid) {
-            return $this->page($request, $response, $instance, $hostname, $invalid->getMessage(), 422);
+            return $this->page($request, $response, $instance, ['hostname' => $hostname, 'error' => $invalid->getMessage()], 422);
         }
 
         return self::backTo($response, $instance);
@@ -71,6 +76,55 @@ final class InstancesController
     /**
      * @param array{id: string} $args
      */
+    public function addHttpCheck(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $input = (array) $request->getParsedBody();
+        $url = FormInput::string($input, 'url');
+        $interval = FormInput::string($input, 'interval');
+
+        try {
+            $this->monitoring->addHttpCheck($instance->id, $url, $interval);
+        } catch (InvalidHttpCheck $invalid) {
+            return $this->page($request, $response, $instance, ['httpUrl' => $url, 'httpInterval' => $interval, 'httpError' => $invalid->getMessage()], 422);
+        }
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * A check that is already gone just shows the page again.
+     *
+     * @param array{id: string, checkId: string} $args
+     */
+    public function changeHttpCheckInterval(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $interval = FormInput::string((array) $request->getParsedBody(), 'interval');
+
+        try {
+            $this->monitoring->changeHttpCheckInterval($instance->id, (int) $args['checkId'], $interval);
+        } catch (InvalidHttpCheck $invalid) {
+            return $this->page($request, $response, $instance, ['intervalError' => $invalid->getMessage()], 422);
+        }
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * @param array{id: string, checkId: string} $args
+     */
+    public function removeHttpCheck(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $this->monitoring->removeHttpCheck($instance->id, (int) $args['checkId']);
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * @param array{id: string} $args
+     */
     private function instance(ServerRequestInterface $request, array $args): Instance
     {
         return $this->fleet->pickedInstance((int) $args['id']) ?? throw new HttpNotFoundException($request);
@@ -81,12 +135,15 @@ final class InstancesController
         return $response->withStatus(303)->withHeader('Location', '/admin/instances/' . $instance->id);
     }
 
+    /**
+     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string} $form
+     *        what was typed in a refused form and why it was refused
+     */
     private function page(
         ServerRequestInterface $request,
         ResponseInterface $response,
         Instance $instance,
-        string $hostname,
-        ?string $error,
+        array $form = [],
         int $status = 200,
     ): ResponseInterface {
         $summary = $this->monitoring->dailyJobSummary([$instance->id]);
@@ -100,8 +157,15 @@ final class InstancesController
             'resultsRun' => $summary->lastSucceededRun,
             'hostnames' => $this->monitoring->certificateHostnames($instance->id),
             'suggestions' => $this->monitoring->certificateHostnameSuggestions($instance->id),
-            'hostname' => $hostname,
-            'error' => $error,
+            'hostname' => $form['hostname'] ?? '',
+            'error' => $form['error'] ?? null,
+            'httpChecks' => $this->monitoring->httpCheckStatuses([$instance->id])[$instance->id] ?? [],
+            'httpEgressBytes' => $this->monitoring->httpCheckMonthlyEgressBytes(),
+            'httpUrl' => $form['httpUrl'] ?? '',
+            'httpInterval' => $form['httpInterval'] ?? (string) HttpCheck::DEFAULT_INTERVAL_MINUTES,
+            'httpError' => $form['httpError'] ?? null,
+            'intervalError' => $form['intervalError'] ?? null,
+            'now' => $this->clock->now(),
         ], $status);
     }
 }

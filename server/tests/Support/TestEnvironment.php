@@ -22,7 +22,8 @@ use Slim\App as SlimApp;
 
 /**
  * A migrated database and a secret key file in a temporary directory, with a
- * fixed clock and fake Google Cloud access (no network).
+ * fixed clock, fake Google Cloud access and fake TLS and HTTP checks (no
+ * network).
  */
 final class TestEnvironment
 {
@@ -39,6 +40,9 @@ final class TestEnvironment
     public readonly FakeHttpClient $http;
     public readonly FleetApi $fleet;
     public readonly FakeTlsCertificateReader $tls;
+    public readonly FakeHttpProbe $httpProbe;
+    /** @var list<int> every wait before a remote HTTP check's retry, in seconds */
+    public array $sleeps = [];
     public readonly MonitoringApi $monitoring;
     public readonly RemediationApi $remediation;
     public readonly ClientsApi $clients;
@@ -66,7 +70,11 @@ final class TestEnvironment
         $this->http = new FakeHttpClient();
         $this->fleet = new FleetApi($this->database, $this->clock, $this->tokens, $this->http);
         $this->tls = new FakeTlsCertificateReader();
-        $this->monitoring = new MonitoringApi($this->database, $this->clock, $this->fleet, $this->tls);
+        $this->httpProbe = new FakeHttpProbe($this->clock);
+        $this->monitoring = new MonitoringApi($this->database, $this->clock, $this->fleet, $this->tls, $this->httpProbe, function (int $seconds): void {
+            $this->sleeps[] = $seconds;
+            $this->clock->advance($seconds);
+        });
         $this->remediation = new RemediationApi($this->database, $this->clock, $this->monitoring);
         $this->clients = new ClientsApi($this->database, $this->clock, $this->secretBox, $this->monitoring);
         $this->mailer = new FakeMailer();

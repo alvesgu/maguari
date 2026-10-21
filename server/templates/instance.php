@@ -9,9 +9,17 @@
  * @var \Maguari\Server\Monitoring\Domain\CertificateHostname[] $hostnames
  * @var string[] $suggestions
  * @var string $hostname @var ?string $error
+ * @var \Maguari\Server\Monitoring\Domain\HttpCheckStatus[] $httpChecks
+ * @var int $httpEgressBytes every remote HTTP check's estimated monthly egress together
+ * @var string $httpUrl @var string $httpInterval @var ?string $httpError @var ?string $intervalError
+ * @var int $now
  */
+use Maguari\Server\Http\TimeAgo;
 use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CertificateHostname;
+use Maguari\Server\Monitoring\Domain\HttpCheck;
+use Maguari\Server\Monitoring\Domain\HttpCheckEgress;
+use Maguari\Server\Monitoring\Domain\HttpCheckRule;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Remediation\Domain\ResolutionRule;
 use Maguari\Server\Remediation\RemediationApi;
@@ -45,6 +53,47 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <?php endforeach; ?>
 </tbody>
 </table>
+<?php endif; ?>
+<h2>Web apps</h2>
+<p>The server requests each URL on its interval, as visitors do, and reads only the status of the answer: 2xx and 3xx pass (redirects are not followed), anything else fails. A failed request is tried once more <?= HttpCheckRule::RETRY_AFTER_SECONDS ?> seconds later before it counts. A new URL is checked within a minute.</p>
+<p>Each request costs the server about <?= intdiv(HttpCheckEgress::BYTES_PER_CHECK, 1024) ?> KB of egress, which the free tier limits to 1 GB a month: <?= HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(HttpCheck::DEFAULT_INTERVAL_MINUTES * 60)) ?> MB a month at the default <?= HttpCheck::DEFAULT_INTERVAL_MINUTES ?> minutes, <?= HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(60)) ?> MB at 1 minute. All web app checks together use about <?= HttpCheckEgress::megabytes($httpEgressBytes) ?> MB of the <?= HttpCheckEgress::megabytes(HttpCheckEgress::MONTHLY_BUDGET_BYTES) ?> MB set aside for them.</p>
+<?php if ($intervalError !== null): ?>
+<p>The interval was not changed: <?= $e($intervalError) ?></p>
+<?php endif; ?>
+<?php if ($httpChecks === []): ?>
+<p>None yet.</p>
+<?php else: ?>
+<table>
+<thead><tr><th>URL</th><th>Result</th><th>Checked</th><th>Every (minutes)</th><th></th></tr></thead>
+<tbody>
+<?php foreach ($httpChecks as $status): ?>
+<?php $checkedAt = $status->state?->checkedAt; ?>
+<tr><td><?= $e($status->check->url) ?></td><td><?= $e($status->outcome()->label()) ?><?= $partial('info', ['text' => $status->detail()]) ?></td><td><?= $checkedAt === null ? '' : $e(TimeAgo::format(max(0, $now - $checkedAt))) ?></td><td><form method="post" action="/admin/instances/<?= $instance->id ?>/http-checks/<?= $status->check->id ?>/interval">
+<?= $csrf ?>
+<input name="interval" type="number" min="<?= HttpCheck::MIN_INTERVAL_MINUTES ?>" max="<?= HttpCheck::MAX_INTERVAL_MINUTES ?>" value="<?= $status->check->intervalMinutes() ?>" aria-label="Interval in minutes for <?= $e($status->check->url) ?>" required>
+<button type="submit">Change</button>
+</form></td><td><form method="post" action="/admin/instances/<?= $instance->id ?>/http-checks/<?= $status->check->id ?>/remove">
+<?= $csrf ?>
+<button type="submit">Remove</button>
+</form></td></tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
+<?php if (count($httpChecks) < HttpCheck::MAX_PER_INSTANCE): ?>
+<?php if ($httpError !== null): ?>
+<p><?= $e($httpError) ?></p>
+<?php endif; ?>
+<form method="post" action="/admin/instances/<?= $instance->id ?>/http-checks">
+<?= $csrf ?>
+<p><label for="url">URL</label><br>
+<input id="url" name="url" type="url" value="<?= $e($httpUrl) ?>" placeholder="https://www.example.com/" autocomplete="off" spellcheck="false" required></p>
+<p><label for="interval">Every (minutes, <?= HttpCheck::MIN_INTERVAL_MINUTES ?> to <?= HttpCheck::MAX_INTERVAL_MINUTES ?>)</label><br>
+<input id="interval" name="interval" type="number" min="<?= HttpCheck::MIN_INTERVAL_MINUTES ?>" max="<?= HttpCheck::MAX_INTERVAL_MINUTES ?>" value="<?= $e($httpInterval) ?>"></p>
+<p><button type="submit">Add web app</button></p>
+</form>
+<?php else: ?>
+<p>This instance has the most web app checks allowed (<?= HttpCheck::MAX_PER_INSTANCE ?>). Remove one to add another.</p>
 <?php endif; ?>
 <h2>Certificates</h2>
 <?= $partial('daily-job-status', ['run' => $lastRun]) ?>

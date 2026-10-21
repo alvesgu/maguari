@@ -17,7 +17,7 @@ Decided before this plan:
 - **D6.** Remote HTTP checks cost egress, so each has an interval with a sensible default, and their monthly total stays well within the free tier's 1 GB.
 - **D7.** PostgreSQL is supported first (GeoNode). Database drivers are not a hard dependency of the client.
 
-This plan proposes how. Nothing here is implemented until it is approved; once it is, each step records what it decides in `docs/DESIGN.md` in the same commit.
+This plan proposes how. It was approved with the answers at the end; each step records what it decides in `docs/DESIGN.md` in the same commit.
 
 ## Steps
 
@@ -145,21 +145,71 @@ The rules live in `shared/src/`, so the server validates what it stores and the 
    | The driver is not installed | Not checked: "The PostgreSQL driver is not installed on the instance. Install it with: sudo apt install php-pgsql" | `driver_missing` |
 
    A refused login fails rather than "not checked" so it gets noticed; its own reason lets phase 3 avoid restarting a database whose only problem is the check's password.
-5. **Drivers are optional** (D7). `maguari-client` keeps depending on `php-cli` only and gets `Suggests: php-pgsql` (and `php-mysql` if Q1 says yes); apt does not install suggested packages by default, unlike recommended ones. The client looks for the PDO driver with `extension_loaded()` when a check of that type runs, so an instance without database checks never needs it. Packaging records the `Suggests:` line in design section 12.1 now and writes it in phase 4.
-6. **Types:** PostgreSQL in this step. MySQL and MariaDB need only another DSN, its timeout options and `php-mysql`; see Q1.
+5. **Drivers are optional** (D7). `maguari-client` keeps depending on `php-cli` only and gets `Suggests: php-pgsql, php-mysql`; apt does not install suggested packages by default, unlike recommended ones. The client looks for the PDO driver with `extension_loaded()` when a check of that type runs, so an instance without database checks never needs it. Packaging records the `Suggests:` line in design section 12.1 now and writes it in phase 4.
+6. **Types:** PostgreSQL, MySQL and MariaDB in this step (Q1). MySQL and MariaDB share one type, `mysql`, through `pdo_mysql` (`php-mysql`), with `PDO::ATTR_TIMEOUT` of 5 seconds and `max_execution_time` for the query. The missing-driver sentence names the package for the type. PostgreSQL stays the one tested against a real server in development.
 7. **Tests:** unit tests through a fake connector (every outcome above, the driver check and the file's permission rules). An integration test against a real PostgreSQL runs only when `MAGUARI_TEST_POSTGRESQL_DSN` is set, so neither test suite needs a database server.
 
 ### P8. The dashboard
 
 From step 2.1, the instances table gets a "Checks" column: the worst current outcome of the instance's remote HTTP, service, local HTTP and database checks (fail over not checked over pass), "Pass (5)" with the number when all pass, its (i) icon listing each check with its sentence. The cell is empty for an instance without any. Each later step feeds it with its own check.
 
-## Open questions
+## Known limits
 
-- **Q1.** MySQL and MariaDB in step 2.4 too? It costs a DSN, two timeout options and tests. *Recommendation:* yes, since many web apps use them and the mechanism is the same; PostgreSQL stays the one tested against a real server in development.
-- **Q2.** Should one failed result be enough to fail a check? A single dropped packet would open an incident and send two emails. *Recommendation:* the remote HTTP check retries once, 5 seconds later, before failing (costing egress only on failures), and client checks need 2 failed results in a row (2 minutes), counted in `monitoring_check_states`. This would be a new rule in design section 6.3 item 7, so it needs your decision. Without it, every failure counts at once, as for the daily job's checks.
-- **Q3.** Remote HTTP interval default of 10 minutes and the 200 MB budget (P2 items 5 and 6): acceptable, or would you rather have 5 minutes with room for 5 web apps?
-- **Q4.** `run-http-checks` as its own timer (P2 item 4) rather than a step in the tick?
-- **Q5.** The database file under `/var/lib/maguari-client/` managed by commands (P7 items 1 and 2), rather than a hand-edited file in `/etc/maguari-client/`?
+- **Docker deployments** (common for GeoNode): service checks see `docker.service`, not the individual containers, because access to the Docker socket is effectively root and the client must never have it. Database checks work only when the database's port is published to the host (or reachable from it). The local HTTP check still covers the application as a whole, through the port the containers publish. Recorded in design section 6.1.
+
+## Answers
+
+1. **Q1, MySQL and MariaDB:** yes, in step 2.4, next to PostgreSQL (P7 item 6).
+2. **Q2, confirming failures:** yes. The remote HTTP check retries once, 5 seconds later, before a failure counts (step 2.1), and client checks need 2 failed results in a row (step 2.2). Recorded as a new rule in design section 6.3 item 7, the remote part in step 2.1 and the client part in step 2.2.
+3. **Q3, interval and budget:** a 10-minute default and the 200 MB monthly budget (P2 items 5 and 6).
+4. **Q4, scheduling:** `run-http-checks` on its own timer (P2 item 4).
+5. **Q5, the database file:** in `/var/lib/maguari-client/`, managed by commands (P7 items 1 and 2).
+6. **Docker:** documented as a known limit (above).
+
+## Found while implementing
+
+### Step 2.1
+
+- **Egress measured:** 100 requests each to three public sites (www.example.com, www.google.com, github.com) from the Ubuntu 22.04 test image (OpenSSL 3.0), in a container with its own network namespace so `/proc/net/dev` counted nothing else: 1,455 to 1,539 bytes and 12 to 14 packets sent per request. The 4 KiB estimate stays, more than 2.5 times that; post-quantum key shares in newer OpenSSL versions add about 1.2 KB to the ClientHello and still fit.
+- **Only the status line is read**, not the headers (P2 item 2 said both). Nothing in a header changes the outcome, and closing earlier sends fewer ACKs.
+- **The request is a new Kernel helper, `Kernel/HttpProbe/StreamHttpProbe`**, on stream sockets like the TLS certificate reader, rather than the stream wrapper of `StreamHttpClient`: it reads only the status line, bounds the handshake by a deadline and tells name resolution, refused connections, timeouts and TLS failures apart for the sentences. Monitoring's `Domain/` has its own `HttpFailure` enum, because `Domain/` uses nothing from Kernel.
+- **The User-Agent is `Maguari health check`**, without a version: the server has no `VERSION` file yet (packaging, phase 4).
+- **`checked_at`** came with this step as P1 item 5 said. Every result now writes its check state, because the time changes even when nothing else does.
+- **The interval can be changed** on each row, not only set when adding (P2 item 6 implied it). A shorter one brings the next check forward to at most one interval from now; a longer one keeps the next check.
+
+#### Manual check (step 2.1)
+
+In each terminal, from the repository root:
+
+```
+source scripts/dev-env.sh
+```
+
+Apply the new migration:
+
+```
+server/bin/maguari-server migrate
+```
+
+Start the web app in one terminal:
+
+```
+cd server && php -S localhost:8080 -t public
+```
+
+Keep the tick running in a second terminal:
+
+```
+while true; do server/bin/maguari-server tick; sleep 60; done
+```
+
+And the remote HTTP checks in a third:
+
+```
+while true; do server/bin/maguari-server run-http-checks; sleep 60; done
+```
+
+On an instance's page, add `https://www.example.com/` under "Web apps" with the default interval. Within a minute the third terminal prints `Pass. Answered 200 in ... ms.`, and the dashboard's Checks column shows "Pass (1)". Then add `https://maguari-test.invalid/` with an interval of 2 minutes: the next run prints the failure ("did not resolve in DNS. Tried twice, 5 seconds apart."), the tick opens the incident and its notification, and with SMTP set up the alert email arrives with the "Web app" label. Remove that check: the incident resolves as withdrawn on the next tick. Finally, change the example.com check to 1 minute: with the other at 10 minutes that is about 201 MB a month, so the change is refused with that number.
 
 ## Design changes once approved
 

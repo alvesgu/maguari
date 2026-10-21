@@ -58,6 +58,7 @@ final class AdminController
             'heartbeats' => $this->monitoring->heartbeatStatuses($enrolled),
             'clientVersions' => $this->clients->clientVersions($ids),
             'dailyJob' => $this->monitoring->dailyJobSummary($ids),
+            'httpChecks' => $this->monitoring->httpCheckStatuses($ids),
         ]);
     }
 

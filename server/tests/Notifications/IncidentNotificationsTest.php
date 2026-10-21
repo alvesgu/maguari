@@ -129,6 +129,7 @@ final class IncidentNotificationsTest extends TestCase
     public function testAnUnknownCheckGetsAGenericLabel(): void
     {
         $this->assertSame('Disk size', CheckLabels::of('disk_size'));
+        $this->assertSame('Web app', CheckLabels::of('remote_http'));
         $this->assertSame('Other check (http_status)', CheckLabels::of('http_status'));
         $this->assertSame('Other check', CheckLabels::of(''));
         $this->assertSame('Other check (weird)', CheckLabels::of('<Weird>'));

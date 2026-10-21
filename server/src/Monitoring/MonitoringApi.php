@@ -8,11 +8,14 @@ use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Events\EventOutbox;
+use Maguari\Server\Kernel\HttpProbe\HttpProbe;
+use Maguari\Server\Kernel\HttpProbe\StreamHttpProbe;
 use Maguari\Server\Kernel\Tls\TlsCertificateReader;
 use Maguari\Server\Monitoring\Application\CertificateHostnames;
 use Maguari\Server\Monitoring\Application\CheckStates;
 use Maguari\Server\Monitoring\Application\DailyJob;
 use Maguari\Server\Monitoring\Application\HeartbeatAges;
+use Maguari\Server\Monitoring\Application\HttpChecks;
 use Maguari\Server\Monitoring\Application\ServedCertificates;
 use Maguari\Server\Monitoring\Domain\CertificateHostname;
 use Maguari\Server\Monitoring\Domain\CheckLabels;
@@ -22,6 +25,8 @@ use Maguari\Server\Monitoring\Domain\CheckState;
 use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Domain\HeartbeatStatus;
+use Maguari\Server\Monitoring\Domain\HttpCheck;
+use Maguari\Server\Monitoring\Domain\HttpCheckStatus;
 use Maguari\Server\Monitoring\Domain\Readings;
 use Maguari\Server\Monitoring\Domain\RunDecision;
 use Maguari\Server\Monitoring\Domain\RunQuery;
@@ -30,11 +35,13 @@ use Maguari\Server\Monitoring\Domain\RunSeries;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
+use Maguari\Server\Monitoring\Exception\InvalidHttpCheck;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
 use Maguari\Server\Monitoring\Exception\InvalidRunQuery;
 use Maguari\Server\Monitoring\Infrastructure\CertificateHostnameRepository;
 use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
 use Maguari\Server\Monitoring\Infrastructure\HeartbeatRepository;
+use Maguari\Server\Monitoring\Infrastructure\HttpCheckRepository;
 use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
 use Maguari\Shared\Protocol;
 
@@ -66,15 +73,21 @@ final class MonitoringApi
     private readonly HeartbeatRepository $heartbeats;
     private readonly HeartbeatAges $heartbeatAges;
     private readonly CheckStateRepository $checkStates;
+    private readonly HttpChecks $httpChecks;
 
     /**
      * @param TlsCertificateReader $tls reads the certificates hostnames serve
+     * @param HttpProbe $httpProbe requests the web apps of remote HTTP checks
+     * @param ?\Closure(int): void $sleep waits before a remote HTTP check's
+     *        retry; null for sleep()
      */
     public function __construct(
         private readonly Database $database,
         private readonly Clock $clock,
         FleetApi $fleet,
         TlsCertificateReader $tls,
+        HttpProbe $httpProbe = new StreamHttpProbe(),
+        ?\Closure $sleep = null,
     ) {
         $this->runs = new MetricRunRepository($database);
         $this->runRule = new RunRule(self::EXPECTED_INTERVAL_SECONDS);
@@ -85,6 +98,18 @@ final class MonitoringApi
         $this->certificateHostnames = new CertificateHostnames($database, $clock, $hostnames, $this->runs, $checkStates);
         $this->heartbeats = new HeartbeatRepository($database);
         $this->heartbeatAges = new HeartbeatAges($database, $clock, $fleet, $this->heartbeats, $checkStates);
+        $this->httpChecks = new HttpChecks(
+            $database,
+            $clock,
+            $fleet,
+            new HttpCheckRepository($database),
+            $this->checkStates,
+            $checkStates,
+            $httpProbe,
+            $sleep ?? static function (int $seconds): void {
+                sleep($seconds);
+            },
+        );
     }
 
     /**
@@ -208,6 +233,78 @@ final class MonitoringApi
     public function removeCertificateHostname(int $instanceId, int $hostnameId): bool
     {
         return $this->certificateHostnames->remove($instanceId, $hostnameId);
+    }
+
+    /**
+     * Requests every remote HTTP check that is due (design section 6.2.1)
+     * and stores the results, writing outcome changes as events without
+     * delivering them. Run by maguari-server run-http-checks every minute,
+     * never inside a request. Takes under a minute.
+     *
+     * @return list<CheckResult> in the order checked
+     */
+    public function runDueHttpChecks(): array
+    {
+        return $this->httpChecks->runDue();
+    }
+
+    /**
+     * @return list<HttpCheck> in URL order
+     */
+    public function httpChecks(int $instanceId): array
+    {
+        return $this->httpChecks->forInstance($instanceId);
+    }
+
+    /**
+     * Each instance's remote HTTP checks with their current outcomes, for
+     * pages. Reads only SQLite.
+     *
+     * @param int[] $instanceIds
+     * @return array<int, list<HttpCheckStatus>> by instance ID, only instances with checks
+     */
+    public function httpCheckStatuses(array $instanceIds): array
+    {
+        return $this->httpChecks->statuses($instanceIds);
+    }
+
+    /**
+     * The estimated monthly egress of all remote HTTP checks together
+     * (HttpCheckEgress).
+     */
+    public function httpCheckMonthlyEgressBytes(): int
+    {
+        return $this->httpChecks->monthlyEgressBytes();
+    }
+
+    /**
+     * Due at once; adding it connects to nothing.
+     *
+     * @param string $intervalMinutes as typed; empty for the default
+     * @throws InvalidHttpCheck with a sentence for the administrator
+     */
+    public function addHttpCheck(int $instanceId, string $url, string $intervalMinutes): HttpCheck
+    {
+        return $this->httpChecks->add($instanceId, $url, $intervalMinutes);
+    }
+
+    /**
+     * @return bool whether it existed for that instance
+     * @throws InvalidHttpCheck with a sentence for the administrator
+     */
+    public function changeHttpCheckInterval(int $instanceId, int $checkId, string $intervalMinutes): bool
+    {
+        return $this->httpChecks->changeInterval($instanceId, $checkId, $intervalMinutes);
+    }
+
+    /**
+     * Withdraws its outcome at once, so its incident resolves.
+     *
+     * @return bool whether it existed for that instance
+     */
+    public function removeHttpCheck(int $instanceId, int $checkId): bool
+    {
+        return $this->httpChecks->remove($instanceId, $checkId);
     }
 
     /**

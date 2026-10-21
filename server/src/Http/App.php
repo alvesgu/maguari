@@ -187,7 +187,7 @@ final class App
             $adminController = new AdminController($fleet, $clients, $monitoring, $notifications, $view, $logErrors);
             $notificationsController = new NotificationsController($notifications, $fleet, $view);
             $projectsController = new ProjectsController($fleet, $clients, $access, $monitoring, $view);
-            $instancesController = new InstancesController($fleet, $monitoring, $remediation, $view);
+            $instancesController = new InstancesController($fleet, $monitoring, $remediation, $view, $clock);
             $runsController = new RunsController($fleet, $monitoring);
             $emailController = new EmailController($access, $notifications, $view, $logErrors);
             $enrollController = new EnrollController($clients);
@@ -209,6 +209,9 @@ final class App
                 $group->get('/instances/{id:[0-9]+}', [$instancesController, 'show']);
                 $group->post('/instances/{id:[0-9]+}/certificate-hostnames', [$instancesController, 'addHostname']);
                 $group->post('/instances/{id:[0-9]+}/certificate-hostnames/{hostnameId:[0-9]+}/remove', [$instancesController, 'removeHostname']);
+                $group->post('/instances/{id:[0-9]+}/http-checks', [$instancesController, 'addHttpCheck']);
+                $group->post('/instances/{id:[0-9]+}/http-checks/{checkId:[0-9]+}/interval', [$instancesController, 'changeHttpCheckInterval']);
+                $group->post('/instances/{id:[0-9]+}/http-checks/{checkId:[0-9]+}/remove', [$instancesController, 'removeHttpCheck']);
                 $group->get('/email', [$emailController, 'show']);
                 $group->post('/email', [$emailController, 'save']);
                 $group->post('/email/import-seed', [$emailController, 'importSeed']);

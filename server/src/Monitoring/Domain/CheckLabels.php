@@ -14,6 +14,7 @@ final class CheckLabels
         DiskSizeRule::CHECK_NAME => 'Disk size',
         CertificateExpiryRule::LOCAL_CHECK_NAME => 'Certificate on the instance',
         CertificateExpiryRule::REMOTE_CHECK_NAME => 'Served certificate',
+        HttpCheck::CHECK_NAME => 'Web app',
     ];
 
     /**

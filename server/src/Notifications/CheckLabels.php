@@ -16,6 +16,7 @@ final class CheckLabels
         'disk_size' => 'Disk size',
         'local_certificate' => 'Certificate on the instance',
         'remote_certificate' => 'Served certificate',
+        'remote_http' => 'Web app',
     ];
 
     /**

@@ -1,0 +1,18 @@
+# Requests the remote HTTP checks that are due (design section 6.2.1).
+# Started every minute by maguari-server-http-checks.timer; installed by
+# packaging. Its own unit, so a slow web app never holds up the tick.
+[Unit]
+Description=Maguari remote HTTP checks
+Documentation=https://github.com/alvesgu/maguari
+
+[Service]
+Type=oneshot
+User=maguari-server
+Group=maguari-server
+ExecStart=/usr/bin/maguari-server run-http-checks
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+# The database, its WAL files and the run's lock file. /etc/maguari stays readable.
+ReadWritePaths=/var/lib/maguari

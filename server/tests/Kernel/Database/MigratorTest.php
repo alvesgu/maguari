@@ -60,6 +60,7 @@ final class MigratorTest extends TestCase
             'Monitoring/0005_monitoring_certificate_hostnames.sql',
             'Monitoring/0006_monitoring_heartbeats_and_check_states.sql',
             'Monitoring/0007_monitoring_check_states_detail.sql',
+            'Monitoring/0008_monitoring_http_checks.sql',
             'Notifications/0001_notifications_smtp_settings.sql',
             'Notifications/0002_notifications_notifications.sql',
             'Notifications/0003_notifications_reconciliations.sql',

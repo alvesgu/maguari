@@ -431,6 +431,7 @@ final class MaguariServerCommandTest extends TestCase
         return [
             'run-daily-job' => [['run-daily-job']],
             'tick' => [['tick']],
+            'run-http-checks' => [['run-http-checks']],
         ];
     }
 
@@ -475,6 +476,46 @@ final class MaguariServerCommandTest extends TestCase
         $this->assertSame(1, substr_count($stderr, "\n"), $stderr);
         $this->assertStringEndsWith(' ' . self::INSTALLED_HINT . "\n", $stderr);
         $this->assertStringNotContainsString('dev-env', $stderr);
+    }
+
+    public function testRunHttpChecksPrintsNothingWhenNoneIsDue(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+
+        [$status, $stdout, $stderr] = $this->runCommand($path, ['run-http-checks']);
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertSame('', $stdout);
+        $this->assertSame('', $stderr);
+        $this->assertSame(0600, fileperms($path . '.http-checks-lock') & 0777);
+        $this->assertSame(1, $this->runCommand($path, ['run-http-checks', '--now'])[0]);
+    }
+
+    public function testRunHttpChecksRequestsTheDueWebAppsAndRecordsTheOutcome(): void
+    {
+        $path = $this->directory . '/maguari.sqlite';
+        $this->runCommand($path, ['migrate']);
+        $server = proc_open([PHP_BINARY, dirname(__DIR__) . '/fixtures/http-server.php', '204'], [1 => ['pipe', 'w']], $pipes);
+        $port = (int) fgets($pipes[1]);
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec("INSERT INTO fleet_projects (id, gcp_project_id, created_at) VALUES (1, 'my-project', 0)");
+        $pdo->exec("INSERT INTO fleet_instances (id, project_id, gcp_instance_id, zone, name, picked_at) VALUES (1, 1, '1', 'us-east1-b', 'web', 0)");
+        // Added straight to the table: the web app refuses localhost.
+        $pdo->exec("INSERT INTO monitoring_http_checks (instance_id, url, interval_seconds, added_at, next_due_at) VALUES (1, 'http://localhost:{$port}/health', 600, 0, 0)");
+
+        try {
+            [$status, $stdout, $stderr] = $this->runCommand($path, ['run-http-checks']);
+        } finally {
+            proc_terminate($server);
+            proc_close($server);
+        }
+
+        $this->assertSame(0, $status, $stderr);
+        $this->assertMatchesRegularExpression("#^my-project/us-east1-b/web: Web app http://localhost:{$port}/health: Pass\\. Answered 204 in \\d+ ms\\.\n$#D", $stdout);
+        $this->assertSame('pass', $pdo->query("SELECT outcome FROM monitoring_check_states WHERE check_name = 'remote_http'")->fetchColumn());
+        $this->assertSame('monitoring.check_passed', $pdo->query('SELECT type FROM kernel_events')->fetchColumn());
+        $this->assertGreaterThan(time(), (int) $pdo->query('SELECT next_due_at FROM monitoring_http_checks')->fetchColumn());
     }
 
     public function testTickNeedsAMigratedDatabase(): void

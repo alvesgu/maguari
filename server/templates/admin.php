@@ -7,6 +7,7 @@
  * @var array<int, \Maguari\Server\Monitoring\Domain\HeartbeatStatus> $heartbeats enrolled instances only
  * @var array<int, string> $clientVersions
  * @var \Maguari\Server\Monitoring\Domain\DailyJobSummary $dailyJob
+ * @var array<int, list<\Maguari\Server\Monitoring\Domain\HttpCheckStatus>> $httpChecks by instance ID
  * @var \Closure $partial
  */
 use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
@@ -66,7 +67,7 @@ foreach ($instances as $instance) {
 <p>No instances yet. Open a project and press Enroll next to an instance.</p>
 <?php else: ?>
 <table>
-<thead><tr><th>Project</th><th>Instance</th><th>Zone</th><th>Enrollment</th><th>Heartbeat</th><th>Last heartbeat</th><th>Client version</th><th>Disk size</th><th>Certificates</th></tr></thead>
+<thead><tr><th>Project</th><th>Instance</th><th>Zone</th><th>Enrollment</th><th>Heartbeat</th><th>Last heartbeat</th><th>Client version</th><th>Disk size</th><th>Certificates</th><th>Checks</th></tr></thead>
 <tbody>
 <?php foreach ($instances as $instance): ?>
 <?php $heartbeat = $heartbeats[$instance->id] ?? null; ?>
@@ -81,17 +82,21 @@ foreach ($certificates as $certificate) {
         $certificateFailures[] = [$instance, $certificate];
     }
 }
+
+$checks = $httpChecks[$instance->id] ?? [];
+$worstCheck = CheckOutcome::worst(array_map(static fn ($status) => $status->outcome(), $checks));
 ?>
 <tr><td><a href="/admin/projects/<?= $instance->projectId ?>"><?= $e($instance->gcpProjectId) ?></a></td><td><a href="/admin/instances/<?= $instance->id ?>"><?= $e($instance->name) ?></a></td><td><?= $e($instance->zone) ?></td>
 <?= $partial('heartbeat', ['enrollment' => $enrollmentStates[$instance->id], 'heartbeat' => $heartbeat]) ?>
 <td><?= $e($clientVersions[$instance->id] ?? '') ?></td>
 <td><?php if ($diskSize !== null): ?><?= $e($diskSize->outcome->label()) ?><?= $partial('info', ['text' => $diskSize->detail]) ?><?php endif; ?></td>
-<td><?php if ($certificates !== []): ?><?= $e($worst === CheckOutcome::Pass ? sprintf('Pass (%d)', count($certificates)) : $worst->label()) ?><?= $partial('info', ['text' => implode("\n", array_map(static fn ($certificate) => $certificate->subject . ($certificate->checkName === CertificateExpiryRule::REMOTE_CHECK_NAME ? ', served: ' : ', on the instance: ') . $certificate->detail, $certificates))]) ?><?php endif; ?></td></tr>
+<td><?php if ($certificates !== []): ?><?= $e($worst === CheckOutcome::Pass ? sprintf('Pass (%d)', count($certificates)) : $worst->label()) ?><?= $partial('info', ['text' => implode("\n", array_map(static fn ($certificate) => $certificate->subject . ($certificate->checkName === CertificateExpiryRule::REMOTE_CHECK_NAME ? ', served: ' : ', on the instance: ') . $certificate->detail, $certificates))]) ?><?php endif; ?></td>
+<td><?php if ($checks !== []): ?><?= $e($worstCheck === CheckOutcome::Pass ? sprintf('Pass (%d)', count($checks)) : $worstCheck->label()) ?><?= $partial('info', ['text' => implode("\n", array_map(static fn ($status) => 'Web app ' . $status->check->url . ': ' . $status->outcome()->label() . '. ' . $status->detail(), $checks))]) ?><?php endif; ?></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>
 <p>Heartbeats are expected every <?= MonitoringApi::EXPECTED_INTERVAL_SECONDS ?> seconds. A heartbeat older than <?= HeartbeatAgeRule::maxAgeSeconds(MonitoringApi::EXPECTED_INTERVAL_SECONDS) ?> seconds is late. Reload the page to update.</p>
-<p>Disk size compares each instance's boot disk with the filesystems its client reports on it. Certificates shows the worst result among the Let's Encrypt certificates each client reports and the certificates its hostnames serve (set on the instance's page), with the number checked when all pass; a certificate fails with fewer than <?= CertificateExpiryRule::MIN_DAYS_LEFT ?> days left. Hover over or tab to the i next to a result for details.</p>
+<p>Disk size compares each instance's boot disk with the filesystems its client reports on it. Certificates shows the worst result among the Let's Encrypt certificates each client reports and the certificates its hostnames serve (set on the instance's page), with the number checked when all pass; a certificate fails with fewer than <?= CertificateExpiryRule::MIN_DAYS_LEFT ?> days left. Checks shows the worst current result of the web apps the server requests for each instance (set on the instance's page). Hover over or tab to the i next to a result for details.</p>
 <?php if ($failures !== []): ?>
 <h3>Disk size failures</h3>
 <ul>

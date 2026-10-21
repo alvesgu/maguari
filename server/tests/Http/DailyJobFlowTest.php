@@ -136,7 +136,7 @@ final class DailyJobFlowTest extends TestCase
         $this->assertMatchesRegularExpression(self::cell('Pass', 'The boot disk is 15.0 GiB and its filesystems total 14.5 GiB.'), $body);
         $failure = 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB. Rebooting usually extends them (cloud-init); otherwise run growpart and resize2fs.';
         $this->assertMatchesRegularExpression(self::cell('Fail', $failure), $body);
-        $this->assertStringContainsString("</span></span></td>\n<td></td></tr>", $body);
+        $this->assertStringContainsString("</span></span></td>\n<td></td>\n<td></td></tr>", $body);
         $this->assertStringContainsString("<h3>Disk size failures</h3>\n<ul>\n<li>my-project/grown: {$failure}</li>", $body);
         $this->assertStringNotContainsString('my-project/fine:', $body);
         // The dashboard reads only SQLite.
@@ -271,7 +271,7 @@ final class DailyJobFlowTest extends TestCase
         $this->environment->monitoring->runDailyJob(DailyJobTrigger::Scheduled);
         $this->pick('web');
 
-        $this->assertStringContainsString("<td></td>\n<td></td>\n<td></td></tr>", $this->dashboard());
+        $this->assertStringContainsString("<td></td>\n<td></td>\n<td></td>\n<td></td></tr>", $this->dashboard());
     }
 
     public function testOverdueWhenNoScheduledRunInTwentyFiveHours(): void
