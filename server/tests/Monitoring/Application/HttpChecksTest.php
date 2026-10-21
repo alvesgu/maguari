@@ -150,7 +150,8 @@ final class HttpChecksTest extends TestCase
             ['https://a.example.com/', 'pass', 'Answered 200 in 42 ms.'],
             ['https://b.example.com/', 'pass', 'Answered 200 in 42 ms.'],
         ], self::summary($monitoring->runDueHttpChecks()));
-        $this->assertSame(['https://a.example.com/', HttpChecks::USER_AGENT, 5.0, 10.0], $probe->requests[0]);
+        $this->assertSame(['https://a.example.com/', HttpChecks::userAgent(), 5.0, 10.0], $probe->requests[0]);
+        $this->assertMatchesRegularExpression('#^Maguari/[0-9]+\.[0-9]+\.[0-9]+ health check$#D', HttpChecks::userAgent());
         $this->assertSame([], $monitoring->runDueHttpChecks(), 'Nothing due again within the minute.');
 
         $this->environment->clock->advance(120);

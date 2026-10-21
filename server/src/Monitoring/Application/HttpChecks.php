@@ -10,6 +10,7 @@ use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\HttpProbe\HttpProbe;
 use Maguari\Server\Kernel\HttpProbe\HttpProbeFailure;
 use Maguari\Server\Kernel\HttpProbe\HttpProbeFailureKind;
+use Maguari\Server\Kernel\Version;
 use Maguari\Server\Monitoring\Domain\CheckResult;
 use Maguari\Server\Monitoring\Domain\HttpAnswer;
 use Maguari\Server\Monitoring\Domain\HttpCheck;
@@ -32,7 +33,13 @@ final class HttpChecks
     /** No new check starts after this long, so a run ends within its minute. */
     public const RUN_TIME_LIMIT_SECONDS = 30;
 
-    public const USER_AGENT = 'Maguari health check';
+    /**
+     * Names the server's version, so a web app's logs show which Maguari asked.
+     */
+    public static function userAgent(): string
+    {
+        return 'Maguari/' . Version::current() . ' health check';
+    }
 
     /**
      * @param \Closure(int): void $sleep waits that many seconds before a retry
@@ -241,7 +248,7 @@ final class HttpChecks
     private function request(string $url): HttpAnswer
     {
         try {
-            $answer = $this->probe->probe($url, self::USER_AGENT, HttpCheckRule::CONNECT_TIMEOUT_SECONDS, HttpCheckRule::TIMEOUT_SECONDS);
+            $answer = $this->probe->probe($url, self::userAgent(), HttpCheckRule::CONNECT_TIMEOUT_SECONDS, HttpCheckRule::TIMEOUT_SECONDS);
 
             return HttpAnswer::status($answer->status, $answer->elapsedMs);
         } catch (HttpProbeFailure $failure) {
