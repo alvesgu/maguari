@@ -9,10 +9,13 @@ use Maguari\Client\ClientFailure;
 use Maguari\Client\Clock;
 use Maguari\Client\Credentials;
 use Maguari\Client\DiskUsage;
+use Maguari\Client\CheckSettingsFile;
 use Maguari\Client\HeartbeatSender;
+use Maguari\Client\LocalChecks;
 use Maguari\Client\Runner;
 use Maguari\Client\Tests\Support\FakeClock;
 use Maguari\Client\Tests\Support\FakeFilesystemStats;
+use Maguari\Client\Tests\Support\FakeSystemctl;
 use Maguari\Client\Tests\Support\FakeTransport;
 use Maguari\Client\Transport;
 use Maguari\Client\TransportResponse;
@@ -25,7 +28,7 @@ final class RunnerTest extends TestCase
 
     private function runner(Transport $transport, Clock $clock): Runner
     {
-        return new Runner(new HeartbeatSender($transport, $clock, new DiskUsage(new FakeFilesystemStats(), __DIR__ . '/fixtures/mounts-gce'), new CertificateExpiry(__DIR__ . '/fixtures/missing')), $clock, function (string $message): void {
+        return new Runner(new HeartbeatSender($transport, $clock, new DiskUsage(new FakeFilesystemStats(), __DIR__ . '/fixtures/mounts-gce'), new CertificateExpiry(__DIR__ . '/fixtures/missing'), new CheckSettingsFile(sys_get_temp_dir() . '/maguari-no-settings-' . bin2hex(random_bytes(4))), new LocalChecks(new FakeSystemctl(), $clock)), $clock, function (string $message): void {
             $this->log[] = $message;
         });
     }

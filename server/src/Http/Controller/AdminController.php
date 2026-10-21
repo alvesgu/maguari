@@ -59,6 +59,7 @@ final class AdminController
             'clientVersions' => $this->clients->clientVersions($ids),
             'dailyJob' => $this->monitoring->dailyJobSummary($ids),
             'httpChecks' => $this->monitoring->httpCheckStatuses($ids),
+            'clientChecks' => $this->monitoring->clientCheckStatuses($ids),
         ]);
     }
 

@@ -25,6 +25,7 @@ final class Cli
         private readonly DiskUsage $diskUsage,
         private readonly CertificateExpiry $certificates,
         private readonly CredentialsFile $credentialsFile,
+        private readonly Systemctl $systemctl,
         private readonly int $effectiveUserId,
         private $stdout,
         private $stderr,
@@ -39,6 +40,7 @@ final class Cli
             new DiskUsage(new StatvfsFilesystemStats()),
             CertificateExpiry::fromEnvironment(),
             CredentialsFile::fromEnvironment(),
+            new ProcessSystemctl(),
             posix_geteuid(),
             STDOUT,
             STDERR,
@@ -112,8 +114,8 @@ final class Cli
     private function heartbeat(): int
     {
         $credentials = $this->credentialsFile->load();
-        (new HeartbeatSender($this->transport, $this->clock, $this->diskUsage, $this->certificates))->send($credentials);
-        fwrite($this->stdout, sprintf("Heartbeat accepted by %s.\n", $credentials->serverUrl));
+        $notice = $this->sender()->send($credentials);
+        fwrite($this->stdout, sprintf("Heartbeat accepted by %s.\n", $credentials->serverUrl) . ($notice === null ? '' : $notice . "\n"));
 
         return 0;
     }
@@ -126,9 +128,21 @@ final class Cli
         $log = static function (string $message) use ($stderr, $clock): void {
             fwrite($stderr, gmdate('Y-m-d H:i:s', $clock->now()) . ' UTC ' . $message . "\n");
         };
-        (new Runner(new HeartbeatSender($this->transport, $this->clock, $this->diskUsage, $this->certificates), $this->clock, $log))->run($credentials);
+        (new Runner($this->sender(), $this->clock, $log))->run($credentials);
 
         return 0;
+    }
+
+    private function sender(): HeartbeatSender
+    {
+        return new HeartbeatSender(
+            $this->transport,
+            $this->clock,
+            $this->diskUsage,
+            $this->certificates,
+            new CheckSettingsFile($this->credentialsFile->directory()),
+            new LocalChecks($this->systemctl, $this->clock),
+        );
     }
 
     /**

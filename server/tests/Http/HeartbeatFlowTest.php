@@ -330,6 +330,10 @@ final class HeartbeatFlowTest extends TestCase
             'disk used without its total' => [['readings' => [['metric' => 'disk_used_bytes:/', 'value' => 1]]], 400, 'bad_request'],
             'a relative mount point' => [['readings' => [['metric' => 'disk_total_bytes:boot', 'value' => 1]]], 400, 'bad_request'],
             'bad client_version' => [['client_version' => 'dev'], 400, 'bad_request'],
+            'a settings version that is not one' => [['check_settings_version' => 'latest'], 400, 'bad_request'],
+            'a settings version as a number' => [['check_settings_version' => 12], 400, 'bad_request'],
+            'checks not a list' => [['checks' => ['service' => 1]], 400, 'bad_request'],
+            'a malformed check result' => [['checks' => [['type' => 'service', 'subject' => 'nginx', 'outcome' => 'pass']]], 400, 'bad_request'],
         ];
     }
 
@@ -372,5 +376,45 @@ final class HeartbeatFlowTest extends TestCase
 
         $this->assertError($this->send(), 500, 'server_error');
         $this->assertSame(0, $this->nonceCount());
+    }
+
+    public function testCheckSettingsGoOnlyToClientsThatAskAndOnlyWhenTheyDiffer(): void
+    {
+        $monitoring = $this->environment->monitoring;
+        $monitoring->addServiceCheck(7, 'nginx');
+        $version = $monitoring->clientCheckSettings(7)->version;
+
+        $this->assertSame(204, $this->send()->getStatusCode(), 'An older client never sends the field and never gets a body.');
+
+        $response = $this->send(body: $this->body($this->client, ['check_settings_version' => null]));
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('application/json', $response->getHeaderLine('Content-Type'));
+        $this->assertSame('no-store', $response->getHeaderLine('Cache-Control'));
+        $this->assertSame(
+            ['check_settings' => ['version' => $version, 'checks' => [['type' => 'service', 'unit' => 'nginx.service']]]],
+            json_decode((string) $response->getBody(), true),
+        );
+
+        $this->assertSame(204, $this->send(body: $this->body($this->client, ['check_settings_version' => $version]))->getStatusCode(), 'Up to date.');
+        $this->assertSame(200, $this->send(body: $this->body($this->client, ['check_settings_version' => '0000000000000000']))->getStatusCode());
+        $reported = $this->environment->clients->reportedCheckSettings([7, 8]);
+        $this->assertSame([7], array_keys($reported));
+        $this->assertSame([true, '0000000000000000'], [$reported[7]->supported, $reported[7]->version]);
+    }
+
+    public function testResultsAreJudgedWithTheHeartbeatAndUnknownOnesIgnored(): void
+    {
+        $this->environment->monitoring->addServiceCheck(7, 'nginx');
+        $checks = [
+            ['type' => 'service', 'subject' => 'nginx.service', 'outcome' => 'pass', 'state' => 'active'],
+            ['type' => 'service', 'subject' => 'removed.service', 'outcome' => 'fail', 'reason' => 'not_found'],
+            ['type' => 'from_the_future', 'anything' => true],
+        ];
+
+        $this->assertSame(204, $this->send(body: $this->body($this->client, ['checks' => $checks]))->getStatusCode());
+
+        $states = $this->environment->database->pdo()->query('SELECT check_name, subject, outcome, detail, checked_at FROM monitoring_check_states')->fetchAll();
+        $this->assertSame([['check_name' => 'service', 'subject' => 'nginx.service', 'outcome' => 'pass', 'detail' => 'nginx.service is active.', 'checked_at' => $this->environment->clock->now()]], $states);
+        $this->assertSame(1, (int) $this->environment->database->pdo()->query('SELECT COUNT(*) FROM kernel_events WHERE delivered_at IS NULL')->fetchColumn(), 'Left for the tick.');
     }
 }

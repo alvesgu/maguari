@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Monitoring\Domain;
 
+use Maguari\Shared\ServiceCheck;
+
 /**
  * Each check's name for people, for pages that list results of several checks.
  */
@@ -15,6 +17,7 @@ final class CheckLabels
         CertificateExpiryRule::LOCAL_CHECK_NAME => 'Certificate on the instance',
         CertificateExpiryRule::REMOTE_CHECK_NAME => 'Served certificate',
         HttpCheck::CHECK_NAME => 'Web app',
+        ServiceCheck::TYPE => 'Service',
     ];
 
     /**

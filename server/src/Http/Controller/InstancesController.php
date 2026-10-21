@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Maguari\Server\Http\Controller;
 
+use Maguari\Server\Clients\ClientsApi;
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Instance;
 use Maguari\Server\Http\Session;
@@ -11,6 +12,7 @@ use Maguari\Server\Http\View;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Monitoring\Domain\HttpCheck;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
+use Maguari\Server\Monitoring\Exception\InvalidClientCheck;
 use Maguari\Server\Monitoring\Exception\InvalidHttpCheck;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Remediation\RemediationApi;
@@ -21,8 +23,9 @@ use Slim\Exception\HttpNotFoundException;
 /**
  * One picked instance's page (design section 8.1 item 4): its incidents, its
  * certificate results, the hostnames its remote certificate check connects
- * to and its remote HTTP checks. Reads only SQLite; adding a hostname or a
- * web app connects to nothing.
+ * to, its remote HTTP checks and its client's checks. Reads only SQLite;
+ * adding a hostname or a web app connects to nothing, and the client gets a
+ * new service check with its next heartbeat.
  */
 final class InstancesController
 {
@@ -30,6 +33,7 @@ final class InstancesController
         private readonly FleetApi $fleet,
         private readonly MonitoringApi $monitoring,
         private readonly RemediationApi $remediation,
+        private readonly ClientsApi $clients,
         private readonly View $view,
         private readonly Clock $clock,
     ) {
@@ -134,6 +138,36 @@ final class InstancesController
     /**
      * @param array{id: string} $args
      */
+    public function addService(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $unit = FormInput::string((array) $request->getParsedBody(), 'unit');
+
+        try {
+            $this->monitoring->addServiceCheck($instance->id, $unit);
+        } catch (InvalidClientCheck $invalid) {
+            return $this->page($request, $response, $instance, ['unit' => $unit, 'unitError' => $invalid->getMessage()], 422);
+        }
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * A check that is already gone just shows the page again.
+     *
+     * @param array{id: string, checkId: string} $args
+     */
+    public function removeClientCheck(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $this->monitoring->removeClientCheck($instance->id, (int) $args['checkId']);
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * @param array{id: string} $args
+     */
     private function instance(ServerRequestInterface $request, array $args): Instance
     {
         return $this->fleet->pickedInstance((int) $args['id']) ?? throw new HttpNotFoundException($request);
@@ -153,7 +187,7 @@ final class InstancesController
     }
 
     /**
-     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string} $form
+     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string, unit?: string, unitError?: string} $form
      *        what was typed in a refused form and why it was refused, or the
      *        warning of the last change
      */
@@ -184,6 +218,12 @@ final class InstancesController
             'httpError' => $form['httpError'] ?? null,
             'intervalError' => $form['intervalError'] ?? null,
             'notice' => $form['notice'] ?? null,
+            'clientChecks' => $this->monitoring->clientCheckStatuses([$instance->id])[$instance->id] ?? [],
+            'clientCheckSettings' => $this->monitoring->clientCheckSettings($instance->id),
+            'reportedCheckSettings' => $this->clients->reportedCheckSettings([$instance->id])[$instance->id] ?? null,
+            'clientVersion' => $this->clients->clientVersions([$instance->id])[$instance->id] ?? null,
+            'unit' => $form['unit'] ?? '',
+            'unitError' => $form['unitError'] ?? null,
             'now' => $this->clock->now(),
         ], $status);
     }

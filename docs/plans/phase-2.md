@@ -213,6 +213,26 @@ while true; do server/bin/maguari-server run-http-checks; sleep 60; done
 
 On an instance's page, add `https://www.example.com/` under "Web apps" with the default interval. Within a minute the third terminal prints `Pass. Answered 200 in ... ms.`, and the dashboard's Checks column shows "Pass (1)". Then add `https://maguari-test.invalid/` with an interval of 2 minutes: the next run prints the failure ("did not resolve in DNS. Tried twice, 5 seconds apart."), the tick opens the incident and its notification, and with SMTP set up the alert email arrives with the "Web app" label. Remove that check: the incident resolves as withdrawn on the next tick. Finally, add three more web apps at 1 minute: the third saves with a warning above the 200 MB budget, naming the shortest interval that would stay within it (after review, the budget warns and only 500 MB refuses).
 
+### Step 2.2
+
+- **The confirmed failures live in their own table**, `monitoring_check_failure_streaks`, not in `monitoring_check_states` (P1 item 5 and Q2): a new check's first failure has no state row to count in, and `monitoring_check_states` holds only pass or fail. While a failure waits for the second, the outcome keeps its sentence and time, and the instance page adds a note.
+- **A unit systemd does not have fails** (P5 item 3) through `LoadState=not-found`, which `systemctl show` reports with exit code 0. `systemctl show` runs with a 5-second timeout and is killed after it.
+- **Results never carry `SubState`**: only `ActiveState` changes the outcome, so the sentences say "nginx.service is active." rather than "active (running)" (P5 item 1).
+- **The client accepts unknown fields in a `200`**, which an earlier test refused, so later fields such as `commands` need no protocol change.
+- **`client/VERSION` is 0.4.0**, the first client that runs checks; the instance page names it for older clients (`ReportedCheckSettings::SINCE_CLIENT_VERSION`).
+- **The client's private file writing moved into `PrivateFile`**, shared by the credentials and the check settings, and it now clears PHP's stat cache before checking a file's mode.
+- **Smoke run** with the real client and server and the real `systemctl` on Ubuntu 24.04: the first heartbeat got the settings (stored with mode 0600), the next ones judged `systemd-journald.service` active and a made-up unit not found.
+
+#### Manual check (step 2.2)
+
+As in step 2.1, in separate terminals with the development environment loaded: the web app, the tick loop and the client's loop:
+
+```
+client/bin/maguari-client run
+```
+
+On the instance page of the enrolled development instance, add `cron` under "Services". The page says it is waiting for the client; within a minute the client logs `Received check settings ...: 1 check.` and on the following heartbeat the service shows Pass. Then add a service that does not exist, for example `maguari-test`: one minute later the page shows the first failure with its note, the minute after that it fails, the tick opens the incident and its notification, and the alert email arrives with the "Service" label. Remove it: the incident resolves at once.
+
 ## Design changes once approved
 
 Sections 5.2 (the new request and response fields), 6.1 and 6.2 (the checks), 9.2 (the tables and `checked_at`), 10.1 (the new timer), 12.1 (`Suggests:`), 12.2.1 (`run-http-checks`), 14 (the egress budget) and 17 (phase 2's steps), each in the step that implements it.

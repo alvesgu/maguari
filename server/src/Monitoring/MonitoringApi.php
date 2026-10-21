@@ -12,6 +12,7 @@ use Maguari\Server\Kernel\HttpProbe\HttpProbe;
 use Maguari\Server\Kernel\HttpProbe\StreamHttpProbe;
 use Maguari\Server\Kernel\Tls\TlsCertificateReader;
 use Maguari\Server\Monitoring\Application\CertificateHostnames;
+use Maguari\Server\Monitoring\Application\ClientChecks;
 use Maguari\Server\Monitoring\Application\CheckStates;
 use Maguari\Server\Monitoring\Application\DailyJob;
 use Maguari\Server\Monitoring\Application\HeartbeatAges;
@@ -22,6 +23,10 @@ use Maguari\Server\Monitoring\Domain\CheckLabels;
 use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\CheckResult;
 use Maguari\Server\Monitoring\Domain\CheckState;
+use Maguari\Server\Monitoring\Domain\ClientCheck;
+use Maguari\Server\Monitoring\Domain\ClientCheckResults;
+use Maguari\Server\Monitoring\Domain\ClientCheckSettings;
+use Maguari\Server\Monitoring\Domain\ClientCheckStatus;
 use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Domain\HeartbeatStatus;
@@ -36,11 +41,15 @@ use Maguari\Server\Monitoring\Domain\RunSeries;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
+use Maguari\Server\Monitoring\Exception\InvalidCheckResults;
+use Maguari\Server\Monitoring\Exception\InvalidClientCheck;
 use Maguari\Server\Monitoring\Exception\InvalidHttpCheck;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
 use Maguari\Server\Monitoring\Exception\InvalidRunQuery;
 use Maguari\Server\Monitoring\Infrastructure\CertificateHostnameRepository;
 use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
+use Maguari\Server\Monitoring\Infrastructure\ClientCheckRepository;
+use Maguari\Server\Monitoring\Infrastructure\FailureStreakRepository;
 use Maguari\Server\Monitoring\Infrastructure\HeartbeatRepository;
 use Maguari\Server\Monitoring\Infrastructure\HttpCheckRepository;
 use Maguari\Server\Monitoring\Infrastructure\MetricRunRepository;
@@ -75,6 +84,7 @@ final class MonitoringApi
     private readonly HeartbeatAges $heartbeatAges;
     private readonly CheckStateRepository $checkStates;
     private readonly HttpChecks $httpChecks;
+    private readonly ClientChecks $clientChecks;
 
     /**
      * @param TlsCertificateReader $tls reads the certificates hostnames serve
@@ -94,7 +104,9 @@ final class MonitoringApi
         $this->runRule = new RunRule(self::EXPECTED_INTERVAL_SECONDS);
         $hostnames = new CertificateHostnameRepository($database);
         $this->checkStates = new CheckStateRepository($database);
-        $checkStates = new CheckStates($this->checkStates, new EventOutbox($database));
+        $streaks = new FailureStreakRepository($database);
+        $checkStates = new CheckStates($this->checkStates, new EventOutbox($database), $streaks);
+        $this->clientChecks = new ClientChecks($database, $clock, new ClientCheckRepository($database), $this->checkStates, $streaks, $checkStates);
         $this->dailyJob = new DailyJob($database, $clock, $fleet, $this->runs, $hostnames, new ServedCertificates($tls), $checkStates);
         $this->certificateHostnames = new CertificateHostnames($database, $clock, $hostnames, $this->runs, $checkStates);
         $this->heartbeats = new HeartbeatRepository($database);
@@ -237,6 +249,69 @@ final class MonitoringApi
     }
 
     /**
+     * The checks the instance's client runs (design section 6.1.3).
+     *
+     * @return list<ClientCheck> in type and target order
+     */
+    public function clientChecks(int $instanceId): array
+    {
+        return $this->clientChecks->forInstance($instanceId);
+    }
+
+    /**
+     * What the instance's client should run, with its version, for heartbeat
+     * responses (design section 5.2). Reads only SQLite.
+     */
+    public function clientCheckSettings(int $instanceId): ClientCheckSettings
+    {
+        return $this->clientChecks->settings($instanceId);
+    }
+
+    /**
+     * Each instance's client checks with their current outcomes, for pages.
+     * Reads only SQLite.
+     *
+     * @param int[] $instanceIds
+     * @return array<int, list<ClientCheckStatus>> by instance ID, only instances with checks
+     */
+    public function clientCheckStatuses(array $instanceIds): array
+    {
+        return $this->clientChecks->statuses($instanceIds);
+    }
+
+    /**
+     * The client gets it with its next heartbeat's response.
+     *
+     * @throws InvalidClientCheck with a sentence for the administrator
+     */
+    public function addServiceCheck(int $instanceId, string $unit): ClientCheck
+    {
+        return $this->clientChecks->addService($instanceId, $unit);
+    }
+
+    /**
+     * Withdraws its outcome at once, so its incident resolves.
+     *
+     * @return bool whether it existed for that instance
+     */
+    public function removeClientCheck(int $instanceId, int $checkId): bool
+    {
+        return $this->clientChecks->remove($instanceId, $checkId);
+    }
+
+    /**
+     * Validates a heartbeat's check results without writing anything, so the
+     * caller can reject the whole heartbeat first.
+     *
+     * @param list<mixed> $checks as decoded from JSON
+     * @throws InvalidCheckResults
+     */
+    public function parseCheckResults(array $checks): ClientCheckResults
+    {
+        return ClientCheckResults::parse($checks);
+    }
+
+    /**
      * Requests every remote HTTP check that is due (design section 6.2.1)
      * and stores the results, writing outcome changes as events without
      * delivering them. Run by maguari-server run-http-checks every minute,
@@ -359,16 +434,17 @@ final class MonitoringApi
     }
 
     /**
-     * Records a heartbeat's time, which the heartbeat-age check judges, and
-     * applies the run rule (design section 9.1) to each reading, all in one
-     * transaction, so concurrent heartbeats of one instance cannot both
+     * Records a heartbeat's time, which the heartbeat-age check judges,
+     * applies the run rule (design section 9.1) to each reading and judges
+     * the client's check results, writing outcome changes as events, all in
+     * one transaction, so concurrent heartbeats of one instance cannot both
      * extend or both insert. The time is recorded even without readings.
      *
      * @param int $at the server's receive time
      */
-    public function recordHeartbeat(int $instanceId, int $at, Readings $readings): void
+    public function recordHeartbeat(int $instanceId, int $at, Readings $readings, ?ClientCheckResults $results = null): void
     {
-        $this->database->transaction(function () use ($instanceId, $at, $readings): void {
+        $this->database->transaction(function () use ($instanceId, $at, $readings, $results): void {
             $this->heartbeats->record($instanceId, $at);
 
             foreach ($readings->readings as $reading) {
@@ -380,6 +456,8 @@ final class MonitoringApi
                     RunDecision::Ignore => null,
                 };
             }
+
+            $this->clientChecks->record($instanceId, $at, $results ?? ClientCheckResults::none());
         });
     }
 }

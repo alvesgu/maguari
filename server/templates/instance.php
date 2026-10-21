@@ -13,11 +13,18 @@
  * @var int $httpEgressBytes every remote HTTP check's estimated monthly egress together
  * @var string $httpUrl @var string $httpInterval @var ?string $httpError @var ?string $intervalError
  * @var ?string $notice the warning of the last change, shown once
+ * @var \Maguari\Server\Monitoring\Domain\ClientCheckStatus[] $clientChecks
+ * @var \Maguari\Server\Monitoring\Domain\ClientCheckSettings $clientCheckSettings what the client should have
+ * @var ?\Maguari\Server\Clients\ReportedCheckSettings $reportedCheckSettings null before the client's first heartbeat
+ * @var ?string $clientVersion @var string $unit @var ?string $unitError
  * @var int $now
  */
+use Maguari\Server\Clients\ReportedCheckSettings;
 use Maguari\Server\Http\TimeAgo;
 use Maguari\Server\Monitoring\Domain\CertificateExpiryRule;
 use Maguari\Server\Monitoring\Domain\CertificateHostname;
+use Maguari\Server\Monitoring\Domain\ClientCheck;
+use Maguari\Server\Monitoring\Domain\ConfirmedFailures;
 use Maguari\Server\Monitoring\Domain\HttpCheck;
 use Maguari\Server\Monitoring\Domain\HttpCheckEgress;
 use Maguari\Server\Monitoring\Domain\HttpCheckRule;
@@ -98,6 +105,44 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 </form>
 <?php else: ?>
 <p>This instance has the most web app checks allowed (<?= HttpCheck::MAX_PER_INSTANCE ?>). Remove one to add another.</p>
+<?php endif; ?>
+<h2>Services</h2>
+<p>The client checks each service with systemctl before every heartbeat and reports whether it is active. A service fails after <?= ConfirmedFailures::FAILURES_TO_FAIL ?> failed results in a row, so a restart in progress opens no incident. The client gets a change with the response to its next heartbeat.</p>
+<?php if ($reportedCheckSettings === null): ?>
+<p>The client has not sent a heartbeat yet. It gets these checks with its first one.</p>
+<?php elseif (!$reportedCheckSettings->supported): ?>
+<p>This client<?= $clientVersion === null ? '' : ' (version ' . $e($clientVersion) . ')' ?> does not run checks. It needs version <?= ReportedCheckSettings::SINCE_CLIENT_VERSION ?> or later.</p>
+<?php elseif ($reportedCheckSettings->version !== $clientCheckSettings->version): ?>
+<p>Waiting for the client to pick up the latest change with its next heartbeat.</p>
+<?php endif; ?>
+<?php if ($clientChecks === []): ?>
+<p>None yet.</p>
+<?php else: ?>
+<table>
+<thead><tr><th>Service</th><th>Result</th><th>Checked</th><th></th></tr></thead>
+<tbody>
+<?php foreach ($clientChecks as $status): ?>
+<?php $checkedAt = $status->state?->checkedAt; ?>
+<tr><td><?= $e($status->check->target) ?></td><td><?= $e($status->outcome()->label()) ?><?= $partial('info', ['text' => $status->detail()]) ?></td><td><?= $checkedAt === null ? '' : $e(TimeAgo::format(max(0, $now - $checkedAt))) ?></td><td><form method="post" action="/admin/instances/<?= $instance->id ?>/client-checks/<?= $status->check->id ?>/remove">
+<?= $csrf ?>
+<button type="submit">Remove</button>
+</form></td></tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
+<?php if (count($clientChecks) < ClientCheck::MAX_SERVICES_PER_INSTANCE): ?>
+<?php if ($unitError !== null): ?>
+<p><?= $e($unitError) ?></p>
+<?php endif; ?>
+<form method="post" action="/admin/instances/<?= $instance->id ?>/services">
+<?= $csrf ?>
+<p><label for="unit">Service</label><br>
+<input id="unit" name="unit" type="text" value="<?= $e($unit) ?>" placeholder="nginx.service" autocomplete="off" spellcheck="false" required></p>
+<p><button type="submit">Add service</button></p>
+</form>
+<?php else: ?>
+<p>This instance has the most service checks allowed (<?= ClientCheck::MAX_SERVICES_PER_INSTANCE ?>). Remove one to add another.</p>
 <?php endif; ?>
 <h2>Certificates</h2>
 <?= $partial('daily-job-status', ['run' => $lastRun]) ?>

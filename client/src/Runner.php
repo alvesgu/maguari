@@ -36,7 +36,11 @@ final class Runner
 
         for ($sent = 0; $heartbeats === null || $sent < $heartbeats; $sent++) {
             try {
-                $this->sender->send($credentials);
+                $notice = $this->sender->send($credentials);
+
+                if ($notice !== null) {
+                    ($this->log)($notice);
+                }
 
                 if ($failing) {
                     ($this->log)('Heartbeats are getting through again.');

@@ -75,11 +75,36 @@ final class ClientRepository
         return $instanceId === false ? null : (int) $instanceId;
     }
 
-    public function recordHeartbeat(string $clientId, int $receivedAt, string $clientVersion, int $protocolVersion): void
+    public function recordHeartbeat(string $clientId, int $receivedAt, string $clientVersion, int $protocolVersion, ReportedCheckSettings $settings): void
     {
         $this->database->pdo()->prepare(
-            'UPDATE clients_clients SET last_heartbeat_at = ?, client_version = ?, protocol_version = ? WHERE client_id = ?',
-        )->execute([$receivedAt, $clientVersion, $protocolVersion, $clientId]);
+            'UPDATE clients_clients SET last_heartbeat_at = ?, client_version = ?, protocol_version = ?, check_settings_supported = ?, check_settings_version = ? WHERE client_id = ?',
+        )->execute([$receivedAt, $clientVersion, $protocolVersion, $settings->supported ? 1 : 0, $settings->version, $clientId]);
+    }
+
+    /**
+     * @param int[] $instanceIds
+     * @return array<int, ReportedCheckSettings> by instance ID, for those of
+     *         $instanceIds whose client has sent a heartbeat
+     */
+    public function reportedCheckSettingsAmong(array $instanceIds): array
+    {
+        if ($instanceIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($instanceIds), '?'));
+        $statement = $this->database->pdo()->prepare(
+            "SELECT instance_id, check_settings_supported, check_settings_version FROM clients_clients WHERE last_heartbeat_at IS NOT NULL AND instance_id IN ({$placeholders})",
+        );
+        $statement->execute(array_values($instanceIds));
+        $reported = [];
+
+        foreach ($statement->fetchAll() as $row) {
+            $reported[(int) $row['instance_id']] = new ReportedCheckSettings((int) $row['check_settings_supported'] === 1, $row['check_settings_version']);
+        }
+
+        return $reported;
     }
 
     /**

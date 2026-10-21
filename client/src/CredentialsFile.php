@@ -33,54 +33,29 @@ final class CredentialsFile
         return new self(is_string($directory) && $directory !== '' ? $directory : self::DEFAULT_DIRECTORY);
     }
 
+    public function directory(): string
+    {
+        return $this->directory;
+    }
+
     public function path(): string
     {
         return $this->directory . '/' . self::FILE_NAME;
     }
 
     /**
-     * Replaces the file atomically: a temporary file is created with mode 0600
-     * before anything is written to it, then renamed into place. If anything
-     * fails, the existing file is left untouched.
+     * Replaces the file atomically (PrivateFile). If anything fails, the
+     * existing file is left untouched.
      *
      * @throws ClientFailure
      */
     public function save(Credentials $credentials): void
     {
-        $previousUmask = umask(0077);
-        $temporary = $this->directory . '/.' . self::FILE_NAME . '.' . bin2hex(random_bytes(6));
-
-        try {
-            if (!is_dir($this->directory) && !@mkdir($this->directory, 0700, true) && !is_dir($this->directory)) {
-                throw new ClientFailure(sprintf('Cannot create the directory %s for the credentials file.', $this->directory));
-            }
-
-            $handle = @fopen($temporary, 'x');
-
-            if ($handle === false) {
-                throw new ClientFailure(sprintf('Cannot write the credentials file in %s.', $this->directory));
-            }
-
-            chmod($temporary, 0600);
-            $json = json_encode([
-                'server_url' => $credentials->serverUrl,
-                'client_id' => $credentials->clientId,
-                'secret' => rtrim(strtr(base64_encode($credentials->secret), '+/', '-_'), '='),
-            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n";
-            $written = fwrite($handle, $json);
-            fflush($handle);
-            fclose($handle);
-
-            if ($written !== strlen($json) || !@rename($temporary, $this->path())) {
-                throw new ClientFailure(sprintf('Cannot write the credentials file %s.', $this->path()));
-            }
-        } finally {
-            if (is_file($temporary)) {
-                @unlink($temporary);
-            }
-
-            umask($previousUmask);
-        }
+        PrivateFile::write($this->path(), json_encode([
+            'server_url' => $credentials->serverUrl,
+            'client_id' => $credentials->clientId,
+            'secret' => rtrim(strtr(base64_encode($credentials->secret), '+/', '-_'), '='),
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n", 'credentials file');
     }
 
     /**
@@ -95,9 +70,7 @@ final class CredentialsFile
             throw new ClientFailure(sprintf('This client is not enrolled: %s does not exist. Run maguari-client enroll first.', $path));
         }
 
-        $permissions = @fileperms($path);
-
-        if ($permissions === false || ($permissions & 0077) !== 0) {
+        if (!PrivateFile::isPrivate($path)) {
             throw new ClientFailure(sprintf(
                 'The credentials file %s must be readable only by its owner. Fix it with: chmod 600 %s',
                 $path,

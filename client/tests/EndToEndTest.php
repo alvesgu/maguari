@@ -10,6 +10,7 @@ use Maguari\Client\CredentialsFile;
 use Maguari\Client\DiskUsage;
 use Maguari\Client\Tests\Support\FakeClock;
 use Maguari\Client\Tests\Support\FakeFilesystemStats;
+use Maguari\Client\Tests\Support\FakeSystemctl;
 use Maguari\Client\Tests\Support\TemporaryDirectory;
 use Maguari\Client\Transport;
 use Maguari\Client\TransportResponse;
@@ -28,6 +29,9 @@ final class EndToEndTest extends TestCase
     private TestEnvironment $server;
     private TemporaryDirectory $directory;
     private Transport $transport;
+    private FakeSystemctl $systemctl;
+    /** The last client command's standard output. */
+    private string $stdout = '';
     /** @var array<string, array{int, int}> total and free bytes, by mount point */
     private array $sizes = ['/' => [10_000_000, 4_000_000], '/boot' => [1_000_000, 900_000]];
 
@@ -35,6 +39,7 @@ final class EndToEndTest extends TestCase
     {
         $this->server = new TestEnvironment();
         $this->directory = new TemporaryDirectory();
+        $this->systemctl = new FakeSystemctl();
         $server = $this->server;
         $this->transport = new class ($server) implements Transport {
             public function __construct(private readonly TestEnvironment $server)
@@ -95,9 +100,12 @@ final class EndToEndTest extends TestCase
         $stderr = fopen('php://memory', 'w+');
         // The client's clock agrees with the server's.
         $clock = new FakeClock($this->server->clock->now());
-        $cli = new Cli($this->transport, $clock, $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
+        $stdout = fopen('php://memory', 'w+');
+        $cli = new Cli($this->transport, $clock, $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), $this->systemctl, 1000, $stdout, $stderr);
         $status = $cli->run(array_merge(['maguari-client'], $args));
         rewind($stderr);
+        rewind($stdout);
+        $this->stdout = (string) stream_get_contents($stdout);
 
         return [$status, (string) stream_get_contents($stderr)];
     }
@@ -162,7 +170,7 @@ final class EndToEndTest extends TestCase
         $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $token]);
         $this->server->clock->advance(400);
         $stderr = fopen('php://memory', 'w+');
-        $cli = new Cli($this->transport, new FakeClock($this->server->clock->now() - 400), $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), 1000, fopen('php://memory', 'w+'), $stderr);
+        $cli = new Cli($this->transport, new FakeClock($this->server->clock->now() - 400), $this->diskUsage(), $this->certificates(), new CredentialsFile($this->directory->path), $this->systemctl, 1000, fopen('php://memory', 'w+'), $stderr);
 
         $this->assertSame(1, $cli->run(['maguari-client', 'heartbeat']));
         rewind($stderr);
@@ -179,5 +187,58 @@ final class EndToEndTest extends TestCase
         $this->assertNotSame($old->clientId, (new CredentialsFile($this->directory->path))->load()->clientId);
         [$status] = $this->client(['heartbeat']);
         $this->assertSame(0, $status);
+    }
+
+    /**
+     * @return array<string, array{string, string}> outcome and sentence by unit
+     */
+    private function serviceStates(): array
+    {
+        $states = [];
+
+        foreach ($this->server->monitoring->clientCheckStatuses([7])[7] ?? [] as $status) {
+            $states[$status->check->target] = [$status->outcome()->value, $status->detail()];
+        }
+
+        return $states;
+    }
+
+    public function testServiceChecksTravelOnlyWhenTheyChangeAndFailAfterTwoInARow(): void
+    {
+        $this->client(['enroll', '--server=http://localhost:8080', '--token=' . $this->server->clients->issueEnrollmentToken(7)->token]);
+        $monitoring = $this->server->monitoring;
+        $monitoring->addServiceCheck(7, 'nginx');
+        $this->systemctl->unit('nginx.service', 'active');
+
+        // The first heartbeat says it has no settings and gets them.
+        [$status, $stderr] = $this->client(['heartbeat']);
+        $this->assertSame(0, $status, $stderr);
+        $version = $monitoring->clientCheckSettings(7)->version;
+        $this->assertStringContainsString("Received check settings {$version}: 1 check.", $this->stdout);
+        $this->assertSame([], $this->systemctl->shown, 'Nothing was checked before the settings arrived.');
+
+        // The next one reports the result, and the answer is empty again.
+        $this->server->clock->advance(60);
+        $this->client(['heartbeat']);
+        $this->assertSame("Heartbeat accepted by http://localhost:8080.\n", $this->stdout);
+        $this->assertSame(['nginx.service' => ['pass', 'nginx.service is active.']], $this->serviceStates());
+        $reported = $this->server->clients->reportedCheckSettings([7])[7];
+        $this->assertSame([true, $version], [$reported->supported, $reported->version]);
+
+        // A stopped service fails on the second failed result in a row.
+        $this->systemctl->unit('nginx.service', 'failed');
+        $this->server->clock->advance(60);
+        $this->client(['heartbeat']);
+        $this->assertSame('pass', $this->serviceStates()['nginx.service'][0], 'One failure does not count yet.');
+        $this->server->clock->advance(60);
+        $this->client(['heartbeat']);
+        $this->assertSame(['nginx.service' => ['fail', 'nginx.service is failed, not active.']], $this->serviceStates());
+        $this->assertSame(['monitoring.check_passed', 'monitoring.check_failed'], $this->server->database->pdo()->query('SELECT type FROM kernel_events ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN));
+
+        // A new check reaches the client with the next heartbeat.
+        $monitoring->addServiceCheck(7, 'php8.3-fpm.service');
+        $this->server->clock->advance(60);
+        $this->client(['heartbeat']);
+        $this->assertStringContainsString(': 2 checks.', $this->stdout);
     }
 }

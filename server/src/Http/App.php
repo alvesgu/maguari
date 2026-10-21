@@ -196,7 +196,7 @@ final class App
             $adminController = new AdminController($fleet, $clients, $monitoring, $notifications, $view, $logErrors);
             $notificationsController = new NotificationsController($notifications, $fleet, $view);
             $projectsController = new ProjectsController($fleet, $clients, $access, $monitoring, $view);
-            $instancesController = new InstancesController($fleet, $monitoring, $remediation, $view, $clock);
+            $instancesController = new InstancesController($fleet, $monitoring, $remediation, $clients, $view, $clock);
             $runsController = new RunsController($fleet, $monitoring);
             $emailController = new EmailController($access, $notifications, $view, $logErrors);
             $enrollController = new EnrollController($clients);
@@ -221,6 +221,8 @@ final class App
                 $group->post('/instances/{id:[0-9]+}/http-checks', [$instancesController, 'addHttpCheck']);
                 $group->post('/instances/{id:[0-9]+}/http-checks/{checkId:[0-9]+}/interval', [$instancesController, 'changeHttpCheckInterval']);
                 $group->post('/instances/{id:[0-9]+}/http-checks/{checkId:[0-9]+}/remove', [$instancesController, 'removeHttpCheck']);
+                $group->post('/instances/{id:[0-9]+}/services', [$instancesController, 'addService']);
+                $group->post('/instances/{id:[0-9]+}/client-checks/{checkId:[0-9]+}/remove', [$instancesController, 'removeClientCheck']);
                 $group->get('/email', [$emailController, 'show']);
                 $group->post('/email', [$emailController, 'save']);
                 $group->post('/email/import-seed', [$emailController, 'importSeed']);

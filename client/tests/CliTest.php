@@ -9,6 +9,7 @@ use Maguari\Client\Cli;
 use Maguari\Client\CredentialsFile;
 use Maguari\Client\DiskUsage;
 use Maguari\Client\Tests\Support\FakeClock;
+use Maguari\Client\Tests\Support\FakeSystemctl;
 use Maguari\Client\Tests\Support\FakeFilesystemStats;
 use Maguari\Client\Tests\Support\FakeTransport;
 use Maguari\Client\Tests\Support\TemporaryDirectory;
@@ -42,7 +43,7 @@ final class CliTest extends TestCase
     {
         $stdout = fopen('php://memory', 'w+');
         $stderr = fopen('php://memory', 'w+');
-        $status = (new Cli($this->transport, new FakeClock(), new DiskUsage(new FakeFilesystemStats(), __DIR__ . '/fixtures/mounts-gce'), new CertificateExpiry(__DIR__ . '/fixtures/missing'), $this->credentialsFile, $userId, $stdout, $stderr))
+        $status = (new Cli($this->transport, new FakeClock(), new DiskUsage(new FakeFilesystemStats(), __DIR__ . '/fixtures/mounts-gce'), new CertificateExpiry(__DIR__ . '/fixtures/missing'), $this->credentialsFile, new FakeSystemctl(), $userId, $stdout, $stderr))
             ->run(array_merge(['maguari-client'], $args));
         rewind($stdout);
         rewind($stderr);

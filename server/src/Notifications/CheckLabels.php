@@ -17,6 +17,7 @@ final class CheckLabels
         'local_certificate' => 'Certificate on the instance',
         'remote_certificate' => 'Served certificate',
         'remote_http' => 'Web app',
+        'service' => 'Service',
     ];
 
     /**

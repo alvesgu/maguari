@@ -6,12 +6,14 @@ namespace Maguari\Server\Clients;
 
 use Maguari\Server\Clients\Exception\InvalidClientRequest;
 use Maguari\Server\Clients\Exception\UnsupportedProtocol;
+use Maguari\Shared\Protocol;
 
 /**
  * The body of POST /api/client/heartbeat (design section 5.2). readings,
- * checks and command_results are optional lists. The readings are kept as
- * decoded, for Monitoring to validate; checks and command_results are accepted
- * but not used until later steps.
+ * checks and command_results are optional lists. The readings and checks are
+ * kept as decoded, for Monitoring to validate; command_results are accepted
+ * but not used until later steps. check_settings_version is optional: a
+ * client that sends it, even as null, understands check_settings.
  */
 final class HeartbeatRequest
 {
@@ -23,6 +25,9 @@ final class HeartbeatRequest
         public readonly int $sentAt,
         /** @var list<mixed> */
         public readonly array $readings,
+        /** @var list<mixed> */
+        public readonly array $checks,
+        public readonly ReportedCheckSettings $checkSettings,
     ) {
     }
 
@@ -54,6 +59,13 @@ final class HeartbeatRequest
             }
         }
 
-        return new self($protocolVersion, $clientVersion, $sentAt, $data['readings'] ?? []);
+        $supported = array_key_exists('check_settings_version', $data);
+        $version = $data['check_settings_version'] ?? null;
+
+        if ($version !== null && (!is_string($version) || preg_match(Protocol::CHECK_SETTINGS_VERSION_PATTERN, $version) !== 1)) {
+            throw new InvalidClientRequest('check_settings_version must be null or 16 lowercase hex characters.');
+        }
+
+        return new self($protocolVersion, $clientVersion, $sentAt, $data['readings'] ?? [], $data['checks'] ?? [], new ReportedCheckSettings($supported, $version));
     }
 }

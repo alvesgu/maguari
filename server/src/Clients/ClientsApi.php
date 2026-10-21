@@ -12,6 +12,7 @@ use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretDecryptionFailed;
+use Maguari\Server\Monitoring\Exception\InvalidCheckResults;
 use Maguari\Server\Monitoring\Exception\InvalidReadings;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Shared\ErrorCode;
@@ -164,34 +165,64 @@ final class ClientsApi
 
     /**
      * Records a heartbeat from an authenticated client and hands it, with its
-     * readings, to Monitoring (design section 2.1), which judges heartbeat
-     * ages. The time stored is the server's, not the client's sent_at, and
-     * Monitoring gets the same time. Everything is
-     * validated before anything is written, so a rejected heartbeat writes
-     * nothing.
+     * readings and check results, to Monitoring (design section 2.1), which
+     * judges them. The time stored is the server's, not the client's sent_at,
+     * and Monitoring gets the same time. Everything is validated before
+     * anything is written, so a rejected heartbeat writes nothing. Events are
+     * left for the tick to deliver.
      *
+     * @return ?array{check_settings: array{version: string, checks: list<array<string, string>>}}
+     *         the response body: the instance's check settings when the
+     *         client understands them and has another version (design
+     *         section 5.2); null for 204
      * @throws InvalidClientRequest
      * @throws UnsupportedProtocol
      */
-    public function recordHeartbeat(string $clientId, string $requestBody): void
+    public function recordHeartbeat(string $clientId, string $requestBody): ?array
     {
         $heartbeat = HeartbeatRequest::parse($requestBody, $clientId, self::SUPPORTED_PROTOCOL_VERSIONS);
 
         try {
             $readings = $this->monitoring->parseReadings($heartbeat->readings);
-        } catch (InvalidReadings $invalid) {
+            $results = $this->monitoring->parseCheckResults($heartbeat->checks);
+        } catch (InvalidReadings | InvalidCheckResults $invalid) {
             throw new InvalidClientRequest($invalid->getMessage(), 0, $invalid);
         }
 
         $now = $this->clock->now();
-        $this->clients->recordHeartbeat($clientId, $now, $heartbeat->clientVersion, $heartbeat->protocolVersion);
+        $this->clients->recordHeartbeat($clientId, $now, $heartbeat->clientVersion, $heartbeat->protocolVersion, $heartbeat->checkSettings);
         $instanceId = $this->clients->instanceId($clientId);
 
         // Two writes, not one transaction, because transactions do not nest.
         // Null only if the client was replaced since it was authenticated.
-        if ($instanceId !== null) {
-            $this->monitoring->recordHeartbeat($instanceId, $now, $readings);
+        if ($instanceId === null) {
+            return null;
         }
+
+        $this->monitoring->recordHeartbeat($instanceId, $now, $readings, $results);
+
+        // Older clients never send the field, so they never get a body they
+        // would take for an error.
+        if (!$heartbeat->checkSettings->supported) {
+            return null;
+        }
+
+        $settings = $this->monitoring->clientCheckSettings($instanceId);
+
+        return $settings->version === $heartbeat->checkSettings->version ? null : ['check_settings' => $settings->toArray()];
+    }
+
+    /**
+     * What each client's last heartbeat said about its check settings, so
+     * pages can tell whether it has the current ones.
+     *
+     * @param int[] $instanceIds
+     * @return array<int, ReportedCheckSettings> by instance ID, for those of
+     *         $instanceIds whose client has sent a heartbeat
+     */
+    public function reportedCheckSettings(array $instanceIds): array
+    {
+        return $this->clients->reportedCheckSettingsAmong($instanceIds);
     }
 
     /**

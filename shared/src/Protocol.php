@@ -30,6 +30,18 @@ final class Protocol
      */
     public const CLOCK_WINDOW_SECONDS = 300;
 
+    /**
+     * A check settings version (design section 5.2): the first 16 hex
+     * characters of the SHA-256 of the settings' canonical JSON.
+     */
+    public const CHECK_SETTINGS_VERSION_PATTERN = '/^[0-9a-f]{16}$/D';
+
+    /** The most check results one heartbeat may carry. */
+    public const MAX_CHECK_RESULTS = 50;
+
+    /** A local check that did not start before the client's time for checks ran out. */
+    public const CHECK_REASON_TIME_LIMIT = 'time_limit';
+
     // Signed request headers (design section 5.5).
     public const HEADER_CLIENT = 'X-Maguari-Client';
     public const HEADER_TIMESTAMP = 'X-Maguari-Timestamp';
