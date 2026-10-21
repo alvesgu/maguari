@@ -11,6 +11,7 @@ use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Kernel\Events\Subscriber;
 use Maguari\Server\Kernel\Secrets\SecretBox;
 use Maguari\Server\Kernel\Secrets\SecretDecryptionFailed;
+use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Notifications\Exception\EmailNotSent;
 use Maguari\Server\Notifications\Exception\EmailNotSetUp;
 use Maguari\Server\Notifications\Exception\InvalidSmtpSettings;
@@ -36,8 +37,12 @@ final class NotificationsApi
     /** Hourly, like Remediation's reconciliation. */
     public const RECONCILE_EVERY_SECONDS = 3_600;
 
-    /** The sentence of a notification the reconciliation creates: the incident's own is not kept. */
-    public const RECONCILED_DETAIL = 'Opened by reconciliation; see the instance page for details.';
+    /**
+     * The sentence of a notification the reconciliation creates when
+     * Monitoring has none for the failing check. It does not say who opened
+     * the incident: often only the notification was missing.
+     */
+    public const NO_DETAIL = 'See the instance page for details.';
 
     /**
      * An alert is tried for this long, then given up. An incident still open
@@ -137,6 +142,9 @@ final class NotificationsApi
      * no longer open is resolved now. One transaction. Run by the tick when
      * no event is pending.
      *
+     * A created notification gets the latest sentence Monitoring stored for
+     * the failing check (the incident's own is not kept), or NO_DETAIL.
+     *
      * Alerts: a created notification sends "opened", saying the incident was
      * detected late. So does every notification whose incident is still open
      * and whose "opened" email was neither sent nor pending (given up), while
@@ -146,11 +154,11 @@ final class NotificationsApi
      *
      * @return ?NotificationReconciliation null when not due
      */
-    public function reconcileIfDue(RemediationApi $remediation): ?NotificationReconciliation
+    public function reconcileIfDue(RemediationApi $remediation, MonitoringApi $monitoring): ?NotificationReconciliation
     {
         $at = $this->clock->now();
 
-        return $this->database->transaction(function () use ($remediation, $at): ?NotificationReconciliation {
+        return $this->database->transaction(function () use ($remediation, $monitoring, $at): ?NotificationReconciliation {
             $last = $this->notifications->lastReconciledAt();
 
             if ($last !== null && $at - $last <= self::RECONCILE_EVERY_SECONDS) {
@@ -173,7 +181,8 @@ final class NotificationsApi
                 }
 
                 $key = $incident->key;
-                $id = (int) $this->notifications->add($incidentId, $key->instanceId, $key->checkName, $key->subject, $incident->openedAt, self::RECONCILED_DETAIL);
+                $detail = $monitoring->failingSentence($key->instanceId, $key->checkName, $key->subject) ?? self::NO_DETAIL;
+                $id = (int) $this->notifications->add($incidentId, $key->instanceId, $key->checkName, $key->subject, $incident->openedAt, $detail);
                 $created[] = $this->notifications->find($id) ?? throw new \LogicException('The notification just added is missing.');
                 $this->alerts->add($id, AlertKind::Opened, $at, late: true);
             }

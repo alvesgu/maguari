@@ -344,7 +344,7 @@ final class AlertsTest extends TestCase
         $this->environment->clock->advance(3 * 86_400);
         $this->openIncidentUnseen(1);
 
-        $reconciliation = $this->environment->notifications->reconcileIfDue($this->environment->remediation);
+        $reconciliation = $this->environment->notifications->reconcileIfDue($this->environment->remediation, $this->environment->monitoring);
         $this->send();
 
         $this->assertCount(2, $reconciliation?->created ?? []);
@@ -352,7 +352,7 @@ final class AlertsTest extends TestCase
         $this->assertSame(['[Maguari] Incident on web-01: Heartbeat age', '[Maguari] Incident on web-02: Heartbeat age'], array_map(static fn (Email $email): string => $email->subject, $this->sent()));
         $this->assertStringStartsWith(
             "An incident opened on web-01: Heartbeat age.\n\nDetected late: failing since " . gmdate('Y-m-d H:i', $oldAt) . " UTC.\n\n"
-                . "Opened by reconciliation; see the instance page for details.\n\n",
+                . "See the instance page for details.\n\n",
             $this->sent()[0]->body,
         );
     }
@@ -401,7 +401,7 @@ final class AlertsTest extends TestCase
         $this->send();
         $this->assertSame(['opened', 'opened'], array_column($this->alertRows(), 'kind'));
 
-        $notifications->reconcileIfDue($remediation);
+        $notifications->reconcileIfDue($remediation, $this->environment->monitoring);
         $this->assertCount(2, $this->alertRows(), 'Nothing queued while email is not set up.');
 
         // Email is set up, and one incident resolves in the meantime.
@@ -412,7 +412,7 @@ final class AlertsTest extends TestCase
         $deliverAll();
         $this->environment->clock->advance(3601);
 
-        $reconciliation = $notifications->reconcileIfDue($remediation);
+        $reconciliation = $notifications->reconcileIfDue($remediation, $this->environment->monitoring);
         $this->send();
 
         $this->assertSame([1], array_map(static fn ($notification): int => $notification->incidentId, $reconciliation?->lateAlerts ?? []));
@@ -424,7 +424,7 @@ final class AlertsTest extends TestCase
 
         // Sent: nothing more on later reconciliations.
         $this->environment->clock->advance(3601);
-        $this->assertSame([], $notifications->reconcileIfDue($remediation)?->lateAlerts);
+        $this->assertSame([], $notifications->reconcileIfDue($remediation, $this->environment->monitoring)?->lateAlerts);
     }
 
     public function testReconciliationSendsResolvedOnlyWhenOpenedWasNotGivenUp(): void
@@ -437,7 +437,7 @@ final class AlertsTest extends TestCase
         $this->publish($this->opened(2, 1));
         $this->send();
         // Neither incident is open in Remediation: both notifications are stale.
-        $this->environment->notifications->reconcileIfDue($this->environment->remediation);
+        $this->environment->notifications->reconcileIfDue($this->environment->remediation, $this->environment->monitoring);
 
         $this->send();
 

@@ -161,7 +161,7 @@ final class IncidentNotificationsTest extends TestCase
         $this->deliver();
         $this->environment->clock->advance(60);
 
-        $reconciliation = $notifications->reconcileIfDue($remediation);
+        $reconciliation = $notifications->reconcileIfDue($remediation, $this->environment->monitoring);
 
         $this->assertNotNull($reconciliation);
         $this->assertSame([1, 2], self::incidentIds($reconciliation->created), 'Oldest first.');
@@ -175,16 +175,36 @@ final class IncidentNotificationsTest extends TestCase
         );
     }
 
+    public function testReconciliationTakesTheSentenceOfTheFailingCheckFromMonitoring(): void
+    {
+        $this->openIncidentWithoutNotification(7, 'disk_size');
+        $this->openIncidentWithoutNotification(8, 'disk_size');
+        $this->openIncidentWithoutNotification(9, 'disk_size');
+        // Instance 7 is still failing, 8 passes again (its incident waits),
+        // and 9 has no outcome in Monitoring.
+        $this->environment->database->pdo()->exec(
+            "INSERT INTO monitoring_check_states (instance_id, check_name, subject, outcome, since, detail) VALUES "
+                . "(7, 'disk_size', '', 'fail', 0, 'Grown.'), (8, 'disk_size', '', 'pass', 0, 'Fine.')",
+        );
+
+        $reconciliation = $this->environment->notifications->reconcileIfDue($this->environment->remediation, $this->environment->monitoring);
+
+        $this->assertSame(
+            ['Grown.', 'See the instance page for details.', 'See the instance page for details.'],
+            array_map(static fn ($notification): string => $notification->detail, $reconciliation?->created ?? []),
+        );
+    }
+
     public function testReconciliationRunsAtOnceWhenItNeverRanAndThenOnceAnHour(): void
     {
         $notifications = $this->environment->notifications;
         $remediation = $this->environment->remediation;
 
-        $this->assertNotNull($notifications->reconcileIfDue($remediation));
+        $this->assertNotNull($notifications->reconcileIfDue($remediation, $this->environment->monitoring));
         $this->environment->clock->advance(3_600);
-        $this->assertNull($notifications->reconcileIfDue($remediation), 'Exactly an hour later is not more than an hour.');
+        $this->assertNull($notifications->reconcileIfDue($remediation, $this->environment->monitoring), 'Exactly an hour later is not more than an hour.');
         $this->environment->clock->advance(1);
-        $first = $notifications->reconcileIfDue($remediation);
+        $first = $notifications->reconcileIfDue($remediation, $this->environment->monitoring);
         $this->assertNotNull($first);
         $this->assertSame([], $first->created);
         $this->assertSame([], $first->resolved);

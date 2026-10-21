@@ -150,6 +150,19 @@ final class MonitoringApi
     }
 
     /**
+     * The latest sentence Monitoring stored for the check while it is
+     * failing, or null when it is not failing or none was stored. For
+     * Notifications' hourly reconciliation (design section 10.4 item 8).
+     * Reads only SQLite.
+     */
+    public function failingSentence(int $instanceId, string $checkName, string $subject): ?string
+    {
+        $state = $this->checkStates->find($instanceId, $checkName, $subject);
+
+        return $state?->outcome === CheckOutcome::Fail ? $state->detail : null;
+    }
+
+    /**
      * When the check started passing, or null when it is failing or has no
      * outcome (never checked, only "not checked", or withdrawn).
      */

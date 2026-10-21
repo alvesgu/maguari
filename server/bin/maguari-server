@@ -364,7 +364,7 @@ function tickCommand(array $args): int
     $lastReport = $reports[count($reports) - 1];
     $notificationReconciliation = $lastReport->stopped() || $lastReport->limitReached || count($reports) === 1
         ? null
-        : $notifications->reconcileIfDue($remediation);
+        : $notifications->reconcileIfDue($remediation, $monitoring);
 
     // (e) Alert emails, outside any transaction, after everything above
     // is committed, so a slow SMTP server never holds up incidents.
