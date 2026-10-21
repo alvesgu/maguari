@@ -12,6 +12,7 @@
  * @var \Maguari\Server\Monitoring\Domain\HttpCheckStatus[] $httpChecks
  * @var int $httpEgressBytes every remote HTTP check's estimated monthly egress together
  * @var string $httpUrl @var string $httpInterval @var ?string $httpError @var ?string $intervalError
+ * @var ?string $notice the warning of the last change, shown once
  * @var int $now
  */
 use Maguari\Server\Http\TimeAgo;
@@ -56,9 +57,12 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <?php endif; ?>
 <h2>Web apps</h2>
 <p>The server requests each URL on its interval, as visitors do, and reads only the status of the answer: 2xx and 3xx pass (redirects are not followed), anything else fails. A failed request is tried once more <?= HttpCheckRule::RETRY_AFTER_SECONDS ?> seconds later before it counts. A new URL is checked within a minute.</p>
-<p>Each request costs the server about <?= intdiv(HttpCheckEgress::BYTES_PER_CHECK, 1024) ?> KB of egress, which the free tier limits to 1 GB a month: <?= HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(HttpCheck::DEFAULT_INTERVAL_MINUTES * 60)) ?> MB a month at the default <?= HttpCheck::DEFAULT_INTERVAL_MINUTES ?> minutes, <?= HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(60)) ?> MB at 1 minute. All web app checks together use about <?= HttpCheckEgress::megabytes($httpEgressBytes) ?> MB of the <?= HttpCheckEgress::megabytes(HttpCheckEgress::MONTHLY_BUDGET_BYTES) ?> MB set aside for them.</p>
+<p>Each request costs the server about <?= intdiv(HttpCheckEgress::BYTES_PER_CHECK, 1024) ?> KB of egress, which the free tier limits to 1 GB a month: <?= HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(HttpCheck::DEFAULT_INTERVAL_MINUTES * 60)) ?> MB a month at the default <?= HttpCheck::DEFAULT_INTERVAL_MINUTES ?> minutes, <?= HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(60)) ?> MB at 1 minute. All web app checks together use about <?= HttpCheckEgress::megabytes($httpEgressBytes) ?> MB a month. Up to <?= HttpCheckEgress::megabytes(HttpCheckEgress::MONTHLY_BUDGET_BYTES) ?> MB is suggested; above it a change saves with a warning, and above <?= HttpCheckEgress::megabytes(HttpCheckEgress::MONTHLY_LIMIT_BYTES) ?> MB it is refused.</p>
+<?php if ($notice !== null): ?>
+<p><?= $e($notice) ?></p>
+<?php endif; ?>
 <?php if ($intervalError !== null): ?>
-<p>The interval was not changed: <?= $e($intervalError) ?></p>
+<p><?= $e($intervalError) ?></p>
 <?php endif; ?>
 <?php if ($httpChecks === []): ?>
 <p>None yet.</p>

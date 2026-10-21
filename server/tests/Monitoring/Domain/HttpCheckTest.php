@@ -107,16 +107,37 @@ final class HttpCheckTest extends TestCase
         $this->assertSame(2800, $check->nextDueAfter(2200), 'Missed slots are skipped, not caught up.');
     }
 
-    public function testEgressEstimatesMatchTheDesignTable(): void
+    public function testEgressEstimatesMatchTheDesign(): void
     {
-        $this->assertSame(183, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(60)));
-        $this->assertSame(37, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(300)));
-        $this->assertSame(18, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(600)));
-        $this->assertSame(3, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(3600)));
-        $this->assertSame(4464 * 4096, HttpCheckEgress::monthlyBytes(600));
-        $this->assertLessThanOrEqual(HttpCheckEgress::MONTHLY_BUDGET_BYTES, HttpCheckEgress::totalMonthlyBytes(array_fill(0, 10, 600)), '10 at the default fit.');
-        $this->assertGreaterThan(HttpCheckEgress::MONTHLY_BUDGET_BYTES, HttpCheckEgress::totalMonthlyBytes(array_fill(0, 11, 600)), '11 do not.');
-        $this->assertSame(202, HttpCheckEgress::megabytes(HttpCheckEgress::totalMonthlyBytes(array_fill(0, 11, 600)), roundUp: true));
+        $this->assertSame(91, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(60)));
+        $this->assertSame(18, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(300)));
+        $this->assertSame(9, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(600)));
+        $this->assertSame(2, HttpCheckEgress::megabytes(HttpCheckEgress::monthlyBytes(3600)));
+        $this->assertSame(4464 * 2048, HttpCheckEgress::monthlyBytes(600));
+        $this->assertLessThanOrEqual(HttpCheckEgress::MONTHLY_BUDGET_BYTES, HttpCheckEgress::totalMonthlyBytes(array_fill(0, 21, 600)), '21 at the default stay within the budget.');
+        $this->assertGreaterThan(HttpCheckEgress::MONTHLY_BUDGET_BYTES, HttpCheckEgress::totalMonthlyBytes(array_fill(0, 22, 600)));
+        $this->assertLessThanOrEqual(HttpCheckEgress::MONTHLY_LIMIT_BYTES, HttpCheckEgress::totalMonthlyBytes(array_fill(0, 54, 600)), '54 at the default stay within the limit.');
+        $this->assertGreaterThan(HttpCheckEgress::MONTHLY_LIMIT_BYTES, HttpCheckEgress::totalMonthlyBytes(array_fill(0, 55, 600)));
+    }
+
+    public function testExcessSaysTheShortestIntervalThatFits(): void
+    {
+        $minute = HttpCheckEgress::monthlyBytes(60);
+
+        $this->assertNull(HttpCheckEgress::excess(0, 60));
+        $this->assertNull(HttpCheckEgress::excess($minute, 60), 'Two at 1 minute stay within the budget.');
+
+        $warning = HttpCheckEgress::excess(21 * HttpCheckEgress::monthlyBytes(600), 600);
+        $this->assertFalse($warning?->refused);
+        $this->assertSame('Saved, but all web app checks together now send about 202 MB a month, above the 200 MB suggested for them. An interval of 12 minutes or more would stay within it.', $warning?->sentence);
+
+        $refusal = HttpCheckEgress::excess(5 * $minute, 60);
+        $this->assertTrue($refusal?->refused);
+        $this->assertSame('Not saved: all web app checks together would send about 549 MB a month, above the limit of 500 MB that keeps the free tier\'s 1 GB safe. An interval of 3 minutes or more would fit.', $refusal?->sentence);
+
+        $this->assertStringEndsWith('Even an interval of 60 minutes would not fit: remove another check first.', (string) HttpCheckEgress::excess(499_500_000, 60)?->sentence);
+        $this->assertStringEndsWith('Even an interval of 60 minutes would not stay within it, so consider removing a check.', (string) HttpCheckEgress::excess(199_500_000, 3600)?->sentence);
+        $this->assertSame(1, HttpCheckEgress::shortestIntervalMinutes(100_000_000, HttpCheckEgress::MONTHLY_BUDGET_BYTES));
     }
 
     /**

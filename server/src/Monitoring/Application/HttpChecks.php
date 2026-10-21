@@ -16,6 +16,7 @@ use Maguari\Server\Monitoring\Domain\HttpAnswer;
 use Maguari\Server\Monitoring\Domain\HttpCheck;
 use Maguari\Server\Monitoring\Domain\HttpCheckEgress;
 use Maguari\Server\Monitoring\Domain\HttpCheckRule;
+use Maguari\Server\Monitoring\Domain\HttpCheckSaved;
 use Maguari\Server\Monitoring\Domain\HttpCheckStatus;
 use Maguari\Server\Monitoring\Domain\HttpCheckUrl;
 use Maguari\Server\Monitoring\Domain\HttpFailure;
@@ -96,19 +97,20 @@ final class HttpChecks
     }
 
     /**
-     * Due at once. The count, the duplicate and the budget are checked in the
-     * same transaction as the insert, so two submissions cannot both pass them.
+     * Due at once. The count, the duplicate and the egress limit are checked
+     * in the same transaction as the insert, so two submissions cannot both
+     * pass them. Above the egress budget it saves with a warning.
      *
      * @param string $intervalMinutes as typed; empty for the default
      * @throws InvalidHttpCheck
      */
-    public function add(int $instanceId, string $url, string $intervalMinutes): HttpCheck
+    public function add(int $instanceId, string $url, string $intervalMinutes): HttpCheckSaved
     {
         $url = HttpCheckUrl::normalize($url);
         $intervalSeconds = HttpCheck::intervalSeconds($intervalMinutes);
         $at = $this->clock->now();
 
-        return $this->database->transaction(function () use ($instanceId, $url, $intervalSeconds, $at): HttpCheck {
+        return $this->database->transaction(function () use ($instanceId, $url, $intervalSeconds, $at): HttpCheckSaved {
             $existing = $this->checks->forInstance($instanceId);
 
             if (in_array($url, array_map(static fn (HttpCheck $check): string => $check->url, $existing), true)) {
@@ -119,40 +121,44 @@ final class HttpChecks
                 throw new InvalidHttpCheck(sprintf('An instance can have at most %d web app checks.', HttpCheck::MAX_PER_INSTANCE));
             }
 
-            $this->refuseOverBudget([...$this->checks->intervals(), $intervalSeconds]);
+            $warning = $this->egressWarning(HttpCheckEgress::totalMonthlyBytes($this->checks->intervals()), $intervalSeconds);
+            $check = new HttpCheck($this->checks->add($instanceId, $url, $intervalSeconds, $at), $instanceId, $url, $intervalSeconds, $at, $at);
 
-            return new HttpCheck($this->checks->add($instanceId, $url, $intervalSeconds, $at), $instanceId, $url, $intervalSeconds, $at, $at);
+            return new HttpCheckSaved($check, $warning);
         });
     }
 
     /**
      * A shorter interval brings the next check forward, never later than one
-     * new interval from now.
+     * new interval from now. Only a shorter one is held to the egress budget
+     * (a warning) and limit (a refusal).
      *
-     * @return bool whether the check exists for that instance
+     * @return ?HttpCheckSaved null when the check does not exist for that instance
      * @throws InvalidHttpCheck
      */
-    public function changeInterval(int $instanceId, int $checkId, string $intervalMinutes): bool
+    public function changeInterval(int $instanceId, int $checkId, string $intervalMinutes): ?HttpCheckSaved
     {
         $intervalSeconds = HttpCheck::intervalSeconds($intervalMinutes);
         $at = $this->clock->now();
 
-        return $this->database->transaction(function () use ($instanceId, $checkId, $intervalSeconds, $at): bool {
+        return $this->database->transaction(function () use ($instanceId, $checkId, $intervalSeconds, $at): ?HttpCheckSaved {
             $check = $this->checks->find($instanceId, $checkId);
 
             if ($check === null) {
-                return false;
+                return null;
             }
+
+            $warning = null;
 
             if ($intervalSeconds < $check->intervalSeconds) {
-                $intervals = $this->checks->intervals();
-                $intervals[array_search($check->intervalSeconds, $intervals, true)] = $intervalSeconds;
-                $this->refuseOverBudget($intervals);
+                $others = HttpCheckEgress::totalMonthlyBytes($this->checks->intervals()) - HttpCheckEgress::monthlyBytes($check->intervalSeconds);
+                $warning = $this->egressWarning($others, $intervalSeconds);
             }
 
-            $this->checks->changeInterval($checkId, $intervalSeconds, min($check->nextDueAt, $at + $intervalSeconds));
+            $nextDueAt = min($check->nextDueAt, $at + $intervalSeconds);
+            $this->checks->changeInterval($checkId, $intervalSeconds, $nextDueAt);
 
-            return true;
+            return new HttpCheckSaved(new HttpCheck($check->id, $check->instanceId, $check->url, $intervalSeconds, $check->addedAt, $nextDueAt), $warning);
         });
     }
 
@@ -264,19 +270,18 @@ final class HttpChecks
     }
 
     /**
-     * @param int[] $intervalSeconds every check's interval after the change
-     * @throws InvalidHttpCheck
+     * @param int $otherBytes the other checks' monthly total
+     * @return ?string the warning above the budget
+     * @throws InvalidHttpCheck above the limit
      */
-    private function refuseOverBudget(array $intervalSeconds): void
+    private function egressWarning(int $otherBytes, int $intervalSeconds): ?string
     {
-        $bytes = HttpCheckEgress::totalMonthlyBytes($intervalSeconds);
+        $excess = HttpCheckEgress::excess($otherBytes, $intervalSeconds);
 
-        if ($bytes > HttpCheckEgress::MONTHLY_BUDGET_BYTES) {
-            throw new InvalidHttpCheck(sprintf(
-                'All web app checks together would send about %d MB a month, above the %d MB set aside for them. Use a longer interval or remove a check.',
-                HttpCheckEgress::megabytes($bytes, roundUp: true),
-                HttpCheckEgress::megabytes(HttpCheckEgress::MONTHLY_BUDGET_BYTES),
-            ));
+        if ($excess?->refused) {
+            throw new InvalidHttpCheck($excess->sentence);
         }
+
+        return $excess?->sentence;
     }
 }

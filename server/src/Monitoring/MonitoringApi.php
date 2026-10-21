@@ -26,6 +26,7 @@ use Maguari\Server\Monitoring\Domain\DailyJobSummary;
 use Maguari\Server\Monitoring\Domain\DailyJobTrigger;
 use Maguari\Server\Monitoring\Domain\HeartbeatStatus;
 use Maguari\Server\Monitoring\Domain\HttpCheck;
+use Maguari\Server\Monitoring\Domain\HttpCheckSaved;
 use Maguari\Server\Monitoring\Domain\HttpCheckStatus;
 use Maguari\Server\Monitoring\Domain\Readings;
 use Maguari\Server\Monitoring\Domain\RunDecision;
@@ -278,21 +279,25 @@ final class MonitoringApi
     }
 
     /**
-     * Due at once; adding it connects to nothing.
+     * Due at once; adding it connects to nothing. Above the egress budget it
+     * saves with a warning; above the limit it is refused.
      *
      * @param string $intervalMinutes as typed; empty for the default
      * @throws InvalidHttpCheck with a sentence for the administrator
      */
-    public function addHttpCheck(int $instanceId, string $url, string $intervalMinutes): HttpCheck
+    public function addHttpCheck(int $instanceId, string $url, string $intervalMinutes): HttpCheckSaved
     {
         return $this->httpChecks->add($instanceId, $url, $intervalMinutes);
     }
 
     /**
-     * @return bool whether it existed for that instance
+     * Like adding, a shorter interval above the egress budget saves with a
+     * warning and above the limit is refused.
+     *
+     * @return ?HttpCheckSaved null when it does not exist for that instance
      * @throws InvalidHttpCheck with a sentence for the administrator
      */
-    public function changeHttpCheckInterval(int $instanceId, int $checkId, string $intervalMinutes): bool
+    public function changeHttpCheckInterval(int $instanceId, int $checkId, string $intervalMinutes): ?HttpCheckSaved
     {
         return $this->httpChecks->changeInterval($instanceId, $checkId, $intervalMinutes);
     }

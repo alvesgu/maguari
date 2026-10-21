@@ -69,6 +69,26 @@ final class Session
         $_SESSION['last_seen_at'] = $now;
     }
 
+    /**
+     * A sentence for the next page this session shows, once: a warning that
+     * must survive the redirect after a form.
+     */
+    public function flash(string $message): void
+    {
+        $_SESSION['flash'] = $message;
+    }
+
+    /**
+     * The flashed sentence, if any, which is then gone.
+     */
+    public function takeFlash(): ?string
+    {
+        $message = $_SESSION['flash'] ?? null;
+        unset($_SESSION['flash']);
+
+        return is_string($message) ? $message : null;
+    }
+
     public function destroy(): void
     {
         $_SESSION = [];

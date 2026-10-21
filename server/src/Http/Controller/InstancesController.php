@@ -6,6 +6,7 @@ namespace Maguari\Server\Http\Controller;
 
 use Maguari\Server\Fleet\FleetApi;
 use Maguari\Server\Fleet\Instance;
+use Maguari\Server\Http\Session;
 use Maguari\Server\Http\View;
 use Maguari\Server\Kernel\Clock;
 use Maguari\Server\Monitoring\Domain\HttpCheck;
@@ -39,7 +40,7 @@ final class InstancesController
      */
     public function show(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
     {
-        return $this->page($request, $response, $this->instance($request, $args));
+        return $this->page($request, $response, $this->instance($request, $args), ['notice' => self::session($request)->takeFlash()]);
     }
 
     /**
@@ -84,9 +85,13 @@ final class InstancesController
         $interval = FormInput::string($input, 'interval');
 
         try {
-            $this->monitoring->addHttpCheck($instance->id, $url, $interval);
+            $saved = $this->monitoring->addHttpCheck($instance->id, $url, $interval);
         } catch (InvalidHttpCheck $invalid) {
             return $this->page($request, $response, $instance, ['httpUrl' => $url, 'httpInterval' => $interval, 'httpError' => $invalid->getMessage()], 422);
+        }
+
+        if ($saved->warning !== null) {
+            self::session($request)->flash($saved->warning);
         }
 
         return self::backTo($response, $instance);
@@ -103,9 +108,13 @@ final class InstancesController
         $interval = FormInput::string((array) $request->getParsedBody(), 'interval');
 
         try {
-            $this->monitoring->changeHttpCheckInterval($instance->id, (int) $args['checkId'], $interval);
+            $saved = $this->monitoring->changeHttpCheckInterval($instance->id, (int) $args['checkId'], $interval);
         } catch (InvalidHttpCheck $invalid) {
             return $this->page($request, $response, $instance, ['intervalError' => $invalid->getMessage()], 422);
+        }
+
+        if ($saved?->warning !== null) {
+            self::session($request)->flash($saved->warning);
         }
 
         return self::backTo($response, $instance);
@@ -130,14 +139,23 @@ final class InstancesController
         return $this->fleet->pickedInstance((int) $args['id']) ?? throw new HttpNotFoundException($request);
     }
 
+    private static function session(ServerRequestInterface $request): Session
+    {
+        $session = $request->getAttribute(Session::class);
+        assert($session instanceof Session);
+
+        return $session;
+    }
+
     private static function backTo(ResponseInterface $response, Instance $instance): ResponseInterface
     {
         return $response->withStatus(303)->withHeader('Location', '/admin/instances/' . $instance->id);
     }
 
     /**
-     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string} $form
-     *        what was typed in a refused form and why it was refused
+     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string} $form
+     *        what was typed in a refused form and why it was refused, or the
+     *        warning of the last change
      */
     private function page(
         ServerRequestInterface $request,
@@ -165,6 +183,7 @@ final class InstancesController
             'httpInterval' => $form['httpInterval'] ?? (string) HttpCheck::DEFAULT_INTERVAL_MINUTES,
             'httpError' => $form['httpError'] ?? null,
             'intervalError' => $form['intervalError'] ?? null,
+            'notice' => $form['notice'] ?? null,
             'now' => $this->clock->now(),
         ], $status);
     }

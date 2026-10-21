@@ -67,7 +67,9 @@ final class HttpChecksTest extends TestCase
         $monitoring = $this->environment->monitoring;
         $now = $this->environment->clock->now();
 
-        $check = $monitoring->addHttpCheck($web->id, 'HTTPS://WWW.Example.com', '');
+        $saved = $monitoring->addHttpCheck($web->id, 'HTTPS://WWW.Example.com', '');
+        $check = $saved->check;
+        $this->assertNull($saved->warning);
 
         $this->assertSame(['https://www.example.com/', 600, $now], [$check->url, $check->intervalSeconds, $check->nextDueAt]);
         $this->assertEquals([$check], $monitoring->httpChecks($web->id));
@@ -87,54 +89,74 @@ final class HttpChecksTest extends TestCase
         $monitoring->addHttpCheck($web->id, 'https://app11.example.com/', '60');
     }
 
-    public function testTheEgressBudgetCoversEveryInstance(): void
+    public function testAboveTheBudgetSavesWithAWarningAndAboveTheLimitRefuses(): void
     {
         $web = $this->pick('web');
         $db = $this->pick('db');
         $monitoring = $this->environment->monitoring;
 
-        // 2 minutes are 91 MB a month and 10 minutes 18 MB: a second at 2 minutes is over.
-        $monitoring->addHttpCheck($web->id, 'https://a.example.com/', '2');
-        $monitoring->addHttpCheck($db->id, 'https://b.example.com/', '10');
-        $this->assertSame(110, (int) round($monitoring->httpCheckMonthlyEgressBytes() / 1_000_000));
+        // 1 minute is 91 MB a month: two fit the 200 MB budget, across instances.
+        $this->assertNull($monitoring->addHttpCheck($web->id, 'https://a.example.com/', '1')->warning);
+        $this->assertNull($monitoring->addHttpCheck($db->id, 'https://b.example.com/', '1')->warning);
+        $this->assertSame(183, (int) round($monitoring->httpCheckMonthlyEgressBytes() / 1_000_000));
+
+        $third = $monitoring->addHttpCheck($db->id, 'https://c.example.com/', '1');
+        $this->assertSame(
+            'Saved, but all web app checks together now send about 275 MB a month, above the 200 MB suggested for them. An interval of 6 minutes or more would stay within it.',
+            $third->warning,
+        );
+        $monitoring->addHttpCheck($db->id, 'https://d.example.com/', '1');
+        $monitoring->addHttpCheck($db->id, 'https://e.example.com/', '1');
 
         try {
-            $monitoring->addHttpCheck($db->id, 'https://c.example.com/', '2');
-            $this->fail('A check over the budget was added.');
+            $monitoring->addHttpCheck($db->id, 'https://f.example.com/', '1');
+            $this->fail('A check over the limit was added.');
         } catch (InvalidHttpCheck $invalid) {
             $this->assertSame(
-                'All web app checks together would send about 202 MB a month, above the 200 MB set aside for them. Use a longer interval or remove a check.',
+                'Not saved: all web app checks together would send about 549 MB a month, above the limit of 500 MB that keeps the free tier\'s 1 GB safe. An interval of 3 minutes or more would fit.',
                 $invalid->getMessage(),
             );
         }
 
-        $this->assertCount(1, $monitoring->httpChecks($db->id));
+        $this->assertCount(4, $monitoring->httpChecks($db->id));
+        $this->assertNotNull($monitoring->addHttpCheck($db->id, 'https://f.example.com/', '3')->warning, 'The interval it suggested fits.');
     }
 
     public function testChangingTheIntervalChecksTheBudgetOnlyWhenShorter(): void
     {
         $web = $this->pick('web');
         $monitoring = $this->environment->monitoring;
-        $a = $monitoring->addHttpCheck($web->id, 'https://a.example.com/', '10');
-        $b = $monitoring->addHttpCheck($web->id, 'https://b.example.com/', '10');
+
+        // Five at 1 minute are 457 MB a month: above the budget, within the limit.
+        foreach (['a', 'b', 'c', 'd', 'e'] as $name) {
+            $monitoring->addHttpCheck($web->id, "https://{$name}.example.com/", '1');
+        }
+
+        $f = $monitoring->addHttpCheck($web->id, 'https://f.example.com/', '10')->check;
         $monitoring->runDueHttpChecks();
         $now = $this->environment->clock->now();
 
-        $this->assertTrue($monitoring->changeHttpCheckInterval($web->id, $a->id, '2'));
-        $this->assertSame([120, $now + 120], [$monitoring->httpChecks($web->id)[0]->intervalSeconds, $monitoring->httpChecks($web->id)[0]->nextDueAt], 'Brought forward.');
-
         try {
-            $monitoring->changeHttpCheckInterval($web->id, $b->id, '1');
-            $this->fail('A change over the budget was saved.');
+            $monitoring->changeHttpCheckInterval($web->id, $f->id, '2');
+            $this->fail('A change over the limit was saved.');
         } catch (InvalidHttpCheck $invalid) {
-            $this->assertStringStartsWith('All web app checks together would send about 275 MB a month', $invalid->getMessage());
+            $this->assertSame(
+                'Not saved: all web app checks together would send about 503 MB a month, above the limit of 500 MB that keeps the free tier\'s 1 GB safe. An interval of 3 minutes or more would fit.',
+                $invalid->getMessage(),
+            );
         }
 
-        $this->assertTrue($monitoring->changeHttpCheckInterval($web->id, $b->id, '60'));
-        $this->assertSame($now + 600, $monitoring->httpChecks($web->id)[1]->nextDueAt, 'A longer interval keeps the next check.');
-        $this->assertFalse($monitoring->changeHttpCheckInterval($this->pick('db')->id, $b->id, '5'), 'Another instance\'s check.');
+        $saved = $monitoring->changeHttpCheckInterval($web->id, $f->id, '3');
+        $this->assertSame([180, $now + 180], [$saved?->check->intervalSeconds, $saved?->check->nextDueAt], 'Brought forward.');
+        $this->assertSame([180, $now + 180], [$monitoring->httpChecks($web->id)[5]->intervalSeconds, $monitoring->httpChecks($web->id)[5]->nextDueAt]);
+        $this->assertStringStartsWith('Saved, but all web app checks together now send about 488 MB a month, above the 200 MB suggested for them.', (string) $saved?->warning);
+
+        $longer = $monitoring->changeHttpCheckInterval($web->id, $f->id, '60');
+        $this->assertNull($longer?->warning, 'A longer interval never warns.');
+        $this->assertSame($now + 180, $longer?->check->nextDueAt, 'A longer interval keeps the next check.');
+        $this->assertNull($monitoring->changeHttpCheckInterval($this->pick('db')->id, $f->id, '5'), 'Another instance\'s check.');
         $this->expectExceptionMessage('Enter an interval of 1 to 60 minutes.');
-        $monitoring->changeHttpCheckInterval($web->id, $b->id, '0');
+        $monitoring->changeHttpCheckInterval($web->id, $f->id, '0');
     }
 
     public function testARunChecksWhatIsDueAndKeepsTheSchedule(): void
@@ -215,7 +237,7 @@ final class HttpChecksTest extends TestCase
         $web = $this->pick('web');
         $monitoring = $this->environment->monitoring;
         $this->environment->httpProbe->answer('https://a.example.com/', 500);
-        $check = $monitoring->addHttpCheck($web->id, 'https://a.example.com/', '');
+        $check = $monitoring->addHttpCheck($web->id, 'https://a.example.com/', '')->check;
         $monitoring->runDueHttpChecks();
 
         $this->assertFalse($monitoring->removeHttpCheck($this->pick('db')->id, $check->id), 'Another instance\'s check.');
@@ -230,7 +252,7 @@ final class HttpChecksTest extends TestCase
     {
         $web = $this->pick('web');
         $monitoring = $this->environment->monitoring;
-        $check = $monitoring->addHttpCheck($web->id, 'https://a.example.com/', '');
+        $check = $monitoring->addHttpCheck($web->id, 'https://a.example.com/', '')->check;
         $this->environment->httpProbe->during = static function () use ($monitoring, $web, $check): void {
             $monitoring->removeHttpCheck($web->id, $check->id);
         };

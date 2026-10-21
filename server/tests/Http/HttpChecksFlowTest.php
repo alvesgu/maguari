@@ -73,7 +73,7 @@ final class HttpChecksFlowTest extends TestCase
         $browser = $this->signedInBrowser();
         $empty = (string) $browser->get($this->page())->getBody();
         $this->assertStringContainsString('<h2>Web apps</h2>', $empty);
-        $this->assertStringContainsString('18 MB a month at the default 10 minutes, 183 MB at 1 minute. All web app checks together use about 0 MB of the 200 MB set aside for them.', $empty);
+        $this->assertStringContainsString('9 MB a month at the default 10 minutes, 91 MB at 1 minute. All web app checks together use about 0 MB a month. Up to 200 MB is suggested; above it a change saves with a warning, and above 500 MB it is refused.', $empty);
         $this->assertStringContainsString('<input id="interval" name="interval" type="number" min="1" max="60" value="10">', $empty);
 
         $response = $this->post($browser, '/http-checks', ['url' => 'https://www.example.com', 'interval' => '']);
@@ -84,7 +84,7 @@ final class HttpChecksFlowTest extends TestCase
         $this->assertSame([], $this->environment->httpProbe->requests, 'Adding connects to nothing.');
         $body = (string) $browser->get($this->page())->getBody();
         $this->assertStringContainsString('<tr><td>https://www.example.com/</td><td>Not checked', $body);
-        $this->assertStringContainsString('All web app checks together use about 18 MB', $body);
+        $this->assertStringContainsString('All web app checks together use about 9 MB', $body);
         $id = $this->environment->monitoring->httpChecks($this->instanceId)[0]->id;
 
         $this->assertSame(303, $this->post($browser, "/http-checks/{$id}/interval", ['interval' => '30'])->getStatusCode());
@@ -114,20 +114,35 @@ final class HttpChecksFlowTest extends TestCase
         $response = $this->post($browser, "/http-checks/{$id}/interval", ['interval' => '90']);
 
         $this->assertSame(422, $response->getStatusCode());
-        $this->assertStringContainsString('<p>The interval was not changed: Enter an interval of 1 to 60 minutes.</p>', (string) $response->getBody());
+        $this->assertStringContainsString('<p>Enter an interval of 1 to 60 minutes.</p>', (string) $response->getBody());
         $this->assertSame([['https://www.example.com/', 10]], $this->checks());
     }
 
     public function testFormsNeedTheCsrfTokenAndNoGetChangesState(): void
     {
         $browser = $this->signedInBrowser();
-        $check = $this->environment->monitoring->addHttpCheck($this->instanceId, 'https://www.example.com/', '');
+        $check = $this->environment->monitoring->addHttpCheck($this->instanceId, 'https://www.example.com/', '')->check;
 
         $this->assertSame(400, $browser->post($this->page() . '/http-checks', ['url' => 'https://api.example.com/'])->getStatusCode());
         $this->assertSame(400, $browser->post($this->page() . "/http-checks/{$check->id}/interval", ['interval' => '5'])->getStatusCode());
         $this->assertSame(400, $browser->post($this->page() . "/http-checks/{$check->id}/remove", [])->getStatusCode());
         $this->assertSame(405, $browser->get($this->page() . "/http-checks/{$check->id}/remove")->getStatusCode());
         $this->assertSame([['https://www.example.com/', 10]], $this->checks());
+    }
+
+    public function testAWarningAboveTheBudgetShowsOnceAfterTheRedirect(): void
+    {
+        $browser = $this->signedInBrowser();
+        $this->environment->monitoring->addHttpCheck($this->instanceId, 'https://a.example.com/', '1');
+        $this->environment->monitoring->addHttpCheck($this->instanceId, 'https://b.example.com/', '1');
+
+        $response = $this->post($browser, '/http-checks', ['url' => 'https://c.example.com/', 'interval' => '1']);
+
+        $this->assertSame(303, $response->getStatusCode());
+        $this->assertCount(3, $this->checks(), 'Saved.');
+        $warning = '<p>Saved, but all web app checks together now send about 275 MB a month, above the 200 MB suggested for them. An interval of 6 minutes or more would stay within it.</p>';
+        $this->assertStringContainsString($warning, (string) $browser->get($this->page())->getBody());
+        $this->assertStringNotContainsString($warning, (string) $browser->get($this->page())->getBody(), 'Only once.');
     }
 
     public function testTheFormGoesAwayAtTheLimit(): void
