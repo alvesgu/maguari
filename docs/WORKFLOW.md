@@ -86,5 +86,5 @@ See `docs/DESIGN.md` section 17 (road to 1.0) for the phases. As of 2026-10-22:
 
 - MVP: done.
 - Phase 1 (incidents and alerts): done and tested.
-- Phase 2 (more checks): done and tested; two small fixes were requested (local HTTP trying `127.0.0.1` then `::1` for `localhost`, and keeping the latest "not checked" result for display).
+- Phase 2 (more checks): done and tested, including two fixes after the manual test (local HTTP trying `127.0.0.1` then `::1` for `localhost`, and keeping the latest "not checked" result for display).
 - Next: Phase 3 (remediation), planned in the claude.ai chat first.

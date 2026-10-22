@@ -269,6 +269,15 @@ client/bin/maguari-client set-database geonode --type=postgresql --host=127.0.0.
 
 It asks for the password and says the driver is missing. Add `geonode` under "Databases" on the development instance's page: with `client/bin/maguari-client run` going, the check shows Not checked with "The PostgreSQL driver is not installed on the instance. Install it with: sudo apt install php-pgsql". With `php-pgsql` installed and a PostgreSQL server reachable, it passes, and a wrong password fails on the second heartbeat with the login sentence. Check `client/var/databases.json` has mode 0600, and that `client/bin/maguari-client list-databases` shows no password.
 
+### After the manual test
+
+Phase 2 was tested by hand and two fixes followed, each in its own commit:
+
+- **`localhost` in local HTTP checks tries 127.0.0.1, then ::1** when 127.0.0.1 refuses the connection, because a service may listen on only one of them (`php -S localhost:8080` listens only on ::1 on Ubuntu 24.04). The name is still never resolved, literal addresses are never swapped, and if ::1 cannot be used at all the result stays the refusal (`LocalHttpCheck::ADDRESSES`, `StreamLocalHttp`).
+- **The latest "not checked" result of a client check is kept for display** (`monitoring_check_not_checked`), because "not checked" stored nothing and a check that was never run showed "Not checked yet." forever, with no reason. It is kept until the next pass or fail or the check's withdrawal, writes no event and changes neither the outcome nor the failure streak, so a fail, then a not checked, then a fail writes one `monitoring.check_failed`. The label stays the outcome (Pass or Fail), or "Not checked" without one, and the (i) gives the latest sentence; the time shown is the latest result's.
+
+Phase 2 is complete.
+
 ## Design changes once approved
 
 Sections 5.2 (the new request and response fields), 6.1 and 6.2 (the checks), 9.2 (the tables and `checked_at`), 10.1 (the new timer), 12.1 (`Suggests:`), 12.2.1 (`run-http-checks`), 14 (the egress budget) and 17 (phase 2's steps), each in the step that implements it.
