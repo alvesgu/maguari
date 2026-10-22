@@ -294,8 +294,8 @@ final class EndToEndTest extends TestCase
 
         $this->assertSame([
             'geonode' => ['fail', 'Could not connect to the database server of geonode, or it is not accepting connections.'],
-            'reports' => ['not_checked', 'Not checked yet.'],
-        ], $states, 'reports is not set up on the instance: not checked, never stored as an outcome.');
+            'reports' => ['not_checked', 'No database named reports is set up on the instance. Run maguari-client set-database reports there.'],
+        ], $states, 'reports is not set up on the instance: not checked, shown with its sentence, never stored as an outcome.');
         // Every row of every table on the server.
         $pdo = $this->server->database->pdo();
         $dump = '';

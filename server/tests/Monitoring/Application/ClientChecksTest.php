@@ -114,6 +114,38 @@ final class ClientChecksTest extends TestCase
         $this->assertSame(['monitoring.check_passed', 'monitoring.check_failed', 'monitoring.check_passed'], $this->events());
     }
 
+    public function testTheLatestNotCheckedResultShowsButChangesNothing(): void
+    {
+        $monitoring = $this->environment->monitoring;
+        $check = $monitoring->addServiceCheck(7, 'nginx');
+        $status = fn () => $monitoring->clientCheckStatuses([7])[7][0];
+        $notChecked = 'The client could not run systemctl to read the state of nginx.service.';
+
+        $at = $this->environment->clock->now();
+        $this->heartbeat(['nginx.service' => '']);
+        $this->assertSame([CheckOutcome::NotChecked, $notChecked, $at], [$status()->outcome(), $status()->detail(), $status()->checkedAt()]);
+
+        $this->heartbeat(['nginx.service' => 'failed']);
+        $at = $this->environment->clock->now();
+        $this->heartbeat(['nginx.service' => '']);
+        $this->assertSame([CheckOutcome::NotChecked, "{$notChecked} The latest result that ran failed; it counts after 2 in a row.", $at], [$status()->outcome(), $status()->detail(), $status()->checkedAt()]);
+
+        $this->heartbeat(['nginx.service' => 'failed']);
+        $this->assertSame(CheckOutcome::Fail, $this->outcome(), '"Not checked" did not end the run.');
+        $this->assertSame('nginx.service is failed, not active.', $status()->detail(), 'A pass or fail replaces it.');
+
+        $at = $this->environment->clock->now();
+        $this->heartbeat(['nginx.service' => '']);
+        $this->heartbeat(['nginx.service' => 'failed']);
+        $this->heartbeat(['nginx.service' => '']);
+        $this->assertSame([CheckOutcome::Fail, "nginx.service is failed, not active. The latest result was not checked. {$notChecked}", $at + 120], [$status()->outcome(), $status()->detail(), $status()->checkedAt()]);
+        $this->assertSame(['monitoring.check_failed'], $this->events(), 'A fail, not checked, fail writes one failure event.');
+
+        $monitoring->removeClientCheck(7, $check->id);
+        $monitoring->addServiceCheck(7, 'nginx');
+        $this->assertSame([CheckOutcome::NotChecked, 'Not checked yet.', null], [$status()->outcome(), $status()->detail(), $status()->checkedAt()], 'Withdrawing forgets it.');
+    }
+
     public function testResultsOfChecksTheInstanceDoesNotHaveAreIgnored(): void
     {
         $this->environment->monitoring->addServiceCheck(8, 'nginx');

@@ -131,7 +131,7 @@ $tooOld = static function (array $statuses, string $type, string $what) use ($e,
     return $needed === null ? '' : '<p>This client (version ' . $e((string) $clientVersion) . ') skips ' . $what . '. It needs version ' . $needed . " or later.</p>\n";
 };
 $row = static function ($status, string $first) use ($e, $partial, $csrf, $instance, $now): string {
-    $checkedAt = $status->state?->checkedAt;
+    $checkedAt = $status->checkedAt();
 
     return '<tr>' . $first . '<td>' . $e($status->outcome()->label()) . $partial('info', ['text' => $status->detail()]) . '</td><td>'
         . ($checkedAt === null ? '' : $e(TimeAgo::format(max(0, $now - $checkedAt)))) . '</td><td><form method="post" action="/admin/instances/' . $instance->id . '/client-checks/' . $status->check->id . "/remove\">\n"

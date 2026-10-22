@@ -19,6 +19,7 @@ use Maguari\Server\Monitoring\Exception\InvalidClientCheck;
 use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
 use Maguari\Server\Monitoring\Infrastructure\ClientCheckRepository;
 use Maguari\Server\Monitoring\Infrastructure\FailureStreakRepository;
+use Maguari\Server\Monitoring\Infrastructure\NotCheckedResultRepository;
 use Maguari\Shared\DatabaseCheck;
 use Maguari\Shared\LocalHttpCheck;
 use Maguari\Shared\ServiceCheck;
@@ -36,6 +37,7 @@ final class ClientChecks
         private readonly ClientCheckRepository $checks,
         private readonly CheckStateRepository $states,
         private readonly FailureStreakRepository $streaks,
+        private readonly NotCheckedResultRepository $notChecked,
         private readonly CheckStates $checkStates,
     ) {
     }
@@ -67,6 +69,7 @@ final class ClientChecks
                     $check,
                     $this->states->find($instanceId, $check->checkName(), $check->subject()),
                     $this->streaks->failures($instanceId, $check->checkName(), $check->subject()),
+                    $this->notChecked->find($instanceId, $check->checkName(), $check->subject()),
                 );
             }
         }

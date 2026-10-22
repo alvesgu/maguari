@@ -15,6 +15,7 @@ use Maguari\Server\Monitoring\Event\CheckPassed;
 use Maguari\Server\Monitoring\Event\CheckWithdrawn;
 use Maguari\Server\Monitoring\Infrastructure\CheckStateRepository;
 use Maguari\Server\Monitoring\Infrastructure\FailureStreakRepository;
+use Maguari\Server\Monitoring\Infrastructure\NotCheckedResultRepository;
 
 /**
  * Keeps each check's current outcome and writes an event when it changes
@@ -28,6 +29,7 @@ final class CheckStates
         private readonly CheckStateRepository $states,
         private readonly EventOutbox $outbox,
         private readonly FailureStreakRepository $streaks,
+        private readonly NotCheckedResultRepository $notChecked,
     ) {
     }
 
@@ -59,11 +61,20 @@ final class CheckStates
      * section 6.3 item 7): a failed result changes a passing or new outcome
      * only as the ConfirmedFailures::FAILURES_TO_FAIL-th in a row. Until then
      * it is only counted, and the outcome keeps its sentence and time. A pass
-     * ends the run; "not checked" neither counts nor ends it.
+     * ends the run; "not checked" neither counts nor ends it, and is only
+     * kept, the latest, for pages until the next pass or fail.
      */
     public function recordConfirmed(CheckResult $result): void
     {
         $key = [$result->instanceId, $result->checkName, $result->subject];
+
+        if ($result->outcome === CheckOutcome::NotChecked) {
+            $this->notChecked->save($result);
+
+            return;
+        }
+
+        $this->notChecked->delete(...$key);
 
         if ($result->outcome === CheckOutcome::Fail && $this->states->find(...$key)?->outcome !== CheckOutcome::Fail) {
             if (!ConfirmedFailures::counts($this->streaks->increment(...$key))) {
@@ -85,6 +96,7 @@ final class CheckStates
     public function withdraw(int $instanceId, string $checkName, string $subject, int $at): void
     {
         $this->streaks->delete($instanceId, $checkName, $subject);
+        $this->notChecked->delete($instanceId, $checkName, $subject);
 
         if ($this->states->delete($instanceId, $checkName, $subject)) {
             $this->outbox->record((new CheckWithdrawn($instanceId, $checkName, $subject, $at))->toEvent());
