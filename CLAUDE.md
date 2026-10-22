@@ -2,6 +2,8 @@
 
 Lightweight, self-hosted watchdog for Ubuntu VM instances on Google Compute Engine across multiple GCP projects. Server app (dashboard, alerts, remediation) plus a push-only client on each instance. **Ubuntu only:** server, client and updater all target Ubuntu. Do not add support or workarounds for other distributions.
 
+How we work (roles, the plan and review cycle, sessions, testing, the development environment and where we are) is in `docs/WORKFLOW.md`.
+
 ## Requirements
 
 - **Server:** Ubuntu 22.04+ on a dedicated instance, PHP 8.1+ (`php-fpm`, `php-sqlite3`, built-in sodium), SQLite 3, nginx, certbot with `python3-certbot-nginx`, domain on Cloudflare DNS in DNS-only mode
