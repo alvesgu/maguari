@@ -14,7 +14,7 @@ namespace Maguari\Shared;
  * user, password or fragment, only printable ASCII and at most 2,048 bytes,
  * in its stored form (scheme and host lowercase, the default port left out,
  * an empty path as "/"). The client connects to the literal address
- * (`localhost` is 127.0.0.1, never resolved). An optional host name only sets
+ * (`localhost` is 127.0.0.1, then ::1 if that refuses, never resolved). An optional host name only sets
  * the Host header and the TLS name; `https://` requires one, so the
  * certificate can be verified against it.
  */
@@ -23,8 +23,12 @@ final class LocalHttpCheck
     public const TYPE = 'local_http';
     public const MAX_URL_BYTES = 2048;
 
-    /** The loopback hosts a URL may name, and the address the client connects to for each. */
-    public const ADDRESSES = ['127.0.0.1' => '127.0.0.1', '[::1]' => '[::1]', 'localhost' => '127.0.0.1'];
+    /**
+     * The loopback hosts a URL may name, and the addresses the client
+     * connects to for each, in order: the next only when the connection to
+     * the previous is refused, because a service may listen on only one.
+     */
+    public const ADDRESSES = ['127.0.0.1' => ['127.0.0.1'], '[::1]' => ['[::1]'], 'localhost' => ['127.0.0.1', '[::1]']];
 
     // Why there was no status (design section 5.2).
     public const REASON_TIMEOUT = 'timeout';

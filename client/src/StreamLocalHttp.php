@@ -8,7 +8,8 @@ use Maguari\Shared\LocalHttpCheck;
 
 /**
  * LocalHttp on PHP's stream sockets (openssl only). It connects to the URL's
- * literal loopback address, never a resolved name, sends a GET with
+ * literal loopback address, never a resolved name (for `localhost`
+ * 127.0.0.1, then ::1 if that refuses: see LocalHttpCheck::ADDRESSES), sends a GET with
  * `Connection: close` and reads only the status line, then closes: redirects
  * are never followed and the body never read. Connecting and the TLS
  * handshake take at most LocalHttpCheck::TIMEOUT_SECONDS, and so does the
@@ -44,21 +45,10 @@ final class StreamLocalHttp implements LocalHttp
             $ssl['cafile'] = $this->caFile;
         }
 
-        $socket = @stream_socket_client(
-            'tcp://' . LocalHttpCheck::ADDRESSES[$parts['host']] . ':' . $port,
-            $errorCode,
-            $errorMessage,
-            $this->timeoutSeconds,
-            STREAM_CLIENT_CONNECT,
-            stream_context_create(['ssl' => $ssl]),
-        );
+        $socket = $this->connect(LocalHttpCheck::ADDRESSES[$parts['host']], $port, stream_context_create(['ssl' => $ssl]));
 
-        if ($socket === false) {
-            return match (true) {
-                $errorCode === self::ECONNREFUSED => LocalHttpCheck::REASON_REFUSED,
-                $errorCode === self::ETIMEDOUT, stripos((string) $errorMessage, 'timed out') !== false => LocalHttpCheck::REASON_TIMEOUT,
-                default => LocalHttpCheck::REASON_CONNECT_FAILED,
-            };
+        if (is_string($socket)) {
+            return $socket;
         }
 
         try {
@@ -86,6 +76,38 @@ final class StreamLocalHttp implements LocalHttp
         }
 
         return ['status' => (int) $matches[1], 'ms' => (int) round((microtime(true) - $start) * 1000)];
+    }
+
+    /**
+     * Tries each address while the previous refuses. When a later one cannot
+     * be used at all (IPv6 turned off, for example), the earlier refusal is
+     * the answer.
+     *
+     * @param list<string> $addresses
+     * @param resource $context
+     * @return resource|string the socket, or why there is none
+     */
+    private function connect(array $addresses, int $port, $context)
+    {
+        foreach ($addresses as $index => $address) {
+            $socket = @stream_socket_client("tcp://{$address}:{$port}", $errorCode, $errorMessage, $this->timeoutSeconds, STREAM_CLIENT_CONNECT, $context);
+
+            if ($socket !== false) {
+                return $socket;
+            }
+
+            $reason = match (true) {
+                $errorCode === self::ECONNREFUSED => LocalHttpCheck::REASON_REFUSED,
+                $errorCode === self::ETIMEDOUT, stripos((string) $errorMessage, 'timed out') !== false => LocalHttpCheck::REASON_TIMEOUT,
+                default => LocalHttpCheck::REASON_CONNECT_FAILED,
+            };
+
+            if ($reason !== LocalHttpCheck::REASON_REFUSED) {
+                return $index > 0 && $reason === LocalHttpCheck::REASON_CONNECT_FAILED ? LocalHttpCheck::REASON_REFUSED : $reason;
+            }
+        }
+
+        return LocalHttpCheck::REASON_REFUSED;
     }
 
     /**

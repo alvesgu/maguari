@@ -10,8 +10,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Against a local server started by the test (the server's
- * tests/fixtures/http-server.php, on 127.0.0.1), with certificates made at
- * test time.
+ * tests/fixtures/http-server.php, on 127.0.0.1 unless a test says otherwise),
+ * with certificates made at test time.
  */
 final class StreamLocalHttpTest extends TestCase
 {
@@ -41,7 +41,7 @@ final class StreamLocalHttpTest extends TestCase
         rmdir($this->directory);
     }
 
-    private function server(string $mode, ?string $certificate = null): int
+    private function server(string $mode, ?string $certificate = null, string $address = '127.0.0.1'): int
     {
         $arguments = [PHP_BINARY, dirname(__DIR__, 2) . '/server/tests/fixtures/http-server.php', $mode];
 
@@ -50,7 +50,7 @@ final class StreamLocalHttpTest extends TestCase
             file_put_contents($arguments[3], $certificate);
         }
 
-        $this->servers[] = proc_open($arguments, [1 => ['pipe', 'w']], $pipes);
+        $this->servers[] = proc_open($arguments, [1 => ['pipe', 'w']], $pipes, null, ['HTTP_SERVER_ADDRESS' => $address] + getenv());
 
         return (int) fgets($pipes[1]);
     }
@@ -72,6 +72,22 @@ final class StreamLocalHttpTest extends TestCase
         $this->assertSame(503, $answer['status']);
         $this->assertLessThan(2000, $answer['ms']);
         $this->assertSame(302, $this->request('http://localhost:' . $this->server('302') . '/')['status'] ?? null, 'localhost is 127.0.0.1; redirects are not followed.');
+    }
+
+    public function testLocalhostIsIpv6LoopbackWhenIpv4Refuses(): void
+    {
+        $probe = @stream_socket_server('tcp://[::1]:0');
+
+        if ($probe === false) {
+            $this->markTestSkipped('This machine has no IPv6 loopback.');
+        }
+
+        fclose($probe);
+        $port = $this->server('204', null, '[::1]');
+
+        $this->assertSame(204, $this->request("http://localhost:{$port}/")['status'] ?? null);
+        $this->assertSame(204, $this->request("http://[::1]:{$port}/")['status'] ?? null);
+        $this->assertSame('refused', $this->request("http://127.0.0.1:{$port}/"), 'A literal address is never swapped.');
     }
 
     public function testSendsTheHostNameAsTheHostHeader(): void

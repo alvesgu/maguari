@@ -10,15 +10,17 @@ declare(strict_types=1);
 //   garbage   answers with something that is not an HTTP status line
 //   close     closes each connection without answering
 //   host:<name>  answers 200 when the request's Host header is <name>, else 421
-// With a certificate file as the second argument it serves TLS with it.
+// With a certificate file as the second argument it serves TLS with it. It
+// listens on 127.0.0.1, or on the address in HTTP_SERVER_ADDRESS ("[::1]").
 
 $mode = $argv[1] ?? '200';
 $certificate = $argv[2] ?? null;
+$address = getenv('HTTP_SERVER_ADDRESS') ?: '127.0.0.1';
 
 if ($certificate === null) {
-    $server = stream_socket_server('tcp://127.0.0.1:0');
+    $server = stream_socket_server("tcp://{$address}:0");
 } else {
-    $server = stream_socket_server('ssl://127.0.0.1:0', $code, $message, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, stream_context_create([
+    $server = stream_socket_server("ssl://{$address}:0", $code, $message, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, stream_context_create([
         'ssl' => ['local_cert' => $certificate, 'verify_peer' => false],
     ]));
 }
