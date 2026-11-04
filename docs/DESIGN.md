@@ -1039,11 +1039,11 @@ After the MVP, work continues in these phases, in this order. Each phase is plan
 
 1. **Incidents and alerts** (`docs/plans/phase-1.md`), in five steps: 1.1 domain events and the tick (done), 1.2 check outcomes as events and Monitoring's heartbeat-age check (done), 1.3 incidents (done), 1.4 notifications and the Logs screen (done), 1.5 alert emails (done). It covers domain events and the tick (sections 2.1 and 10.1), incidents (section 7.4), notifications (section 10.4) and alert emails (section 13.3). Monitoring's heartbeat-age check (section 6.2), based on each instance's interval, replaced the temporary 90-second judgment in Clients.
 2. **More checks** (`docs/plans/phase-2.md`), in four steps: 2.1 remote HTTP checks (done), 2.2 the check settings channel and service checks (done), 2.3 local HTTP checks (done), 2.4 database checks (PostgreSQL, MySQL and MariaDB) (done). HTTP checks of public web apps from the server (section 6.2.1), plus service state, local HTTP and database checks on the client (section 6.1).
-3. **Remediation:** the escalation ladder (section 7.1) and its safeguards (section 7.2).
+3. **Remediation** (`docs/plans/phase-3.md`): the escalation ladder (section 7.1) and its safeguards (section 7.2).
 4. **Packaging and deployment:** the `.deb` packages, tested locally in Ubuntu containers running systemd; the APT repository (section 12.3); then the real installation at `maguari.mancilla.com.br`. The egress indicator (section 10.3) comes with this phase, because it only means something on the real server.
 5. **Required before 1.0:** the items of section 18, except the layout redesign, which belongs to phase 7.
 6. **The client updater** (section 12.5).
-7. **Release:** the layout redesign (section 18 item 2), GitHub Actions (section 12.4), the installation guide and the 1.0 tag.
+7. **Release:** the layout redesign and the instance setup wizard (section 18 item 2), GitHub Actions (section 12.4), the installation guide and the 1.0 tag.
 
 Deployment is deliberately postponed to phase 4 so development continues locally until the features that need a real server are in place.
 
@@ -1054,11 +1054,11 @@ Deployment is deliberately postponed to phase 4 so development continues locally
 Gaps the MVP leaves open on purpose that must be closed before 1.0.
 
 1. **The disk size comparison must cover attached disks**, not only the boot disk (section 6.3). Databases and growing applications often live on attached disks, so a grown attached disk whose filesystem was never extended matters as much as the boot disk. The client will need to report which GCP disk each filesystem is on. On Compute Engine, the `/dev/disk/by-id/google-*` links are a likely way to map filesystems to disk device names (the `deviceName` of each disk in the instance resource). Disk usage monitoring itself (section 6.1.2) already covers attached disks.
-2. **The web interface layout will be redesigned** (cards, dashboards and tables). The current styling (section 3.1 item 4) is temporary and kept minimal until then.
+2. **The web interface layout will be redesigned** (cards, dashboards and tables). The current styling (section 3.1 item 4) is temporary and kept minimal until then. An instance setup wizard comes with it, leading an administrator through the client, the checks, the allowed units and the mode.
 3. **Every threshold Maguari judges with must be configurable as a hierarchy.** This covers certificate expiry days, the disk size rule's percentage, disk usage alert levels, heartbeat lateness and the remediation settings in section 7.3.
    - Levels: a global default, overridden per project, overridden per instance. The most specific value that is set wins.
    - Every level uses the slider rules of sections 7.3 and 10.3: soft limits warn, hard limits and coherence rules reject. Coherence rules apply to the effective values of each instance.
-   - Per-user settings cover preferences only (which alerts each administrator receives, timezone and display), never thresholds, so an instance's status is the same for every administrator.
+   - Per-user settings cover preferences only (which alerts each administrator receives, timezone and display), never thresholds, so an instance's status is the same for every administrator. The kinds of alert to choose from include a client that does not answer a command, a service restarted by `maguari-client` and an instance reset by `maguari-server`.
    - Until then, every threshold is a single named constant, never a literal repeated in code.
 4. **The seed config file warning** (sections 10.3 and 11.5 item 3) must exist. Since MVP step 10 the seed file can contain the SMTP password (section 11.5.1), so a file left on the server after setup exposes a secret to anyone who can read it.
 5. **Google sign-in** (section 11.1) with the email allowlist, which disables the local password login once configured. Until then, the one administrator created by the setup wizard signs in with the local password.
