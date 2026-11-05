@@ -25,11 +25,11 @@ Decided before this plan, in the claude.ai chat:
 - **D13. "Never reset".** A per-instance option in the web app. In production the server also excludes its own instance (from the metadata server). In development there is no metadata server, so the option covers self-exclusion there and protects instance-sig.
 - **D14. Unanswered commands.** A command the client never answers before it expires is logged and shown on the instance page, for the administrator to check by hand. Nothing more in this phase.
 - **D15. Testing.** In development the sudoers entry is installed by hand, with the steps documented in `docs/WORKFLOW.md`. Resets are tested only on a disposable instance in a separate GCP project, never on instance-sig (design section 17).
-- **D16. Steps,** from safest to riskiest, each one commit reviewed before the next (below).
+- **D16. Steps,** from safest to riskiest, each one commit reviewed before the next (below). The disk usage check was added later as step 3.4, and the later steps were renumbered (answer 16).
 
 Recorded for later, not in this phase: choosing which kinds of alert each administrator receives belongs to section 18 item 3 (phase 5). This plan's commit adds three kinds to that item: a client that does not answer a command, a service restarted by `maguari-client` and an instance reset by `maguari-server`.
 
-This plan proposes the rest. It was approved with the answers at the end, and the proposals below already follow them. Each step records what it decides in `docs/DESIGN.md` in the same commit.
+This plan proposes the rest. It was approved with the answers at the end (two rounds), and the proposals below already follow them. Each step records what it decides in `docs/DESIGN.md` in the same commit.
 
 ## Steps
 
@@ -39,12 +39,13 @@ Each step is one commit that passes both test suites, followed by a review befor
 |---|---|---|---|
 | 3.1 | The ladder decides and records, executing nothing; modes; `InstanceRemediation` | The mode on the instance page, the check-to-unit association, "I would restart nginx.service now" on the instance page and the Logs screen | |
 | 3.2 | The command channel and the allowlist, still executing nothing | `maguari-allowed-units`; allowed units and the suggested command on the instance page; signed responses; a dry-run decision travels to the client and comes back "the client could do this" or "not allowed"; unanswered commands shown | 0.7.0 |
-| 3.3 | Real service restarts with the watch of D8 | The global dry-run switch; a test unit restarted for real; outcome and duration on the page and in the resolved email | 0.8.0 |
-| 3.4 | The reboot | A disposable instance reboots, and reports the result after boot; the boot grace period holds later actions | 0.9.0 |
-| 3.5 | The reset through the API, with the status check and "never reset" | A disposable instance is reset; "Reset requested at ..., result unknown" after a killed tick | |
-| 3.6 | The circuit breaker and the emails of D11 | No action while many instances fail at once; the three emails | |
+| 3.3 | Real service restarts with the watch of D8 and the extra heartbeat (P6 item 6) | The global dry-run switch; a test unit restarted for real; outcome and duration on the page and in the resolved email | 0.8.0 |
+| 3.4 | The disk usage check (P11) | Disk usage on the dashboard and the instance page; warning and critical incidents with their emails, the critical one marked in its subject | |
+| 3.5 | The reboot, with "Never reboot" | A disposable instance reboots, and reports the result after boot; the boot grace period holds later actions; a critical `/` or `/boot` blocks the reboot | 0.9.0 |
+| 3.6 | The reset through the API, with the status check and "Never reset" | A disposable instance is reset; "Reset requested at ..., result unknown" after a killed tick | |
+| 3.7 | The circuit breaker and the emails of D11 | No action while many instances fail at once; the three emails | |
 
-The reset limit, the cooldowns and the boot grace period are decided from 3.1 on, so dry-run shows them working before anything real happens. Real actions exist from 3.3 but the breaker only from 3.6. That is acceptable because nothing is deployed until phase 4 and in development only test instances are set to automatic.
+The reset limit, the cooldowns and the boot grace period are decided from 3.1 on, so dry-run shows them working before anything real happens. Real actions exist from 3.3 but the breaker only from 3.7. That is acceptable because nothing is deployed until phase 4 and in development only test instances are set to automatic.
 
 Out of scope: sliders and the settings hierarchy (phase 5), per-administrator alert choices (phase 5), the setup wizard (phase 7), real-time mode (P6), restarting containers inside Docker (design section 6.1).
 
@@ -74,12 +75,12 @@ No other code writes an action, so no code path can skip the rules. That is what
 1. **Remediation** owns the decisions and the record of actions. **Clients** owns delivery: the command queue, what travels in heartbeats and what each client reports. **Fleet** owns the reset call and the status check. Monitoring stays unaware of all of it, except that it now keeps the failure's reason (P3 item 6).
 2. **Direction of calls** (design section 2.1): Remediation calls `ClientsApi::queueCommand()` inside its decision transaction and `FleetApi::instanceStatus()` and `resetInstance()` outside any transaction. Transactions do not nest (`Kernel/Database`), so `queueCommand()` writes in the caller's transaction and refuses to run outside one, as `EventOutbox` does. Clients tells Remediation what happened only through events, because heartbeats never deliver. No cycle: Clients still knows nothing about Remediation.
 3. **New tables:**
-   - `remediation_instances(instance_id, mode, mode_changed_at, maintenance_until, never_reset)`: no row means alert-only (D10), so Remediation needs no event from Fleet when an instance is picked. Maintenance is kept apart from the mode, like a snooze over it: when it ends, the instance is back in the mode it had.
+   - `remediation_instances(instance_id, mode, mode_changed_at, maintenance_until, never_reboot, never_reset)`: no row means alert-only (D10), so Remediation needs no event from Fleet when an instance is picked. Maintenance is kept apart from the mode, like a snooze over it: when it ends, the instance is back in the mode it had.
    - `remediation_actions(id, instance_id, action, unit, dry_run, state, outcome, detail, decided_at, started_at, finished_at, duration_seconds, command_id)`: `action` is `restart`, `reboot` or `reset`; `state` is `requested`, `started` or `finished`.
    - `remediation_action_incidents(action_id, incident_id)`: one action can serve several incidents.
    - `remediation_check_units(instance_id, check_name, subject, unit)`: the association of D3.
    - `remediation_settings(id, dry_run)`: at most one row; on by default (P9).
-   - `remediation_circuit_breaker(id, tripped_at, cleared_at)`: one row per trip (step 3.6).
+   - `remediation_circuit_breaker(id, tripped_at, cleared_at)`: one row per trip (step 3.7).
    - `remediation_incidents` gets `ladder_step` and `exhausted_at`.
    - `clients_commands(id, instance_id, action, args, dry_run, created_at, expires_at, last_sent_at, started_at, finished_at, outcome)`, deleted 7 days after they end. `clients_clients` gets `allowed_units` (JSON), `reboot_allowed` and `commands_supported`.
    - `monitoring_check_states` gets `reason`. It already has `checked_at`, which P5 item 5 relies on.
@@ -167,7 +168,7 @@ No other code writes an action, so no code path can skip the rules. That is what
    The new content goes to a temporary file that sudo ignores (a name with a dot, in the same directory), is checked with `visudo -cf` and is renamed into place only if it passes. Otherwise the old files stay. Unit names may contain `:` and `\`, which sudoers treats as special, so they are escaped (a test covers every allowed character against the real `visudo`). This replaces the package's generation of sudoers in design section 5.4, and section 5.3 item 3 changes too: there is one action, `restart`, whose argument must be in the file, instead of an action name per service.
 5. **Two gates on the client:** the unit must pass `UnitName` and be in the file. sudo is the third gate, and the server's knowledge of the allowed units a fourth (P5 item 4).
 6. **The client's systemd unit** (phase 4) must not set `NoNewPrivileges=yes`, because it would make sudo fail. The design records this now so that packaging does not copy the scanner's hardening blindly.
-7. **The instance page suggests the command** (step 3.2), ready to copy, in "Allowed units on the instance". `RemediationApi::suggestedAllowedUnits()` builds it from the instance's service checks (`MonitoringApi`), the units associated with its local HTTP and database checks (its own table) and the units the client already reports as allowed (`ClientsApi`). Those last ones are kept because `set` replaces the whole list, so a suggestion without them would silently remove units someone allowed by hand. `--allow-reboot` is always included, with a line saying that it may be removed. `maguari-client.service` is left out, since the command would refuse it, and a name with a character the shell treats as special (`\`) is quoted. When a check's unit is not allowed, the page says so next to the check and shows the updated command. The server only suggests: a person runs it with sudo, so D4 holds.
+7. **The instance page suggests the command** (step 3.2), ready to copy, in "Allowed units on the instance". `RemediationApi::suggestedAllowedUnits()` builds it from the instance's service checks (`MonitoringApi`), the units associated with its local HTTP and database checks (its own table) and the units the client already reports as allowed (`ClientsApi`). Those last ones are kept because `set` replaces the whole list, so a suggestion without them would silently remove units someone allowed by hand. `--allow-reboot` is always included, with a line saying that it may be removed, and that without it the ladder stops after the second restart (P5 item 8). `maguari-client.service` is left out, since the command would refuse it, and a name with a character the shell treats as special (`\`) is quoted. When a check's unit is not allowed, the page says so next to the check and shows the updated command. The server only suggests: a person runs it with sudo, so D4 holds.
 
 ### P5. The ladder
 
@@ -177,7 +178,7 @@ No other code writes an action, so no code path can skip the rules. That is what
    |---|---|---|
    | 1 | Restart | Open for 3 minutes, counted from the latest of: opening, the instance turning automatic, the end of maintenance; failing |
    | 2 | Restart again | The first restart's outcome is `failed` or `timed_out`; or it is `restarted` and the check has a result newer than the restart's end (item 5); failing |
-   | 3 | Reboot | The same, for the second restart; failing. Skipped when the instance does not allow reboots, going on to the reset |
+   | 3 | Reboot | The same, for the second restart; failing. Item 8 says when this step is skipped or the ladder stops before it |
    | 4 | Reset | The boot grace period (7 minutes) after the reboot has passed; failing |
    | End | Exhausted | The boot grace period after the reset has passed; failing. Its email goes out once, and nothing more happens on this incident (`RESETS_PER_INCIDENT = 1`) |
 
@@ -188,13 +189,13 @@ No other code writes an action, so no code path can skip the rules. That is what
    | What happens | Unit fails at once (`failed`) | Unit comes back (`restarted`), check still fails |
    |---|---|---|
    | Restart | 3 | 3 |
-   | Restart again | about 5 | about 6 |
-   | Reboot command | about 7 | about 9 |
-   | The client reports `started` and reboots (P7) | about 8 | about 10 |
-   | The boot grace period ends: reset | about 15 | about 17 |
-   | The boot grace period ends: exhausted, email | about 22 | about 24 |
+   | Restart again | about 4 | about 5 |
+   | Reboot command | about 5 | about 7 |
+   | The client reports `started` and reboots (P7) | about 6 | about 8 |
+   | The boot grace period ends: reset | about 13 | about 15 |
+   | The boot grace period ends: exhausted, email | about 20 | about 22 |
 
-   One restart takes about 2 minutes when it fails at once: the next heartbeat brings the command, the one after brings the outcome, and then the next tick decides. `restarted` needs one heartbeat more, for the newer result. So a broken unit reaches the reboot about 4 minutes after its first restart, not 2. A slow restart adds its own length, and never overlaps with the next one, because an unfinished restart blocks it.
+   The next heartbeat brings the command, and the end of the watch sends the outcome at once (P6 item 6). So one restart takes about 1 minute when the unit fails at once, and about 2 when the check has to fail again, because that needs the next scheduled heartbeat's result (item 5). That is the floor while the client speaks once a minute, and it was accepted (answer 12). A slow restart adds its own length and never overlaps with the next one, because an unfinished restart blocks it.
 
    `heartbeat_age`: the check fails after about 90 seconds, so the reset comes about 4.5 to 6 minutes after the last heartbeat (D7).
 
@@ -217,7 +218,19 @@ No other code writes an action, so no code path can skip the rules. That is what
 
    Only `service`, `local_http` and `database` incidents use this, and all three report on every heartbeat.
 6. **Check units (D3):** on the instance page, each `local_http` and `database` check gets a "Restart when failing" field, holding one unit name validated with `UnitName`, with a warning and the updated command if the client does not report it as allowed (P4 item 7); `POST /admin/instances/{id}/check-units`. A check's association is removed when `monitoring.check_withdrawn` arrives. One unit per check: a check depending on two services names the one that restarts first in a failure.
-7. **Alert only (D3)** means `Ladder` returns no step: the incident never gets an action, whatever the mode. That includes a `database` failure with reason `login_refused` and a `service` failure with reason `not_found` (answer 10), since restarting cannot help a typo or a removed package.
+7. **Alert only (D3)** means `Ladder` returns no step: the incident never gets an action, whatever the mode. That includes a `database` failure with reason `login_refused` and a `service` failure with reason `not_found` (answer 10), since restarting cannot help a typo or a removed package, and the disk usage checks (P11).
+8. **Which steps exist on an instance.** The server may only restrict what the instance allows, never grant more. A step turned off in the web app is skipped, and the ladder goes on to the next allowed step. A reboot not allowed on the instance stops the ladder, because whoever removed `--allow-reboot` did it on purpose. `heartbeat_age` only ever has the reset.
+
+   | Allowed on the instance (`--allow-reboot`) | "Never reboot" | "Never reset" | After the second restart |
+   |---|---|---|---|
+   | Yes | Off | Off | Reboot, then reset |
+   | Yes | On | Off | Reset |
+   | Yes | Off | On | Reboot, then exhausted |
+   | Yes | On | On | Exhausted |
+   | No | Either | Either | Exhausted |
+
+   "Exhausted" comes when the second restart's outcome allows the next step (item 5), with its email. Before step 3.2 nothing is reported, so step 3.1 assumes the instance allows reboots. "Never reboot" comes in step 3.5 and "Never reset" in step 3.6.
+9. **A critical system disk blocks reboot and reset** (P11 item 6).
 
 ### P6. Watching a restart without blocking heartbeats (D8)
 
@@ -227,32 +240,35 @@ No other code writes an action, so no code path can skip the rules. That is what
 2. **The restart:** read `ActiveEnterTimestampMonotonic`, run `sudo -n /usr/bin/systemctl restart --no-block -- <unit>` and poll `systemctl show` every 5 seconds (the existing `Systemctl`, with more properties). `--no-block` returns as soon as systemd has queued the job, and the watch is what waits.
 3. **"Active" must mean restarted.** Just after the command, the unit may still be active from before. `restarted` needs `ActiveState=active`, no job pending (`Job` empty) and an `ActiveEnterTimestampMonotonic` different from the one read before. `failed` with no job pending ends the watch early: nothing more is coming. Step 3.3 verifies the exact output of these properties on Ubuntu 22.04 and 24.04.
 4. **A restart of the client during a watch:** at startup, the runner starts a new child for any command marked started without a result. It carries on from the stored start time, so the 5 minute limit holds. systemd kills children with the service by default, which is what we want here.
-5. **Real-time mode: proposed not to turn on.** It would bring outcomes and results in 10 seconds rather than within 60. Since answer 2 removed the fixed wait, that now does save time, about 1 to 1.5 minutes per restart, though the once-a-minute tick remains. That is not worth it in this phase: it would add a feature that does not exist yet (`report_interval` is not implemented), run the client's checks every 10 seconds on an instance already in trouble and use egress. Worth another look if the ladder feels slow in practice. If the page should feel more alive during an action, that can come with the layout redesign.
+5. **Real-time mode stays out of this phase** (answer 13). `report_interval` is not implemented, and it would run the client's checks every 10 seconds on an instance already in trouble.
+6. **One extra heartbeat when the watch ends** (answer 13, step 3.3). The child's result file appears, and the runner sends a heartbeat at once, outside its schedule, carrying the outcome. It then returns to its normal schedule: the fixed times do not move. To notice the file, `Runner` sleeps in steps of 1 second while a child is running, and until the next due time otherwise. The per-client rate limit (20 per 60 seconds, design section 10.2) allows it. Two things follow from it being a normal heartbeat. It runs the checks too, and since its results have the same receive time as the outcome, they do not count as newer (P5 item 5), so the next scheduled heartbeat's result is what moves the ladder on. And a failure in it counts towards the 2 failures in a row of a check that had passed, so those 2 can come closer together than a minute, which is accepted because the unit has just been restarted and is being watched closely anyway. A failed extra heartbeat is logged like any other, and the outcome goes with the next one.
 
 ### P7. Reboot and reset
 
-**Reboot (step 3.4):**
+**Reboot (step 3.5):**
+
+**"Never reboot"** is a checkbox on the instance page, next to "Never reset" (`POST /admin/instances/{id}/never-reboot`), with the rules of P5 item 8.
 
 1. The client reboots only after the server has acknowledged `started`: it writes `pending-reboot.json` (`PrivateFile`) with the command's ID, the current boot ID (`/proc/sys/kernel/random/boot_id`) and the time, reports `started` in the next heartbeat and, once that is accepted, runs `sudo -n /usr/bin/systemctl reboot`. So the server knows the reboot was received, and the boot grace period has a known start, at the cost of up to one heartbeat interval.
 2. When the client starts, it compares boot IDs: different means `rebooted`; the same after 5 minutes means `reboot_failed`. The file is removed once its result is accepted.
 
-**Reset (step 3.5),** carried out by the tick right after the decision's transaction (P3 item 3):
+**Reset (step 3.6),** carried out by the tick right after the decision's transaction (P3 item 3):
 
 1. **Recorded first.** The transaction stores the action as `requested`, and that alone counts for the limit, the cooldown and the incident's one reset. Nothing ever picks up a `requested` reset again. If the tick dies, the page says "Reset requested at ..., result unknown" for good (D6), and the ladder is exhausted after its boot grace period if the check still fails. Not retrying it was accepted (answer 1).
 2. **Status check:** `FleetApi::instanceStatus()` (`compute.instances.get`). Only `RUNNING` continues. Design section 7.2 item 6 names what to refuse, but an allowlist also covers `SUSPENDED`, `REPAIRING` and whatever Google adds. It also compares the GCP instance ID with Fleet's, so a recreated instance under the same name is not reset by mistake on old grounds. A refusal finishes the action as `not_running`. It could not run, so the same step is tried again (answer 5); it counts only for the cooldown, so a stopped instance costs one API call per 10 minutes.
 3. **Self-exclusion:** the server's own instance is never reset. In production, the instance ID from the metadata server; if that cannot be read, no reset at all. In development (`MAGUARI_GCP_CREDENTIALS=application-default`) there is no metadata server, and "never reset" covers it (D13). The check sits in `FleetApi::resetInstance()`, the last gate, and is also applied at decision time so that the page can explain.
 4. **The call:** `POST .../zones/{zone}/instances/{name}/reset`. Google's answer means "accepted", not "done": polling the operation would need one more permission, and the check passing again is the better proof. The result is stored in a short transaction: `accepted`, `refused` with a fixed sentence (section 8.1 item 1) when Google answered 4xx, or `unknown` for a timeout or a 5xx. `refused` could not run, so it counts only for the cooldown and is tried again, as with a role without the permission. `unknown` may have reached Google, so it counts like `accepted`: never repeated (D6).
-5. **"Never reset"** is a checkbox on the instance page (`POST /admin/instances/{id}/never-reset`). The ladder stops at the reboot for such an instance, and is exhausted after its boot grace period. A `heartbeat_age` incident on it has no step at all, so it is exhausted when its 3 minutes pass.
+5. **"Never reset"** is a checkbox on the instance page (`POST /admin/instances/{id}/never-reset`). For such an instance the ladder ends with the reboot, or after the second restart if there is no reboot either (P5 item 8), and is exhausted then. A `heartbeat_age` incident on it has no step at all, so it is exhausted when its 3 minutes pass.
 
 ### P8. Modes and dry-run (steps 3.1 and 3.3)
 
 1. **Instance page:** "Remediation", with the mode (automatic or alert-only) and a form for maintenance with a required end time (at most 30 days ahead), plus "End maintenance". `POST /admin/instances/{id}/mode`, `POST /admin/instances/{id}/maintenance`, `POST /admin/instances/{id}/maintenance/end`. Below it, the instance's actions, newest first.
 2. **Alert-only** records nothing. Only automatic instances are decided, also under dry-run, so dry-run shows what automatic would do.
 3. **Maintenance and emails:** incidents open and resolve as usual, with `in_maintenance` in their events. Notifications writes the notification but gives up the alert at once with "The instance was in maintenance." When maintenance ends, an incident still open gets its `opened` email through the existing hourly reconciliation, "Detected late" (design section 13.3 item 5), which only needs to skip instances still in maintenance. No new mechanism, and the administrator hears about what is still broken.
-4. **Global dry-run:** a small page, `/admin/remediation`, linked from the dashboard, with one switch (`POST /admin/remediation/dry-run`) and, from step 3.6, the breaker's state. The switch appears in step 3.3; before that, nothing can execute, so it would have no meaning. The dashboard shows one line while dry-run is on. It starts **on** in every new install (P9).
+4. **Global dry-run:** a small page, `/admin/remediation`, linked from the dashboard, with one switch (`POST /admin/remediation/dry-run`) and, from step 3.7, the breaker's state. The switch appears in step 3.3; before that, nothing can execute, so it would have no meaning. The dashboard shows one line while dry-run is on. It starts **on** in every new install (P9).
 5. **Dry-run also exercises the channel (step 3.2).** A dry-run restart or reboot travels as a command with `dry_run: true`. The client does everything up to the action: checks the rules and asks sudo with `sudo -n -l <the same command>`, which runs nothing, then answers `would_run`, `not_allowed` or `sudo_failed`. This makes a dry run catch the real configuration problems, and gives 3.2 a visible result without any new feature. A dry-run reset checks the instance's status and stops there. D9 says dry-run "does nothing"; this does nothing to the instance, but it does reach it (answer 6). Step 3.2 verifies that `sudo -l` behaves this way with `NOPASSWD` on both Ubuntu versions.
 
-### P9. The circuit breaker and emails (step 3.6)
+### P9. The circuit breaker and emails (step 3.7)
 
 1. **Evaluated at the start of step (c2),** once per tick: the instances with an open `heartbeat_age` incident, against the instances that check judges (picked and having sent a heartbeat, design section 6.2), leaving out those in maintenance on both sides, through the existing `RemediationApi::isMassFailure()` (50%, at least 2). Tripping writes a row and `remediation.circuit_breaker_tripped`; it clears at the first tick below the threshold. While tripped, `decide()` returns no action, records one reason on the page and leaves ladder steps alone. Because of the 3 minute wait, heartbeat ages that spread across two ticks (design section 13.3 item 9) are all counted before anything can act. `remote_http` does not count (D12, answer 11): it never triggers an action, so counting it would protect nothing, and a domain that stops resolving on several instances would stop every other repair meanwhile. Leaving instances that never reported out of the total keeps picked instances without a client from hiding a network failure.
 2. **The three emails** are new alert kinds. `ladder_exhausted` and `reset_limit` belong to an incident's notification, so `notifications_alerts` gets those kinds and uses the same sending and retry rules. The breaker concerns no incident, so `notifications_system_alerts(id, kind, created_at, sent_at, given_up_at, attempts, last_failure)`, which the same sender handles. Section 10.4's future system conditions can reuse it. Nothing is sent for clearing: the summary email of recoveries (D12) covers it.
@@ -264,16 +280,30 @@ No other code writes an action, so no code path can skip the rules. That is what
 
 1. **Unit tests** cover the domain with plain numbers (every row of P5, both aggregates' rules, the breaker), the protocol's formats and the client with fake `Systemctl` and sudo programs, as tests already do with `ProcessSystemctl`'s `$binary`.
 2. **Real restarts:** a harmless test unit on the development desktop, `maguari-test.service`, with a sudoers entry for the developer's own user and only that unit, both installed by hand. Step 3.3 documents the exact steps in `docs/WORKFLOW.md`.
-3. **The development client is enrolled as instance-sig** (it claims that instance's identity on the desktop). So a decision for instance-sig would restart units on the desktop, reboot the desktop and reset the real instance-sig. So instance-sig stays alert-only throughout this phase, gets "never reset" as soon as step 3.5 adds it, and the desktop's sudoers never has a reboot line.
+3. **The development client is enrolled as instance-sig** (it claims that instance's identity on the desktop). So a decision for instance-sig would restart units on the desktop, reboot the desktop and reset the real instance-sig. So instance-sig stays alert-only throughout this phase, gets "never reset" as soon as step 3.6 adds it, and the desktop's sudoers never has a reboot line.
 4. **Reboot and reset** run only on a disposable instance in a separate project. The desktop is not a candidate for the reboot: it is triple-boot and might not come back into Ubuntu.
-   - **The reboot (step 3.4):** the server runs on the desktop until phase 4, and a client only accepts `http://` for `localhost`. So the disposable instance runs the client from a source checkout under a temporary systemd unit, with an SSH reverse tunnel from the desktop (`-R 8080:localhost:8080`) reopened in a loop, so that after the reboot the client reaches the server on its own `localhost`. Step 3.4 documents this in `docs/WORKFLOW.md`.
-   - **The reset (step 3.5):** before that step, the development service account's role in `pessoal-303713` loses `compute.instances.reset`, and only the disposable project's role keeps it. That is a second lock on instance-sig, outside Maguari's code. Step 3.5 documents this in `docs/WORKFLOW.md`.
+   - **The reboot (step 3.5):** the server runs on the desktop until phase 4, and a client only accepts `http://` for `localhost`. So the disposable instance runs the client from a source checkout under a temporary systemd unit, with an SSH reverse tunnel from the desktop (`-R 8080:localhost:8080`) reopened in a loop, so that after the reboot the client reaches the server on its own `localhost`. Step 3.4 documents this in `docs/WORKFLOW.md`.
+   - **The reset (step 3.6):** before that step, the development service account's role in `pessoal-303713` loses `compute.instances.reset`, and only the disposable project's role keeps it. That is a second lock on instance-sig, outside Maguari's code. Step 3.5 documents this in `docs/WORKFLOW.md`.
+
+### P11. The disk usage check (step 3.4)
+
+1. **Why.** The client reports disk used and total for every filesystem every minute, but nothing judges whether a disk is full. Design section 1 goal 1 asks "Is disk usage safe?"
+2. **Two check names, one per level:** `disk_usage_warning` and `disk_usage_critical`, labels "Disk usage (warning)" and "Disk usage (critical)", each with one result per filesystem and the mount point as the subject. Monitoring judges both on each heartbeat, from the readings that already arrive (`Domain/DiskUsageRule`), with no change to the client. **This is how warning to critical gets its own incident and email:** an outcome that stays fail writes no event, but these are two separate outcomes. At 90%, `warning` is fail and `critical` is pass. Crossing 95% changes only `critical`, which writes its own `monitoring.check_failed`, and so its own incident and email through what already exists. Going back down, each resolves on its own, after 5 minutes of passing (design section 7.4 item 5). A disk that jumps straight past 95% gets both emails.
+   
+   *Alternative:* one check with a "level" on its outcome, and a new event on a level change. Fewer rows, but Monitoring, Remediation and Notifications would all have to learn about levels, whereas with two names none of them needs to.
+3. **Levels:** warning at 85% used and critical at 95% (`DiskUsageRule::WARNING_PERCENT`, `CRITICAL_PERCENT`), constants until phase 5 (design section 18 item 3). Used counts ext4's root reserve (design section 6.1.2), so 100% is when services get "No space left on device". The sentence says so: "/ is 96% full (9.6 GiB of 10.0 GiB). At 100%, services get "No space left on device"." The percentage is compared exactly and shown rounded down. A total of 0 gives no result.
+4. **Failures are confirmed** like the client's other checks (`CheckStates::recordConfirmed()`, 2 in a row), so a large temporary file does not send an email. A filesystem that stops being reported is withdrawn by the daily job's rule for subjects that disappear (design section 6.3 item 8), not on the first heartbeat without it, because a filesystem that cannot be measured is simply skipped for that heartbeat (design section 6.1.2 item 5).
+5. **Both are alert only** (D3): `Ladder` returns no step, and the breaker does not count them.
+6. **While `/` or `/boot` is critical, no reboot and no reset on that instance:** a reboot or a reset with a full system disk can leave the instance unable to boot, and recovering it means attaching the disk to another instance. The rule lives in `InstanceRemediation`, which reads its own data: an open `disk_usage_critical` incident on `/` or `/boot`, with `passing_since` null. The ladder stops there and is exhausted, whichever incident was climbing it, `heartbeat_age` included: a silent client with a full disk is a likely pair, and the block keeps relying on the last reading. The page and the exhausted email say the full disk blocked it, and dry-run shows the block as well. Restarts are not blocked, and neither are incidents already past the reboot.
+7. **The critical email** has its subject marked: `[Maguari] CRITICAL: disk / at 96% on geonode-1`. Phase 3 marks only the subject; importance levels chosen per kind of alert come in phase 5 (design section 18 item 3). The percentage reaches Notifications as a value in `monitoring.check_failed` and `remediation.incident_opened` (`percent`, optional), never parsed from a sentence. A critical email never goes into a summary (design section 13.3 item 9), so its subject is always seen. Its resolved email has the normal subject.
+8. **Pages:** both levels appear in the instance page's checks and the dashboard's "Checks" column. The disk size check of the daily job (design section 6.3.1) is a different check and stays as it is.
 
 ## Known limits
 
 - **Maguari's own actions can open incidents.** Restarting nginx for a local HTTP incident can fail nginx's own service check for 2 heartbeats, and a slow restart surely will. That opens a second incident and sends its emails. It does not cause a second restart (P5 item 3). Same for `heartbeat_age` during a reboot: it opens and resolves with its emails as usual (answer 8). Design section 7.2's "failures are ignored" during the grace period means no action, not no incident: Monitoring writes the failure only once, so an instance that never came back would stay unreported for up to an hour.
 - **A dead client looks like a dead instance.** D3 sends silence straight to a reset, so a crashed client resets a healthy instance, even while its web app still answers. Accepted for now (answer 10): an app can answer while the instance is badly hurt. `Restart=always` in the client's unit (phase 4) makes this rare.
 - **The clock:** `expires_at` is judged by the client's clock, which the server allows to be up to 5 minutes off (section 5.5), the same as the expiry. A client with a clock that far off answers `expired`, and the page shows it. Compute Engine instances keep time well, so this stays a limit.
+- **A disk hovering around a level** opens and resolves incidents, at most about one pair every 7 minutes because of the confirmation and the 5 minutes of passing. There is no separate level for going back down. If it bothers in practice, phase 5 can add one.
 - **Docker deployments:** a restart can only target `docker.service`, which restarts every container on the instance (design section 6.1). Associating it with a check is the administrator's choice.
 - **Without the settings hierarchy,** the 7 minute grace period and the 5 minute watch are the same for all instances (D9). A service that takes more than 5 minutes to start reports `timed_out` and the ladder goes on, until phase 5 can raise it.
 
@@ -291,8 +321,16 @@ No other code writes an action, so no code path can skip the rules. That is what
 10. **Q10:** a `service` failure with reason `not_found` is alert only, like `login_refused` (P5 item 7). A silent client on an instance whose web app still answers is a known limit.
 11. **Correction to D12:** the circuit breaker counts only `heartbeat_age` incidents, not `remote_http` (P9 item 1). `remote_http` never triggers an action, so counting it protects nothing, and a domain that stops resolving on several instances would trip the breaker and stop every other repair meanwhile. If the server's own network fails, heartbeats stop arriving from every instance, which `heartbeat_age` alone detects.
 
+### After the review of those answers
+
+12. **Reboot timing:** accepted. About 2 minutes per restart is the floor while the client speaks once a minute. (The extra heartbeat of answer 13 brings a unit that fails at once down to about 1.)
+13. **Real-time mode** stays out of this phase. When the watch of a restart ends, the client sends one extra heartbeat at once, outside its schedule, then returns to its normal schedule (P6 item 6).
+14. **Two resets for one problem:** kept as planned (P5 item 3).
+15. **Reboot not allowed on the instance:** the ladder stops after the second restart and is exhausted, with its email. "Never reboot" joins "Never reset" on the instance page. The server may only restrict what the instance allows, never grant more (P5 item 8). This replaces what Q3 proposed, going on to the reset.
+16. **A disk usage check,** in phase 3, as its own step before the reboot, with warning at 85% and critical at 95%, both alert only, the critical email marked and a critical `/` or `/boot` blocking reboot and reset (P11). Design section 18 item 3 gets importance levels for alerts and names the two values.
+
 ## Design changes once approved
 
-Sections 2.1 (the flow, the decision as a tick step), 3.1 item 7 (Remediation's layers, the second aggregate and the recorded exception of D1), 5.2 and 5.3 (the protocol, P2), 5.4 and 12.1 (the allowlist command replaces the package's sudoers generation, P4), 5.5 (signed responses, in step 3.2), 7.1 to 7.3 (the ladder and how its steps follow outcomes and results, the safeguards, including the breaker counting only `heartbeat_age` incidents in section 7.2 item 5, D2's setting, D9's default, the new rows for resets per incident and reboots per 24 hours, and the cooldowns' narrower meaning), 7.4 item 4 (the failure counter there becomes the ladder step), 8 (the reset, the status check, self-exclusion), 9.2 (the tables), 10.1 (the tick's order), 10.4 and 13.3 (actions on the Logs screen, the new emails, maintenance) and 17 (phase 3's steps), each in the step that implements it. `docs/WORKFLOW.md` gets the hand-installed sudoers entry in step 3.3 (D15), the reverse tunnel in step 3.4 and the role change in step 3.5.
+Sections 2.1 (the flow, the decision as a tick step), 3.1 item 7 (Remediation's layers, the second aggregate and the recorded exception of D1), 5.2 and 5.3 (the protocol, P2, and the extra heartbeat in step 3.3), 6.1.2 and 6.2 (the disk usage check, step 3.4), 5.4 and 12.1 (the allowlist command replaces the package's sudoers generation, P4), 5.5 (signed responses, in step 3.2), 7.1 to 7.3 (the ladder and how its steps follow outcomes and results, the safeguards, including the breaker counting only `heartbeat_age` incidents in section 7.2 item 5, D2's setting, D9's default, the new rows for resets per incident and reboots per 24 hours, and the cooldowns' narrower meaning), 7.4 item 4 (the failure counter there becomes the ladder step), 8 (the reset, the status check, self-exclusion), 9.2 (the tables), 10.1 (the tick's order), 10.4 and 13.3 (actions on the Logs screen, the new emails, maintenance) and 17 (phase 3's steps), each in the step that implements it. `docs/WORKFLOW.md` gets the hand-installed sudoers entry in step 3.3 (D15), the reverse tunnel in step 3.5 and the role change in step 3.6.
 
-This plan's commit already records in the design what no step of this phase would: the three alert kinds in section 18 item 3, the setup wizard (sections 17 and 18 item 2), the plan's name in section 17 and, with the answers, the resets per incident in section 18 item 3.
+This plan's commit already records in the design what no step of this phase would: the three alert kinds in section 18 item 3, the setup wizard (sections 17 and 18 item 2), the plan's name in section 17 and, with the answers, the resets per incident, the disk usage levels and the importance levels in section 18 item 3.
