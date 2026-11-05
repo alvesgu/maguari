@@ -14,6 +14,10 @@ final class Incident
     /**
      * @param ?int $id null until stored
      * @param ?int $passingSince when the check started passing while open
+     * @param int $ladderStep the step of the escalation ladder it reached
+     *        (Ladder), 0 before any
+     * @param ?int $exhaustedAt when the ladder had nothing left to try
+     * @param ?LadderHold $ladderHold why the ladder is waiting, for its page
      */
     public function __construct(
         public readonly ?int $id,
@@ -22,6 +26,9 @@ final class Incident
         public readonly ?int $passingSince = null,
         public readonly ?int $resolvedAt = null,
         public readonly ?Resolution $resolution = null,
+        public readonly int $ladderStep = 0,
+        public readonly ?int $exhaustedAt = null,
+        public readonly ?LadderHold $ladderHold = null,
     ) {
         if (($resolvedAt === null) !== ($resolution === null)) {
             throw new \InvalidArgumentException('A resolved incident has both a time and a resolution.');
@@ -43,7 +50,7 @@ final class Incident
 
     public function withId(int $id): self
     {
-        return new self($id, $this->key, $this->openedAt, $this->passingSince, $this->resolvedAt, $this->resolution);
+        return new self($id, $this->key, $this->openedAt, $this->passingSince, $this->resolvedAt, $this->resolution, $this->ladderStep, $this->exhaustedAt, $this->ladderHold);
     }
 
     /**
@@ -53,7 +60,7 @@ final class Incident
     {
         $this->assertOpen();
 
-        return new self($this->id, $this->key, $this->openedAt, null);
+        return $this->withPassingSince(null);
     }
 
     /**
@@ -63,7 +70,7 @@ final class Incident
     {
         $this->assertOpen();
 
-        return new self($this->id, $this->key, $this->openedAt, $this->passingSince ?? $at);
+        return $this->withPassingSince($this->passingSince ?? $at);
     }
 
     /**
@@ -104,12 +111,46 @@ final class Incident
             return $this->resolve($at, Resolution::Reconciled);
         }
 
-        return new self($this->id, $this->key, $this->openedAt, $this->passingSince ?? $passingSince);
+        return $this->withPassingSince($this->passingSince ?? $passingSince);
+    }
+
+    /**
+     * An action served this incident: it reached that step of the ladder.
+     * Never goes back down.
+     */
+    public function reachedStep(int $step): self
+    {
+        $this->assertOpen();
+
+        return new self($this->id, $this->key, $this->openedAt, $this->passingSince, null, null, max($this->ladderStep, $step), $this->exhaustedAt, null);
+    }
+
+    /**
+     * The ladder has nothing left to try for this incident. It stays open
+     * until its check passes.
+     */
+    public function exhausted(int $at): self
+    {
+        $this->assertOpen();
+
+        return new self($this->id, $this->key, $this->openedAt, $this->passingSince, null, null, $this->ladderStep, $this->exhaustedAt ?? $at, null);
+    }
+
+    public function heldBy(?LadderHold $hold): self
+    {
+        $this->assertOpen();
+
+        return new self($this->id, $this->key, $this->openedAt, $this->passingSince, null, null, $this->ladderStep, $this->exhaustedAt, $hold);
+    }
+
+    private function withPassingSince(?int $passingSince): self
+    {
+        return new self($this->id, $this->key, $this->openedAt, $passingSince, null, null, $this->ladderStep, $this->exhaustedAt, $this->ladderHold);
     }
 
     private function resolve(int $at, Resolution $resolution): self
     {
-        return new self($this->id, $this->key, $this->openedAt, $this->passingSince, $at, $resolution);
+        return new self($this->id, $this->key, $this->openedAt, $this->passingSince, $at, $resolution, $this->ladderStep, $this->exhaustedAt, null);
     }
 
     private function assertOpen(): void

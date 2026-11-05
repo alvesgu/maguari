@@ -194,7 +194,7 @@ final class App
             $rateLimit = new RateLimitMiddleware($access, $responseFactory);
             $view = new View();
             $adminController = new AdminController($fleet, $clients, $monitoring, $notifications, $view, $logErrors);
-            $notificationsController = new NotificationsController($notifications, $fleet, $view);
+            $notificationsController = new NotificationsController($notifications, $remediation, $fleet, $view);
             $projectsController = new ProjectsController($fleet, $clients, $access, $monitoring, $view);
             $instancesController = new InstancesController($fleet, $monitoring, $remediation, $clients, $view, $clock);
             $runsController = new RunsController($fleet, $monitoring);
@@ -216,6 +216,10 @@ final class App
                 $group->get('/projects/{id:[0-9]+}', [$projectsController, 'instances']);
                 $group->post('/projects/{id:[0-9]+}/instances', [$projectsController, 'enroll']);
                 $group->get('/instances/{id:[0-9]+}', [$instancesController, 'show']);
+                $group->post('/instances/{id:[0-9]+}/mode', [$instancesController, 'setMode']);
+                $group->post('/instances/{id:[0-9]+}/maintenance', [$instancesController, 'startMaintenance']);
+                $group->post('/instances/{id:[0-9]+}/maintenance/end', [$instancesController, 'endMaintenance']);
+                $group->post('/instances/{id:[0-9]+}/check-units', [$instancesController, 'setCheckUnit']);
                 $group->post('/instances/{id:[0-9]+}/certificate-hostnames', [$instancesController, 'addHostname']);
                 $group->post('/instances/{id:[0-9]+}/certificate-hostnames/{hostnameId:[0-9]+}/remove', [$instancesController, 'removeHostname']);
                 $group->post('/instances/{id:[0-9]+}/http-checks', [$instancesController, 'addHttpCheck']);

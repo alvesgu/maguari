@@ -31,6 +31,6 @@ final class LocalHttpCheckRule
             default => sprintf('Could not connect to port %d of the instance.', $port),
         };
 
-        return new CheckResult($check->instanceId, LocalHttpCheck::TYPE, $result->outcome, $detail, $checkedAt, $check->subject());
+        return new CheckResult($check->instanceId, LocalHttpCheck::TYPE, $result->outcome, $detail, $checkedAt, $check->subject(), $result->reason);
     }
 }

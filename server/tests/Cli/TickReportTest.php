@@ -13,6 +13,8 @@ use Maguari\Server\Notifications\AlertOutcome;
 use Maguari\Server\Notifications\AlertReport;
 use Maguari\Server\Notifications\Notification;
 use Maguari\Server\Notifications\NotificationReconciliation;
+use Maguari\Server\Remediation\Domain\Action;
+use Maguari\Server\Remediation\Domain\ActionKind;
 use Maguari\Server\Remediation\Domain\Incident;
 use Maguari\Server\Remediation\Domain\IncidentKey;
 use Maguari\Server\Remediation\Domain\Reconciliation;
@@ -67,6 +69,16 @@ final class TickReportTest extends TestCase
             'The event 9 (monitoring.check_passed) failed: LogicException: Another bug. '
                 . 'Delivery stops here until the next tick (failed 1 of 3 times before it is skipped).',
         ], TickReport::errorLines($report));
+    }
+
+    public function testOneLinePerAction(): void
+    {
+        $action = Action::wouldRun(7, ActionKind::Restart, 'nginx.service', 100, [1]);
+
+        $this->assertSame(
+            ['Dry run on my-project/us-east1-b/web: I would restart nginx.service now.', 'Dry run on instance 8: I would reset the instance now.'],
+            TickReport::actionLines([$action, Action::wouldRun(8, ActionKind::Reset, null, 100, [2])], [7 => 'my-project/us-east1-b/web']),
+        );
     }
 
     public function testOneLinePerAlertEmail(): void

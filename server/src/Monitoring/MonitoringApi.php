@@ -38,6 +38,7 @@ use Maguari\Server\Monitoring\Domain\RunDecision;
 use Maguari\Server\Monitoring\Domain\RunQuery;
 use Maguari\Server\Monitoring\Domain\RunRule;
 use Maguari\Server\Monitoring\Domain\RunSeries;
+use Maguari\Server\Monitoring\Domain\ServiceUnit;
 use Maguari\Server\Monitoring\Exception\DailyJobAlreadyRunning;
 use Maguari\Server\Monitoring\Exception\DailyJobFailed;
 use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
@@ -211,6 +212,17 @@ final class MonitoringApi
         $state = $this->checkStates->find($instanceId, $checkName, $subject);
 
         return $state?->outcome === CheckOutcome::Pass ? $state->since : null;
+    }
+
+    /**
+     * A unit name as an administrator typed it, as it is stored: trimmed,
+     * with .service added when no suffix was typed.
+     *
+     * @throws InvalidClientCheck with a sentence for the administrator
+     */
+    public static function normalizeServiceUnit(string $input): string
+    {
+        return ServiceUnit::normalize($input);
     }
 
     /**

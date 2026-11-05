@@ -64,12 +64,14 @@ final class MigratorTest extends TestCase
             'Monitoring/0008_monitoring_http_checks.sql',
             'Monitoring/0009_monitoring_client_checks.sql',
             'Monitoring/0010_monitoring_check_not_checked.sql',
+'Monitoring/0011_monitoring_check_states_reason.sql',
             'Notifications/0001_notifications_smtp_settings.sql',
             'Notifications/0002_notifications_notifications.sql',
             'Notifications/0003_notifications_reconciliations.sql',
             'Notifications/0004_notifications_alerts.sql',
             'Notifications/0005_notifications_late_alerts.sql',
             'Remediation/0001_remediation_incidents.sql',
+'Remediation/0002_remediation_actions.sql',
         ], $migrator->migrate());
         $this->assertTrue($migrator->isUpToDate());
         $this->assertSame([], $migrator->migrate());

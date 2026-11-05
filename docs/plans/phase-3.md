@@ -329,6 +329,36 @@ No other code writes an action, so no code path can skip the rules. That is what
 15. **Reboot not allowed on the instance:** the ladder stops after the second restart and is exhausted, with its email. "Never reboot" joins "Never reset" on the instance page. The server may only restrict what the instance allows, never grant more (P5 item 8). This replaces what Q3 proposed, going on to the reset.
 16. **A disk usage check,** in phase 3, as its own step before the reboot, with warning at 85% and critical at 95%, both alert only, the critical email marked and a critical `/` or `/boot` blocking reboot and reset (P11). Design section 18 item 3 gets importance levels for alerts and names the two values.
 
+## Found while implementing
+
+### Step 3.1
+
+- **No `remediation_settings` yet.** Nothing can execute before step 3.3, so a stored setting with no switch would mean nothing. `RemediationApi::DRY_RUN` is a constant until the switch comes with real restarts, and the table with it.
+- **`remediation_actions` has no `state`, `started_at`, `duration_seconds`, `detail` or `command_id` yet** (P1 item 3). A dry-run action is finished when it is decided, and only `would_run` exists as an outcome. Steps 3.2 and 3.3 add them with what fills them, and so with `failed` and `timed_out` moving on at once and with the retries of an action that could not run.
+- **`remediation_incidents.ladder_hold`** is new, so the page can say why the ladder is waiting on a limit ("The instance reached its limit of 3 restarts per hour."). P3 item 4 asked for reasons without saying where they live.
+- **The time limit** is enforced between instances, as P3 item 3 says, and nothing else is deferred yet, because a dry run reaches no network.
+- **The association of a unit with a check** is deleted on `monitoring.check_withdrawn`, which is written only for a check that had an outcome. A check removed before its first result leaves its row behind, and adding the same check again brings the association back. Harmless, so left as it is.
+- **An incident opened in maintenance that resolves after it,** before the hourly reconciliation sent its late email, gives up its `resolved` email too: nobody was told it opened. P8 item 3 did not cover this.
+- **Smoke run** with the real `maguari-server tick` on a temporary database: an automatic instance with a service incident open for 200 seconds printed "Dry run on instance 5: I would restart nginx.service now." and stored the action and step 1, and the next tick decided nothing more. The new migrations also applied to a copy of the development database.
+
+#### Manual check (step 3.1)
+
+Nothing here can touch an instance: every action is a dry run. In separate terminals with the development environment loaded, the web app, the tick loop and the client's loop as in `docs/WORKFLOW.md`. First apply the migrations:
+
+```
+server/bin/maguari-server migrate
+```
+
+1. On the development instance's page, "Remediation" says Alert-only. Under "Services", add a service that exists and that you can stop, for example `cron`. Stop it and wait for the incident, about 2 minutes. No action appears, however long you wait.
+2. Set the mode to Automatic. About 3 minutes later the tick prints `Dry run on ...: I would restart cron.service now.`, the incident's Ladder column says Restart, and the sentence shows under "Actions" and on the Logs screen.
+3. Keep it stopped. A minute or two later it says the same again and the column says Restart again, then "I would reboot the instance now.". Seven minutes later "I would reset the instance now.", and seven minutes after that the column says exhausted. None of these happened: check that the instance's uptime did not change.
+4. Start the service again. The incident resolves 5 minutes later.
+5. Under "Local HTTP", add `http://127.0.0.1:8099/` (nothing listens there). It only alerts. Name `cron` under "Restart when failing" and it climbs the ladder too. With the service check also failing, one restart serves both.
+6. Add a service that does not exist, for example `maguari-test`. It fails and never acts.
+7. Start a maintenance 10 minutes ahead and stop the service again. The incident opens and shows, no action appears, and the Logs screen shows its email given up with "The instance was in maintenance."
+8. Press "End maintenance". The wait starts over, and the ladder acts 3 minutes later. Within the hour, the incident's email arrives, "Detected late".
+9. Set the mode back to Alert-only. The development client is enrolled as instance-sig, which must stay alert-only from step 3.3 on (P10 item 3). Automatic is safe in this step only because nothing can execute.
+
 ## Design changes once approved
 
 Sections 2.1 (the flow, the decision as a tick step), 3.1 item 7 (Remediation's layers, the second aggregate and the recorded exception of D1), 5.2 and 5.3 (the protocol, P2, and the extra heartbeat in step 3.3), 6.1.2 and 6.2 (the disk usage check, step 3.4), 5.4 and 12.1 (the allowlist command replaces the package's sudoers generation, P4), 5.5 (signed responses, in step 3.2), 7.1 to 7.3 (the ladder and how its steps follow outcomes and results, the safeguards, including the breaker counting only `heartbeat_age` incidents in section 7.2 item 5, D2's setting, D9's default, the new rows for resets per incident and reboots per 24 hours, and the cooldowns' narrower meaning), 7.4 item 4 (the failure counter there becomes the ladder step), 8 (the reset, the status check, self-exclusion), 9.2 (the tables), 10.1 (the tick's order), 10.4 and 13.3 (actions on the Logs screen, the new emails, maintenance) and 17 (phase 3's steps), each in the step that implements it. `docs/WORKFLOW.md` gets the hand-installed sudoers entry in step 3.3 (D15), the reverse tunnel in step 3.5 and the role change in step 3.6.

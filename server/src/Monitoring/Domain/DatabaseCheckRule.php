@@ -36,6 +36,6 @@ final class DatabaseCheckRule
             default => 'The check failed.',
         };
 
-        return new CheckResult($instanceId, DatabaseCheck::TYPE, $result->outcome, $detail, $checkedAt, $name);
+        return new CheckResult($instanceId, DatabaseCheck::TYPE, $result->outcome, $detail, $checkedAt, $name, $result->reason);
     }
 }

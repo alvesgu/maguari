@@ -20,6 +20,11 @@
  * @var string $localUrl @var string $hostName @var ?string $localHttpError
  * @var string $database @var ?string $databaseError
  * @var int $now
+ * @var \Maguari\Server\Remediation\Domain\InstanceRemediation $remediation
+ * @var list<\Maguari\Server\Remediation\Domain\Action> $actions newest first
+ * @var array<string, string> $checkUnits by RemediationApi::checkUnitKey()
+ * @var string $maintenanceUntil @var ?string $maintenanceError
+ * @var ?string $checkUnitError @var ?int $checkUnitId @var string $checkUnit
  */
 use Maguari\Server\Clients\ReportedCheckSettings;
 use Maguari\Server\Http\TimeAgo;
@@ -31,6 +36,9 @@ use Maguari\Server\Monitoring\Domain\HttpCheck;
 use Maguari\Server\Monitoring\Domain\HttpCheckEgress;
 use Maguari\Server\Monitoring\Domain\HttpCheckRule;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Remediation\Domain\Ladder;
+use Maguari\Server\Remediation\Domain\Mode;
+use Maguari\Server\Remediation\Domain\RemediationLimits;
 use Maguari\Server\Remediation\Domain\ResolutionRule;
 use Maguari\Server\Remediation\RemediationApi;
 use Maguari\Shared\DatabaseCheck;
@@ -47,10 +55,10 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <p>No open incidents.</p>
 <?php else: ?>
 <table>
-<thead><tr><th>Check</th><th>Subject</th><th>Opened</th><th>State</th></tr></thead>
+<thead><tr><th>Check</th><th>Subject</th><th>Opened</th><th>State</th><th>Ladder</th></tr></thead>
 <tbody>
 <?php foreach ($incidents->open as $incident): ?>
-<tr><td><?= $e(MonitoringApi::checkLabel($incident->key->checkName)) ?></td><td><?= $e($incident->key->subject) ?></td><td><?= $e($utc($incident->openedAt)) ?></td><td><?= $incident->passingSince === null ? 'Failing' : $e('Passing since ' . $utc($incident->passingSince)) ?></td></tr>
+<tr><td><?= $e(MonitoringApi::checkLabel($incident->key->checkName)) ?></td><td><?= $e($incident->key->subject) ?></td><td><?= $e($utc($incident->openedAt)) ?></td><td><?= $incident->passingSince === null ? 'Failing' : $e('Passing since ' . $utc($incident->passingSince)) ?></td><td><?= $e(Ladder::stepLabel($incident->ladderStep)) ?><?php if ($incident->exhaustedAt !== null): ?><?= $e('; exhausted at ' . $utc($incident->exhaustedAt)) ?><?= $partial('info', ['text' => 'The ladder has nothing left to try for this incident. It stays open until its check passes.']) ?><?php elseif ($incident->ladderHold !== null): ?>; waiting<?= $partial('info', ['text' => $incident->ladderHold->sentence()]) ?><?php endif; ?></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>
@@ -63,6 +71,52 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <tbody>
 <?php foreach ($incidents->resolved as $incident): ?>
 <tr><td><?= $e(MonitoringApi::checkLabel($incident->key->checkName)) ?></td><td><?= $e($incident->key->subject) ?></td><td><?= $e($utc($incident->openedAt)) ?></td><td><?= $e($utc((int) $incident->resolvedAt)) ?></td><td><?php if ($incident->resolution !== null): ?><?= $e($incident->resolution->label()) ?><?= $partial('info', ['text' => $incident->resolution->explanation()]) ?><?php endif; ?></td></tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
+<h2>Remediation</h2>
+<?php if (RemediationApi::DRY_RUN): ?>
+<p>Dry run: on instances set to automatic, Maguari decides and records what it would do, and does nothing.</p>
+<?php endif; ?>
+<p>In automatic mode, an incident whose check is still failing after <?= intdiv(RemediationLimits::ACT_AFTER_SECONDS, 60) ?> minutes climbs the escalation ladder: restart its service, restart it again, reboot the instance, reset the instance. In alert-only mode, Maguari only sends alerts. Failing web apps, certificates and disk sizes only ever alert.</p>
+<form method="post" action="/admin/instances/<?= $instance->id ?>/mode">
+<?= $csrf ?>
+<p><label for="mode">Mode</label><br>
+<select id="mode" name="mode">
+<?php foreach (Mode::cases() as $mode): ?>
+<option value="<?= $e($mode->value) ?>"<?= $mode === $remediation->mode ? ' selected' : '' ?>><?= $e($mode->label()) ?></option>
+<?php endforeach; ?>
+</select>
+<button type="submit">Save mode</button></p>
+</form>
+<?php if ($remediation->isInMaintenance($now)): ?>
+<p>In maintenance until <?= $e($utc((int) $remediation->maintenanceUntil)) ?>, then back to <?= $e(strtolower($remediation->mode->label())) ?>. Until then Maguari takes no actions and sends no emails, but incidents are still opened and shown.</p>
+<form method="post" action="/admin/instances/<?= $instance->id ?>/maintenance/end">
+<?= $csrf ?>
+<p><button type="submit">End maintenance</button></p>
+</form>
+<?php else: ?>
+<?php if ($maintenanceError !== null): ?>
+<p><?= $e($maintenanceError) ?></p>
+<?php endif; ?>
+<form method="post" action="/admin/instances/<?= $instance->id ?>/maintenance">
+<?= $csrf ?>
+<p><label for="until">Maintenance until (UTC)</label><br>
+<input id="until" name="until" type="datetime-local" value="<?= $e($maintenanceUntil) ?>" required>
+<button type="submit">Start maintenance</button></p>
+</form>
+<?php endif; ?>
+<h3>Actions</h3>
+<?php if ($actions === []): ?>
+<p>None yet.</p>
+<?php else: ?>
+<p>The latest <?= RemediationApi::ACTIONS_SHOWN ?> at most, newest first.</p>
+<table>
+<thead><tr><th>Decided</th><th>Action</th></tr></thead>
+<tbody>
+<?php foreach ($actions as $action): ?>
+<tr><td><?= $e($utc($action->decidedAt)) ?></td><td><?= $e($action->sentence()) ?></td></tr>
 <?php endforeach; ?>
 </tbody>
 </table>
@@ -130,11 +184,21 @@ $tooOld = static function (array $statuses, string $type, string $what) use ($e,
 
     return $needed === null ? '' : '<p>This client (version ' . $e((string) $clientVersion) . ') skips ' . $what . '. It needs version ' . $needed . " or later.</p>\n";
 };
-$row = static function ($status, string $first) use ($e, $partial, $csrf, $instance, $now): string {
+// The unit a failing check restarts (design section 7.1).
+$unitCell = static function ($status) use ($e, $csrf, $instance, $checkUnits, $checkUnitId, $checkUnit, $checkUnitError): string {
+    $failed = $checkUnitId === $status->check->id;
+    $value = $failed ? $checkUnit : ($checkUnits[RemediationApi::checkUnitKey($status->check->type, $status->check->subject())] ?? '');
+
+    return '<td><form method="post" action="/admin/instances/' . $instance->id . "/check-units\">\n" . $csrf . "\n"
+        . '<input type="hidden" name="check_id" value="' . $status->check->id . "\">\n"
+        . '<input name="unit" type="text" value="' . $e($value) . '" placeholder="nginx.service" aria-label="Unit to restart when ' . $e($status->check->subject()) . ' fails" autocomplete="off" spellcheck="false">' . "\n"
+        . "<button type=\"submit\">Save</button>\n</form>" . ($failed && $checkUnitError !== null ? $e($checkUnitError) : '') . '</td>';
+};
+$row = static function ($status, string $first, string $unit = '') use ($e, $partial, $csrf, $instance, $now): string {
     $checkedAt = $status->checkedAt();
 
     return '<tr>' . $first . '<td>' . $e($status->outcome()->label()) . $partial('info', ['text' => $status->detail()]) . '</td><td>'
-        . ($checkedAt === null ? '' : $e(TimeAgo::format(max(0, $now - $checkedAt)))) . '</td><td><form method="post" action="/admin/instances/' . $instance->id . '/client-checks/' . $status->check->id . "/remove\">\n"
+        . ($checkedAt === null ? '' : $e(TimeAgo::format(max(0, $now - $checkedAt)))) . '</td>' . $unit . '<td><form method="post" action="/admin/instances/' . $instance->id . '/client-checks/' . $status->check->id . "/remove\">\n"
         . $csrf . "\n<button type=\"submit\">Remove</button>\n</form></td></tr>\n";
 };
 ?>
@@ -168,14 +232,15 @@ $row = static function ($status, string $first) use ($e, $partial, $csrf, $insta
 <h3>Local HTTP</h3>
 <p>The client requests each URL on the instance itself (127.0.0.1, [::1] or localhost) and reads only the status of the answer: 2xx and 3xx pass, redirects are not followed. A host name, when set, is sent as the Host header and is the name the certificate must match, so a site behind nginx's server_name is reached as visitors reach it. No egress: the results ride in the heartbeat.</p>
 <?= $tooOld($localHttp, LocalHttpCheck::TYPE, 'local HTTP checks') ?>
+<p>These checks only alert unless a unit is named under "Restart when failing". Then, in automatic mode, the ladder restarts that unit.</p>
 <?php if ($localHttp === []): ?>
 <p>None yet.</p>
 <?php else: ?>
 <table>
-<thead><tr><th>URL</th><th>Host name</th><th>Result</th><th>Checked</th><th></th></tr></thead>
+<thead><tr><th>URL</th><th>Host name</th><th>Result</th><th>Checked</th><th>Restart when failing</th><th></th></tr></thead>
 <tbody>
 <?php foreach ($localHttp as $status): ?>
-<?= $row($status, '<td>' . $e($status->check->target) . '</td><td>' . $e($status->check->hostName) . '</td>') ?>
+<?= $row($status, '<td>' . $e($status->check->target) . '</td><td>' . $e($status->check->hostName) . '</td>', $unitCell($status)) ?>
 <?php endforeach; ?>
 </tbody>
 </table>
@@ -198,14 +263,15 @@ $row = static function ($status, string $first) use ($e, $partial, $csrf, $insta
 <h3>Databases</h3>
 <p>The client logs in to each database and runs SELECT 1, with <?= DatabaseCheck::TIMEOUT_SECONDS ?> seconds to connect and <?= DatabaseCheck::TIMEOUT_SECONDS ?> for the query. Only its name is set here: how to log in is set up on the instance, in a file only the client's user can read, and never reaches this server. On the instance, run <code>sudo -u maguari-client maguari-client set-database &lt;name&gt; --type=postgresql --host=127.0.0.1 --database=&lt;database&gt; --user=&lt;user&gt;</code> (or <code>--type=mysql</code> for MySQL and MariaDB); it asks for the password. Use a user that can only log in, for example one created with <code>CREATE ROLE maguari_check LOGIN PASSWORD '...'</code> and <code>GRANT CONNECT ON DATABASE geonode TO maguari_check</code>.</p>
 <?= $tooOld($databases, DatabaseCheck::TYPE, 'database checks') ?>
+<p>These checks only alert unless a unit is named under "Restart when failing". A refused login never restarts anything, because the problem is the check's password.</p>
 <?php if ($databases === []): ?>
 <p>None yet.</p>
 <?php else: ?>
 <table>
-<thead><tr><th>Database</th><th>Result</th><th>Checked</th><th></th></tr></thead>
+<thead><tr><th>Database</th><th>Result</th><th>Checked</th><th>Restart when failing</th><th></th></tr></thead>
 <tbody>
 <?php foreach ($databases as $status): ?>
-<?= $row($status, '<td>' . $e($status->check->target) . '</td>') ?>
+<?= $row($status, '<td>' . $e($status->check->target) . '</td>', $unitCell($status)) ?>
 <?php endforeach; ?>
 </tbody>
 </table>

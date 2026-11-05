@@ -21,6 +21,8 @@ final class IncidentOpened
      *        opened the incident
      * @param bool $detectedLate whether the reconciliation opened it, after
      *        a lost event: the check has been failing since $at
+     * @param bool $inMaintenance whether the instance was in maintenance, so
+     *        no email goes out (design section 7.2 item 8)
      */
     public function __construct(
         public readonly int $incidentId,
@@ -30,13 +32,14 @@ final class IncidentOpened
         public readonly int $at,
         public readonly string $detail,
         public readonly bool $detectedLate = false,
+        public readonly bool $inMaintenance = false,
     ) {
     }
 
     /**
      * @param Incident $incident stored, so it has an ID
      */
-    public static function of(Incident $incident, string $detail, bool $detectedLate = false): self
+    public static function of(Incident $incident, string $detail, bool $detectedLate = false, bool $inMaintenance = false): self
     {
         return new self(
             $incident->id ?? throw new \LogicException('Store the incident before its event.'),
@@ -46,6 +49,7 @@ final class IncidentOpened
             $incident->openedAt,
             $detail,
             $detectedLate,
+            $inMaintenance,
         );
     }
 
@@ -65,6 +69,7 @@ final class IncidentOpened
             $event->string('detail'),
             // Events written before the flag existed were never late.
             $event->bool('detected_late', false),
+            $event->bool('in_maintenance', false),
         );
     }
 
@@ -77,6 +82,7 @@ final class IncidentOpened
             'subject' => $this->subject,
             'detail' => $this->detail,
             'detected_late' => $this->detectedLate,
+            'in_maintenance' => $this->inMaintenance,
         ], $this->at);
     }
 }

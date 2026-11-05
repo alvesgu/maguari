@@ -409,6 +409,9 @@ function tickCommand(array $args): int
     // (c) Incidents whose check passed long enough, and the hourly reconciliation.
     $resolved = $remediation->resolveDue();
     $reconciliation = $remediation->reconcileIfDue();
+    // The ladder, instance by instance, after what the latest heartbeats
+    // said was delivered in (b).
+    $actions = $remediation->decideActions();
 
     // (d) Their events, unless delivery stopped at a failing event, which
     // waits for the next tick.
@@ -441,6 +444,7 @@ function tickCommand(array $args): int
     $lines = [
         ...TickReport::lines($reports[0]),
         ...TickReport::incidentLines($resolved, $reconciliation, $names),
+        ...TickReport::actionLines($actions, $names),
         ...(isset($reports[1]) ? TickReport::lines($reports[1]) : []),
         ...TickReport::notificationLines($notificationReconciliation, $names),
         ...TickReport::alertLines($alerts, $names),

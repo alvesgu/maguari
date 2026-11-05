@@ -15,6 +15,8 @@ final class CheckResult
      * @param string $subject what on the instance was checked, for checks
      *        with more than one result per instance (a certificate's domain);
      *        empty otherwise
+     * @param ?string $reason a client check's reason code for failing, which
+     *        decides whether remediation may act (design section 7.1)
      */
     public function __construct(
         public readonly int $instanceId,
@@ -23,6 +25,7 @@ final class CheckResult
         public readonly string $detail,
         public readonly int $checkedAt,
         public readonly string $subject = '',
+        public readonly ?string $reason = null,
     ) {
     }
 }

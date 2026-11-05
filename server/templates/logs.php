@@ -3,8 +3,11 @@
  * @var \Closure $e @var \Closure $partial
  * @var \Maguari\Server\Notifications\LogPage $page
  * @var array<int, string> $instanceNames picked instances' "project/name" by ID
+ * @var list<\Maguari\Server\Remediation\Domain\Action> $actions
+ * @var ?int $actionsBefore
  */
 use Maguari\Server\Notifications\NotificationsApi;
+use Maguari\Server\Remediation\RemediationApi;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 ?>
@@ -25,4 +28,21 @@ $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 <?php endif; ?>
 <?php if ($page->hasNewer || $page->olderBefore !== null): ?>
 <p><?php if ($page->hasNewer): ?><a href="/admin/logs<?= $page->newerBefore === null ? '' : '?before=' . $page->newerBefore ?>">Newer</a><?php endif; ?><?php if ($page->hasNewer && $page->olderBefore !== null): ?> · <?php endif; ?><?php if ($page->olderBefore !== null): ?><a href="/admin/logs?before=<?= $page->olderBefore ?>">Older</a><?php endif; ?></p>
+<?php endif; ?>
+<h2>Actions</h2>
+<p>What the escalation ladder decided on every instance, newest first.</p>
+<?php if ($actions === []): ?>
+<p>No actions yet.</p>
+<?php else: ?>
+<table>
+<thead><tr><th>Decided</th><th>Instance</th><th>Action</th></tr></thead>
+<tbody>
+<?php foreach ($actions as $action): ?>
+<tr><td><?= $e($utc($action->decidedAt)) ?></td><td><?php if (isset($instanceNames[$action->instanceId])): ?><a href="/admin/instances/<?= $action->instanceId ?>"><?= $e($instanceNames[$action->instanceId]) ?></a><?php else: ?>Instance <?= $action->instanceId ?><?php endif; ?></td><td><?= $e($action->sentence()) ?></td></tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+<?php endif; ?>
+<?php if ($actionsBefore !== null || count($actions) === RemediationApi::ACTIONS_PER_LOG_PAGE): ?>
+<p><?php if ($actionsBefore !== null): ?><a href="/admin/logs">Newest actions</a><?php endif; ?><?php if ($actionsBefore !== null && count($actions) === RemediationApi::ACTIONS_PER_LOG_PAGE): ?> · <?php endif; ?><?php if (count($actions) === RemediationApi::ACTIONS_PER_LOG_PAGE): ?><a href="/admin/logs?actions_before=<?= (int) $actions[count($actions) - 1]->id ?>">Older actions</a><?php endif; ?></p>
 <?php endif; ?>

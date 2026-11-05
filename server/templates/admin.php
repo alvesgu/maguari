@@ -16,6 +16,7 @@ use Maguari\Server\Monitoring\Domain\CheckOutcome;
 use Maguari\Server\Monitoring\Domain\HeartbeatAgeRule;
 use Maguari\Server\Monitoring\MonitoringApi;
 use Maguari\Server\Notifications\NotificationsApi;
+use Maguari\Server\Remediation\RemediationApi;
 
 $utc = static fn (int $at): string => gmdate('Y-m-d H:i', $at) . ' UTC';
 $lastRun = $dailyJob->lastRun;
@@ -25,6 +26,9 @@ $certificateFailures = [];
 <h1>Maguari</h1>
 <p>Signed in as <?= $e($administrator->name) ?> (<?= $e($administrator->email) ?>).</p>
 <p><a href="/admin/projects">Projects</a> · <a href="/admin/email">Email</a> · <a href="/admin/logs">Logs</a></p>
+<?php if (RemediationApi::DRY_RUN): ?>
+<p>Remediation is in dry run: on instances set to automatic, Maguari decides and records what it would do, and does nothing.</p>
+<?php endif; ?>
 <h2>Open incidents</h2>
 <?php
 $picked = [];

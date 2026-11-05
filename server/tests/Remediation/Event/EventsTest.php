@@ -21,7 +21,7 @@ final class EventsTest extends TestCase
         $event = IncidentOpened::of($incident, 'Expired on 2026-09-30.')->toEvent();
 
         $this->assertSame('remediation.incident_opened', $event->type);
-        $this->assertSame(['incident_id' => 3, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'Expired on 2026-09-30.', 'detected_late' => false], $event->payload);
+        $this->assertSame(['incident_id' => 3, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'Expired on 2026-09-30.', 'detected_late' => false, 'in_maintenance' => false], $event->payload);
         $this->assertSame(100, $event->occurredAt);
         $this->assertEquals(new IncidentOpened(3, 7, 'local_certificate', 'example.com', 100, 'Expired on 2026-09-30.'), IncidentOpened::fromEvent($event));
     }
@@ -43,7 +43,7 @@ final class EventsTest extends TestCase
 
         $event = IncidentResolved::of($incident)->toEvent();
 
-        $this->assertSame(['incident_id' => 3, 'instance_id' => 7, 'check_name' => 'heartbeat_age', 'subject' => '', 'resolution' => 'withdrawn'], $event->payload);
+        $this->assertSame(['incident_id' => 3, 'instance_id' => 7, 'check_name' => 'heartbeat_age', 'subject' => '', 'resolution' => 'withdrawn', 'in_maintenance' => false], $event->payload);
         $this->assertSame(160, $event->occurredAt);
         $this->assertEquals(new IncidentResolved(3, 7, 'heartbeat_age', '', 160, Resolution::Withdrawn), IncidentResolved::fromEvent($event));
     }

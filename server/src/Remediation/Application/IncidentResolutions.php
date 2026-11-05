@@ -15,6 +15,7 @@ use Maguari\Server\Remediation\Domain\ResolutionRule;
 use Maguari\Server\Remediation\Event\IncidentOpened;
 use Maguari\Server\Remediation\Event\IncidentResolved;
 use Maguari\Server\Remediation\Infrastructure\IncidentRepository;
+use Maguari\Server\Remediation\Infrastructure\InstanceRemediationRepository;
 
 /**
  * The tick's Remediation step (design section 10.1): resolves incidents whose
@@ -35,6 +36,7 @@ final class IncidentResolutions
         private readonly IncidentRepository $incidents,
         private readonly EventOutbox $outbox,
         private readonly MonitoringApi $monitoring,
+        private readonly InstanceRemediationRepository $instances,
     ) {
     }
 
@@ -53,7 +55,7 @@ final class IncidentResolutions
 
                 if ($after !== null) {
                     $resolved[] = $this->incidents->save($after);
-                    $this->outbox->record(IncidentResolved::of($after)->toEvent());
+                    $this->outbox->record(IncidentResolved::of($after, $this->instances->inMaintenance($after->key->instanceId, $at))->toEvent());
                 }
             }
 
@@ -93,7 +95,7 @@ final class IncidentResolutions
                 if ($incident === null) {
                     // Opened as check_failed would have, with the latest sentence.
                     $incident = $this->incidents->save(Incident::open($key, $state->since));
-                    $this->outbox->record(IncidentOpened::of($incident, $state->detail ?? self::RECONCILED_DETAIL, detectedLate: true)->toEvent());
+                    $this->outbox->record(IncidentOpened::of($incident, $state->detail ?? self::RECONCILED_DETAIL, detectedLate: true, inMaintenance: $this->instances->inMaintenance($key->instanceId, $at))->toEvent());
                     $opened[] = $incident;
                 } elseif ($incident->passingSince !== null) {
                     // A lost check_failed: it is failing, not passing.
@@ -110,7 +112,7 @@ final class IncidentResolutions
                 $after = $this->incidents->save($incident->reconcile($this->monitoring->passingSince($key->instanceId, $key->checkName, $key->subject), $at));
 
                 if (!$after->isOpen()) {
-                    $this->outbox->record(IncidentResolved::of($after)->toEvent());
+                    $this->outbox->record(IncidentResolved::of($after, $this->instances->inMaintenance($key->instanceId, $at))->toEvent());
                     $resolved[] = $after;
                 }
             }

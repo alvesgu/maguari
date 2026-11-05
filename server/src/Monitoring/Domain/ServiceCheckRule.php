@@ -26,6 +26,6 @@ final class ServiceCheckRule
             default => sprintf('The client could not run systemctl to read the state of %s.', $unit),
         };
 
-        return new CheckResult($instanceId, ServiceCheck::TYPE, $result->outcome, $detail, $checkedAt, $unit);
+        return new CheckResult($instanceId, ServiceCheck::TYPE, $result->outcome, $detail, $checkedAt, $unit, $result->reason);
     }
 }

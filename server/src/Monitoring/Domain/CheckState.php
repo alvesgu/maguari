@@ -21,6 +21,8 @@ final class CheckState
         public readonly ?string $detail = null,
         /** The latest result's time; null for outcomes stored before it was kept. */
         public readonly ?int $checkedAt = null,
+        /** The latest result's reason code when it failed, for checks that have one. */
+        public readonly ?string $reason = null,
     ) {
         if ($outcome === CheckOutcome::NotChecked) {
             throw new \InvalidArgumentException('A check state is pass or fail.');
@@ -40,7 +42,7 @@ final class CheckState
 
         $since = $current?->outcome === $result->outcome ? $current->since : $result->checkedAt;
 
-        return new self($result->instanceId, $result->checkName, $result->subject, $result->outcome, $since, $result->detail, $result->checkedAt);
+        return new self($result->instanceId, $result->checkName, $result->subject, $result->outcome, $since, $result->detail, $result->checkedAt, $result->reason);
     }
 
     /**

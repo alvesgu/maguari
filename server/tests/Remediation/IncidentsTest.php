@@ -93,7 +93,7 @@ final class IncidentsTest extends TestCase
         $this->assertSame($openedAt, $incident->openedAt, 'Opened when the check failed, not when the event was delivered.');
         $this->assertSame([[
             'remediation.incident_opened',
-            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'It failed.', 'detected_late' => false],
+            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'local_certificate', 'subject' => 'example.com', 'detail' => 'It failed.', 'detected_late' => false, 'in_maintenance' => false],
             $openedAt,
         ]], $this->remediationEvents());
     }
@@ -155,7 +155,7 @@ final class IncidentsTest extends TestCase
         $this->assertSame([1], array_map(static fn (Incident $incident): ?int => $incident->id, $remediation->incidents(7)->resolved));
         $this->assertSame(['remediation.incident_opened', 'remediation.incident_resolved'], array_column($this->remediationEvents(), 0));
         $this->assertSame([
-            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'heartbeat_age', 'subject' => '', 'resolution' => 'passed'],
+            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'heartbeat_age', 'subject' => '', 'resolution' => 'passed', 'in_maintenance' => false],
             $clock->now(),
         ], array_slice($this->remediationEvents()[1], 1));
     }
@@ -260,7 +260,7 @@ final class IncidentsTest extends TestCase
         $this->assertSame($since, $incident->openedAt);
         $this->assertSame([[
             'remediation.incident_opened',
-            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'disk_size', 'subject' => '', 'detail' => 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB.', 'detected_late' => true],
+            ['incident_id' => 1, 'instance_id' => 7, 'check_name' => 'disk_size', 'subject' => '', 'detail' => 'The boot disk is 20.0 GiB, but its filesystems total 9.6 GiB.', 'detected_late' => true, 'in_maintenance' => false],
             $since,
         ]], $this->remediationEvents());
     }

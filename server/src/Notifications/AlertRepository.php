@@ -33,6 +33,17 @@ final class AlertRepository
     }
 
     /**
+     * Adds an alert that is given up at once, with why, so the Logs screen
+     * shows it and nothing is sent. Call inside a transaction.
+     */
+    public function addGivenUp(int $notificationId, AlertKind $kind, int $at, string $sentence): void
+    {
+        $this->database->pdo()->prepare(
+            'INSERT INTO notifications_alerts (notification_id, kind, created_at, given_up_at, last_failure) VALUES (?, ?, ?, ?, ?)',
+        )->execute([$notificationId, $kind->value, $at, $at, $sentence]);
+    }
+
+    /**
      * @return list<Alert> oldest first
      */
     public function pending(): array
@@ -71,6 +82,20 @@ final class AlertRepository
         $statement->execute([$notificationId]);
 
         return $statement->fetchColumn() !== false;
+    }
+
+    /**
+     * Whether the notification's "opened" alert was only ever given up, with
+     * this sentence as the latest reason.
+     */
+    public function openedGivenUpWith(int $notificationId, string $sentence): bool
+    {
+        $statement = $this->database->pdo()->prepare(
+            "SELECT last_failure FROM notifications_alerts WHERE notification_id = ? AND kind = 'opened' ORDER BY id DESC LIMIT 1",
+        );
+        $statement->execute([$notificationId]);
+
+        return $statement->fetchColumn() === $sentence && !$this->openedNotGivenUp($notificationId);
     }
 
     /**

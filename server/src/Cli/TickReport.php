@@ -10,6 +10,7 @@ use Maguari\Server\Notifications\AlertOutcome;
 use Maguari\Server\Notifications\AlertReport;
 use Maguari\Server\Notifications\Notification;
 use Maguari\Server\Notifications\NotificationReconciliation;
+use Maguari\Server\Remediation\Domain\Action;
 use Maguari\Server\Remediation\Domain\Incident;
 use Maguari\Server\Remediation\Domain\Reconciliation;
 use Maguari\Server\Remediation\Domain\ResolutionRule;
@@ -69,6 +70,26 @@ final class TickReport
         }
 
         return $lines;
+    }
+
+    /**
+     * One line per action the ladder decided.
+     *
+     * @param list<Action> $actions
+     * @param array<int, string> $names instance names by ID
+     * @return list<string> without line endings
+     */
+    public static function actionLines(array $actions, array $names): array
+    {
+        return array_map(
+            static fn (Action $action): string => sprintf(
+                '%s%s: %s',
+                $action->dryRun ? 'Dry run on ' : 'Action on ',
+                $names[$action->instanceId] ?? "instance {$action->instanceId}",
+                $action->sentence(),
+            ),
+            $actions,
+        );
     }
 
     /**

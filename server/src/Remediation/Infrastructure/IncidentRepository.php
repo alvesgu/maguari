@@ -7,11 +7,12 @@ namespace Maguari\Server\Remediation\Infrastructure;
 use Maguari\Server\Kernel\Database\Database;
 use Maguari\Server\Remediation\Domain\Incident;
 use Maguari\Server\Remediation\Domain\IncidentKey;
+use Maguari\Server\Remediation\Domain\LadderHold;
 use Maguari\Server\Remediation\Domain\Resolution;
 
 final class IncidentRepository
 {
-    private const COLUMNS = 'id, instance_id, check_name, subject, opened_at, passing_since, resolved_at, resolution';
+    private const COLUMNS = 'id, instance_id, check_name, subject, opened_at, passing_since, resolved_at, resolution, ladder_step, exhausted_at, ladder_hold';
 
     public function __construct(
         private readonly Database $database,
@@ -75,18 +76,18 @@ final class IncidentRepository
     public function save(Incident $incident): Incident
     {
         $pdo = $this->database->pdo();
-        $values = [$incident->passingSince, $incident->resolvedAt, $incident->resolution?->value];
+        $values = [$incident->passingSince, $incident->resolvedAt, $incident->resolution?->value, $incident->ladderStep, $incident->exhaustedAt, $incident->ladderHold?->value];
 
         if ($incident->id === null) {
             $pdo->prepare(
-                'INSERT INTO remediation_incidents (instance_id, check_name, subject, opened_at, passing_since, resolved_at, resolution) '
-                    . 'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO remediation_incidents (instance_id, check_name, subject, opened_at, passing_since, resolved_at, resolution, ladder_step, exhausted_at, ladder_hold) '
+                    . 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             )->execute([$incident->key->instanceId, $incident->key->checkName, $incident->key->subject, $incident->openedAt, ...$values]);
 
             return $incident->withId((int) $pdo->lastInsertId());
         }
 
-        $pdo->prepare('UPDATE remediation_incidents SET passing_since = ?, resolved_at = ?, resolution = ? WHERE id = ?')
+        $pdo->prepare('UPDATE remediation_incidents SET passing_since = ?, resolved_at = ?, resolution = ?, ladder_step = ?, exhausted_at = ?, ladder_hold = ? WHERE id = ?')
             ->execute([...$values, $incident->id]);
 
         return $incident;
@@ -127,6 +128,9 @@ final class IncidentRepository
                 $row['passing_since'] === null ? null : (int) $row['passing_since'],
                 $row['resolved_at'] === null ? null : (int) $row['resolved_at'],
                 $row['resolution'] === null ? null : Resolution::from($row['resolution']),
+                (int) $row['ladder_step'],
+                $row['exhausted_at'] === null ? null : (int) $row['exhausted_at'],
+                $row['ladder_hold'] === null ? null : LadderHold::from($row['ladder_hold']),
             ),
             $statement->fetchAll(),
         );

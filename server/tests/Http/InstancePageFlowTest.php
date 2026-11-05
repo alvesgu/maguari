@@ -305,8 +305,8 @@ final class InstancePageFlowTest extends TestCase
 
         $body = (string) $this->signedInBrowser()->get($this->page())->getBody();
 
-        $this->assertStringContainsString('<tr><td>Heartbeat age</td><td></td><td>' . $utc($openedAt) . '</td><td>Passing since ' . $utc($openedAt + 60) . '</td></tr>', $body);
-        $this->assertStringContainsString('<tr><td>Served certificate</td><td>www.example.com</td><td>' . $utc($openedAt) . '</td><td>Failing</td></tr>', $body);
+        $this->assertStringContainsString('<tr><td>Heartbeat age</td><td></td><td>' . $utc($openedAt) . '</td><td>Passing since ' . $utc($openedAt + 60) . '</td><td>No action yet</td></tr>', $body);
+        $this->assertStringContainsString('<tr><td>Served certificate</td><td>www.example.com</td><td>' . $utc($openedAt) . '</td><td>Failing</td><td>No action yet</td></tr>', $body);
         $this->assertLessThan(strpos($body, '<td>Served certificate</td>'), strpos($body, '<td>Heartbeat age</td>'), 'Newest first.');
         $this->assertStringContainsString('<h3>Resolved incidents</h3>', $body);
         $this->assertStringContainsString('<tr><td>Disk size</td><td></td><td>' . $utc($openedAt + 60) . '</td><td>' . $utc($openedAt + 60) . '</td><td>Withdrawn<span class="info">', $body);

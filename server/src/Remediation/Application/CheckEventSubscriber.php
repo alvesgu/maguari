@@ -14,7 +14,9 @@ use Maguari\Server\Remediation\Domain\Incident;
 use Maguari\Server\Remediation\Domain\IncidentKey;
 use Maguari\Server\Remediation\Event\IncidentOpened;
 use Maguari\Server\Remediation\Event\IncidentResolved;
+use Maguari\Server\Remediation\Infrastructure\CheckUnitRepository;
 use Maguari\Server\Remediation\Infrastructure\IncidentRepository;
+use Maguari\Server\Remediation\Infrastructure\InstanceRemediationRepository;
 
 /**
  * Opens and updates incidents from Monitoring's outcome changes (design
@@ -26,6 +28,8 @@ final class CheckEventSubscriber implements Subscriber
     public function __construct(
         private readonly IncidentRepository $incidents,
         private readonly EventOutbox $outbox,
+        private readonly InstanceRemediationRepository $instances,
+        private readonly CheckUnitRepository $checkUnits,
     ) {
     }
 
@@ -59,7 +63,7 @@ final class CheckEventSubscriber implements Subscriber
         }
 
         $incident = $this->incidents->save(Incident::open($key, $failed->at));
-        $this->outbox->record(IncidentOpened::of($incident, $failed->detail)->toEvent());
+        $this->outbox->record(IncidentOpened::of($incident, $failed->detail, inMaintenance: $this->instances->inMaintenance($failed->instanceId, $failed->at))->toEvent());
     }
 
     /**
@@ -76,15 +80,17 @@ final class CheckEventSubscriber implements Subscriber
     }
 
     /**
-     * Resolves the open incident at once: its subject is gone.
+     * Resolves the open incident at once, because its subject is gone, and
+     * forgets the unit associated with the check.
      */
     private function withdrawn(CheckWithdrawn $withdrawn): void
     {
+        $this->checkUnits->delete($withdrawn->instanceId, $withdrawn->checkName, $withdrawn->subject);
         $open = $this->incidents->openFor(new IncidentKey($withdrawn->instanceId, $withdrawn->checkName, $withdrawn->subject));
 
         if ($open !== null) {
             $resolved = $this->incidents->save($open->withdraw($withdrawn->at));
-            $this->outbox->record(IncidentResolved::of($resolved)->toEvent());
+            $this->outbox->record(IncidentResolved::of($resolved, $this->instances->inMaintenance($withdrawn->instanceId, $withdrawn->at))->toEvent());
         }
     }
 }

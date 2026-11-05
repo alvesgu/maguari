@@ -16,6 +16,10 @@ final class IncidentResolved
 {
     public const TYPE = 'remediation.incident_resolved';
 
+    /**
+     * @param bool $inMaintenance whether the instance was in maintenance, so
+     *        no email goes out (design section 7.2 item 8)
+     */
     public function __construct(
         public readonly int $incidentId,
         public readonly int $instanceId,
@@ -23,10 +27,11 @@ final class IncidentResolved
         public readonly string $subject,
         public readonly int $at,
         public readonly Resolution $resolution,
+        public readonly bool $inMaintenance = false,
     ) {
     }
 
-    public static function of(Incident $incident): self
+    public static function of(Incident $incident, bool $inMaintenance = false): self
     {
         if ($incident->id === null || $incident->resolvedAt === null || $incident->resolution === null) {
             throw new \LogicException('Only a stored, resolved incident has this event.');
@@ -39,6 +44,7 @@ final class IncidentResolved
             $incident->key->subject,
             $incident->resolvedAt,
             $incident->resolution,
+            $inMaintenance,
         );
     }
 
@@ -58,6 +64,7 @@ final class IncidentResolved
             $event->string('subject'),
             $event->occurredAt,
             $resolution,
+            $event->bool('in_maintenance', false),
         );
     }
 
@@ -69,6 +76,7 @@ final class IncidentResolved
             'check_name' => $this->checkName,
             'subject' => $this->subject,
             'resolution' => $this->resolution->value,
+            'in_maintenance' => $this->inMaintenance,
         ], $this->at);
     }
 }

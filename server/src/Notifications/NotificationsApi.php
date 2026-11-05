@@ -34,6 +34,9 @@ final class NotificationsApi
     /** Notifications per page of the Logs screen. */
     public const LOG_PAGE_SIZE = 100;
 
+    /** Why no email went out for an instance in maintenance (design section 7.2 item 8). */
+    public const IN_MAINTENANCE = 'The instance was in maintenance.';
+
     /** Hourly, like Remediation's reconciliation. */
     public const RECONCILE_EVERY_SECONDS = 3_600;
 
@@ -184,7 +187,12 @@ final class NotificationsApi
                 $detail = $monitoring->failingSentence($key->instanceId, $key->checkName, $key->subject) ?? self::NO_DETAIL;
                 $id = (int) $this->notifications->add($incidentId, $key->instanceId, $key->checkName, $key->subject, $incident->openedAt, $detail);
                 $created[] = $this->notifications->find($id) ?? throw new \LogicException('The notification just added is missing.');
-                $this->alerts->add($id, AlertKind::Opened, $at, late: true);
+
+                if ($remediation->isInMaintenance($key->instanceId)) {
+                    $this->alerts->addGivenUp($id, AlertKind::Opened, $at, self::IN_MAINTENANCE);
+                } else {
+                    $this->alerts->add($id, AlertKind::Opened, $at, late: true);
+                }
             }
 
             foreach ($this->notifications->unresolved() as $notification) {
@@ -192,7 +200,7 @@ final class NotificationsApi
                     $this->notifications->resolve($notification->incidentId, $at, null);
                     $resolved[] = $this->notifications->find($notification->id) ?? $notification;
 
-                    if ($this->alerts->openedNotGivenUp($notification->id)) {
+                    if ($this->alerts->openedNotGivenUp($notification->id) && !$remediation->isInMaintenance($notification->instanceId)) {
                         $this->alerts->add($notification->id, AlertKind::Resolved, $at);
                     }
                 }
@@ -203,7 +211,7 @@ final class NotificationsApi
             // Not while email is not set up: the alert would only be given up again.
             if ($this->smtpSettings->find() !== null) {
                 foreach ($this->notifications->unresolved() as $notification) {
-                    if (isset($open[$notification->incidentId]) && !$this->alerts->openedNotGivenUp($notification->id)) {
+                    if (isset($open[$notification->incidentId]) && !$this->alerts->openedNotGivenUp($notification->id) && !$remediation->isInMaintenance($notification->instanceId)) {
                         $this->alerts->add($notification->id, AlertKind::Opened, $at, late: true);
                         $lateAlerts[] = $notification;
                     }

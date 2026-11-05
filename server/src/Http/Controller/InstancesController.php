@@ -15,13 +15,17 @@ use Maguari\Server\Monitoring\Exception\InvalidCertificateHostname;
 use Maguari\Server\Monitoring\Exception\InvalidClientCheck;
 use Maguari\Server\Monitoring\Exception\InvalidHttpCheck;
 use Maguari\Server\Monitoring\MonitoringApi;
+use Maguari\Server\Remediation\Domain\Mode;
+use Maguari\Server\Remediation\Exception\InvalidMaintenanceEnd;
 use Maguari\Server\Remediation\RemediationApi;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Slim\Exception\HttpBadRequestException;
 use Slim\Exception\HttpNotFoundException;
 
 /**
  * One picked instance's page (design section 8.1 item 4): its incidents, its
+ * remediation mode and actions, its
  * certificate results, the hostnames its remote certificate check connects
  * to, its remote HTTP checks and its client's checks. Reads only SQLite;
  * adding a hostname or a web app connects to nothing, and the client gets a
@@ -45,6 +49,65 @@ final class InstancesController
     public function show(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
     {
         return $this->page($request, $response, $this->instance($request, $args), ['notice' => self::session($request)->takeFlash()]);
+    }
+
+    /**
+     * @param array{id: string} $args
+     */
+    public function setMode(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $mode = Mode::tryFrom(FormInput::string((array) $request->getParsedBody(), 'mode'))
+            ?? throw new HttpBadRequestException($request);
+        $this->remediation->setMode($instance->id, $mode);
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * @param array{id: string} $args
+     */
+    public function startMaintenance(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $until = FormInput::string((array) $request->getParsedBody(), 'until');
+
+        try {
+            $this->remediation->startMaintenance($instance->id, $until);
+        } catch (InvalidMaintenanceEnd $invalid) {
+            return $this->page($request, $response, $instance, ['maintenanceUntil' => $until, 'maintenanceError' => $invalid->getMessage()], 422);
+        }
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * @param array{id: string} $args
+     */
+    public function endMaintenance(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $this->remediation->endMaintenance($instance->id);
+
+        return self::backTo($response, $instance);
+    }
+
+    /**
+     * @param array{id: string} $args
+     */
+    public function setCheckUnit(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $instance = $this->instance($request, $args);
+        $input = (array) $request->getParsedBody();
+        $checkId = (int) FormInput::string($input, 'check_id');
+
+        try {
+            $this->remediation->setCheckUnit($instance->id, $checkId, FormInput::string($input, 'unit'));
+        } catch (InvalidClientCheck $invalid) {
+            return $this->page($request, $response, $instance, ['checkUnitError' => $invalid->getMessage(), 'checkUnitId' => $checkId, 'checkUnit' => FormInput::string($input, 'unit')], 422);
+        }
+
+        return self::backTo($response, $instance);
     }
 
     /**
@@ -223,7 +286,7 @@ final class InstancesController
     }
 
     /**
-     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string, unit?: string, unitError?: string, localUrl?: string, hostName?: string, localHttpError?: string, database?: string, databaseError?: string} $form
+     * @param array{hostname?: string, error?: string, httpUrl?: string, httpInterval?: string, httpError?: string, intervalError?: string, notice?: ?string, unit?: string, unitError?: string, localUrl?: string, hostName?: string, localHttpError?: string, database?: string, databaseError?: string, maintenanceUntil?: string, maintenanceError?: string, checkUnitError?: string, checkUnitId?: int, checkUnit?: string} $form
      *        what was typed in a refused form and why it was refused, or the
      *        warning of the last change
      */
@@ -240,6 +303,14 @@ final class InstancesController
             'title' => $instance->name,
             'instance' => $instance,
             'incidents' => $this->remediation->incidents($instance->id),
+            'remediation' => $this->remediation->instanceRemediation($instance->id),
+            'actions' => $this->remediation->actionsOf($instance->id),
+            'checkUnits' => $this->remediation->checkUnits($instance->id),
+            'maintenanceUntil' => $form['maintenanceUntil'] ?? '',
+            'maintenanceError' => $form['maintenanceError'] ?? null,
+            'checkUnitError' => $form['checkUnitError'] ?? null,
+            'checkUnitId' => $form['checkUnitId'] ?? null,
+            'checkUnit' => $form['checkUnit'] ?? '',
             'certificates' => $summary->certificateResults[$instance->id] ?? [],
             'lastRun' => $summary->lastRun,
             'resultsRun' => $summary->lastSucceededRun,

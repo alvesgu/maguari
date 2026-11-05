@@ -36,7 +36,9 @@ final class IncidentEventSubscriber implements Subscriber
             $opened = IncidentOpened::fromEvent($event);
             $id = $this->notifications->add($opened->incidentId, $opened->instanceId, $opened->checkName, $opened->subject, $opened->at, $opened->detail);
 
-            if ($id !== null) {
+            if ($id !== null && $opened->inMaintenance) {
+                $this->alerts->addGivenUp($id, AlertKind::Opened, $this->clock->now(), NotificationsApi::IN_MAINTENANCE);
+            } elseif ($id !== null) {
                 $this->alerts->add($id, AlertKind::Opened, $this->clock->now(), $opened->detectedLate);
             }
         } elseif ($event->type === IncidentResolved::TYPE) {
@@ -45,7 +47,11 @@ final class IncidentEventSubscriber implements Subscriber
             $resolved = IncidentResolved::fromEvent($event);
             $id = $this->notifications->resolve($resolved->incidentId, $resolved->at, $resolved->resolution->value);
 
-            if ($id !== null) {
+            // Nobody was told it opened, if that was during maintenance, so
+            // nobody needs telling it resolved.
+            if ($id !== null && ($resolved->inMaintenance || $this->alerts->openedGivenUpWith($id, NotificationsApi::IN_MAINTENANCE))) {
+                $this->alerts->addGivenUp($id, AlertKind::Resolved, $this->clock->now(), NotificationsApi::IN_MAINTENANCE);
+            } elseif ($id !== null) {
                 $this->alerts->add($id, AlertKind::Resolved, $this->clock->now());
             }
         }
